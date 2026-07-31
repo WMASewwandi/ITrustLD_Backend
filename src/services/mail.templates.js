@@ -159,3 +159,52 @@ export function adminContactEmailHtml(body) {
       <p style="font-size:16px;line-height:25px;color:#0E1726;">${escaped}</p>
     </div>`);
 }
+
+function formatDepositDate(value) {
+  if (!value) return '—';
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  const pad = (n) => String(n).padStart(2, '0');
+  return {
+    date: `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`,
+    time: `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`,
+  };
+}
+
+function depositDetailsTable({ firstName, deposit }) {
+  const created = formatDepositDate(deposit.created_at);
+  const dateText = typeof created === 'string' ? created : created.date;
+  const timeText = typeof created === 'string' ? '' : created.time;
+  return `
+    <div style="padding:40px 30px;">
+      <h2 style="font-size:24px;color:#0f172a;">Hi ${firstName},</h2>
+      <p style="font-size:16px;line-height:25px;color:#0E1726;">
+        ${deposit.transaction_status === 'Completed'
+          ? 'Congratulations! Your deposit request has been approved. You can find the deposit information below.'
+          : 'Your deposit request has been rejected. You can find the deposit information below.'}
+      </p>
+      <table style="margin-top:16px;font-size:16px;line-height:25px;color:#0E1726;">
+        <tr><td>Transaction ID</td><td>- ${deposit.transaction_id}</td></tr>
+        <tr><td>Payment Amount</td><td>- ${deposit.payment_amount_currency} ${deposit.payment_amount}</td></tr>
+        <tr><td>Payment Method</td><td>- ${deposit.paymentOptionName || '—'}</td></tr>
+        <tr><td>Topup Amount</td><td>- ${deposit.deposit_amount_currency} ${deposit.deposit_amount}</td></tr>
+        <tr><td>Transaction Date</td><td>- ${dateText}</td></tr>
+        <tr><td>Transaction Time</td><td>- ${timeText}</td></tr>
+        <tr><td>Top Up Method</td><td>- ${deposit.topupMethodName || '—'}</td></tr>
+        <tr><td>Topup Account</td><td>- ${deposit.topup_account_id || '—'}</td></tr>
+        <tr><td>Status</td><td>- ${deposit.transaction_status}</td></tr>
+        <tr><td>Message</td><td>- ${deposit.message || '—'}</td></tr>
+      </table>
+      <p style="font-size:16px;line-height:25px;color:#0E1726;margin-top:16px;">
+        If you have any questions or need assistance, please contact our support team.
+      </p>
+    </div>`;
+}
+
+export function depositApprovedEmailHtml({ firstName, deposit }) {
+  return wrap(depositDetailsTable({ firstName, deposit: { ...deposit, transaction_status: 'Completed' } }));
+}
+
+export function depositRejectedEmailHtml({ firstName, deposit }) {
+  return wrap(depositDetailsTable({ firstName, deposit: { ...deposit, transaction_status: 'Rejected' } }));
+}
