@@ -1,15 +1,23 @@
 import { Router } from 'express';
+import { authRouter } from './auth.routes.js';
+import { verificationRouter } from './verification.routes.js';
 import { adminAuthRouter } from './admin/auth.routes.js';
 import { adminRolesRouter } from './admin/roles.routes.js';
 import { adminSystemUsersRouter } from './admin/system-users.routes.js';
+import { adminCustomersRouter } from './admin/customers.routes.js';
+import { adminNotificationsRouter } from './admin/notifications.routes.js';
 import { healthRouter } from './health.routes.js';
 
 export const apiRouter = Router();
 
 apiRouter.use(healthRouter);
+apiRouter.use('/auth', authRouter);
+apiRouter.use('/auth/verification', verificationRouter);
 apiRouter.use('/admin/auth', adminAuthRouter);
 apiRouter.use('/admin/roles', adminRolesRouter);
 apiRouter.use('/admin/system-users', adminSystemUsersRouter);
+apiRouter.use('/admin/customers', adminCustomersRouter);
+apiRouter.use('/admin/notifications', adminNotificationsRouter);
 
 apiRouter.get('/', (_req, res) => {
   res.json({
