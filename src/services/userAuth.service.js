@@ -25,6 +25,7 @@ import { sendRegistrationEmails } from './verification.service.js';
 import { sendEmailAndSms } from './notification.service.js';
 import { isTurnstileRequired, verifyTurnstileToken } from './turnstile.service.js';
 import { env } from '../config/env.js';
+import { getUserAccountSummary, resolveUserType } from './userSummary.service.js';
 
 const CUSTOMER_ROLE = 'customer';
 
@@ -328,5 +329,12 @@ export async function getUserSession(userId) {
     throw validationError('Your account has been banned.', 403);
   }
 
-  return toPublicUser(user, roles, accountHolder);
+  const publicUser = toPublicUser(user, roles, accountHolder);
+  const summary = await getUserAccountSummary(userId);
+
+  return {
+    ...publicUser,
+    user_type: resolveUserType(accountHolder),
+    ...summary,
+  };
 }
