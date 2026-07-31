@@ -6,11 +6,19 @@ import { adminRolesRouter } from './admin/roles.routes.js';
 import { adminSystemUsersRouter } from './admin/system-users.routes.js';
 import { adminCustomersRouter } from './admin/customers.routes.js';
 import { adminBlogsRouter } from './admin/blogs.routes.js';
+import { adminWalletsRouter } from './admin/wallets.routes.js';
+import { adminPayAccountsRouter } from './admin/payAccounts.routes.js';
+import { adminPaymentMethodsRouter } from './admin/paymentMethods.routes.js';
+import { adminCurrencyTypesRouter } from './admin/currencyTypes.routes.js';
+import { adminUserCountDisplayRouter } from './admin/userCountDisplay.routes.js';
+import { adminRatesRouter } from './admin/rates.routes.js';
 import { adminNotificationsRouter } from './admin/notifications.routes.js';
+import { publicCommunityStatsRouter } from './public/community-stats.routes.js';
 import { healthRouter } from './health.routes.js';
 import { userDashboardRouter } from './user/dashboard.routes.js';
 import { publicBlogBannersRouter } from './public/blog-banners.routes.js';
 import { publicBlogsRouter } from './public/blogs.routes.js';
+import { publicWalletLogosRouter } from './public/wallet-logos.routes.js';
 
 export const apiRouter = Router();
 
@@ -20,11 +28,19 @@ apiRouter.use('/auth/verification', verificationRouter);
 apiRouter.use('/user/dashboard', userDashboardRouter);
 apiRouter.use('/public/blog-banners', publicBlogBannersRouter);
 apiRouter.use('/public/blogs', publicBlogsRouter);
+apiRouter.use('/public/wallet-logos', publicWalletLogosRouter);
+apiRouter.use('/public/community-stats', publicCommunityStatsRouter);
 apiRouter.use('/admin/auth', adminAuthRouter);
 apiRouter.use('/admin/roles', adminRolesRouter);
 apiRouter.use('/admin/system-users', adminSystemUsersRouter);
 apiRouter.use('/admin/customers', adminCustomersRouter);
 apiRouter.use('/admin/blogs', adminBlogsRouter);
+apiRouter.use('/admin/wallets', adminWalletsRouter);
+apiRouter.use('/admin/pay-accounts', adminPayAccountsRouter);
+apiRouter.use('/admin/payment-methods', adminPaymentMethodsRouter);
+apiRouter.use('/admin/currency-types', adminCurrencyTypesRouter);
+apiRouter.use('/admin/user-count-display', adminUserCountDisplayRouter);
+apiRouter.use('/admin/rates', adminRatesRouter);
 apiRouter.use('/admin/notifications', adminNotificationsRouter);
 
 apiRouter.get('/', (_req, res) => {
