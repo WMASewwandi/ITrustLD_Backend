@@ -2,6 +2,7 @@ import { signAccessToken } from './adminAuth.service.js';
 import {
   createAccountHolder,
   findAccountHolderByEmail,
+  findAccountHolderByMobile,
   findAccountHolderByUserId,
   findPartnerByAffiliateCode,
   generateAccountNumber,
@@ -21,6 +22,9 @@ import { hashLaravelPassword, verifyLaravelPassword } from '../utils/laravelPass
 import { query } from '../config/database.js';
 import { LARAVEL_USER_MODEL } from '../constants/adminRoles.js';
 import { sendRegistrationEmails } from './verification.service.js';
+import { sendEmailAndSms } from './notification.service.js';
+import { isTurnstileRequired, verifyTurnstileToken } from './turnstile.service.js';
+import { env } from '../config/env.js';
 
 const CUSTOMER_ROLE = 'customer';
 
@@ -101,7 +105,37 @@ export async function checkEmailAvailability(email) {
   return { exists: Boolean(user) };
 }
 
-export async function registerUser(payload) {
+export async function checkMobileAvailability(mobileNumber) {
+  const mobile = String(mobileNumber || '').trim();
+  if (!mobile) {
+    throw validationError('Mobile number is required.');
+  }
+
+  const accountHolder = await findAccountHolderByMobile(mobile);
+  return { exists: Boolean(accountHolder) };
+}
+
+async function notifyPartnerNewClient(partnerAccountHolder, clientAccountHolder) {
+  try {
+    const partnerUser = await findUserById(partnerAccountHolder.user_id);
+    if (!partnerUser) return;
+
+    const clientsUrl = `${env.userAppUrl}/dashboard/loyalty/my-clients`;
+    await sendEmailAndSms({
+      email: partnerUser.email,
+      subject: 'New client joined',
+      html: `<p>A new client has joined with you. <a href="${clientsUrl}">View your clients</a>.</p>`,
+      smsMessage: 'A new client has joined with you! Check your dashboard to view details.',
+      msisdn: partnerAccountHolder.mobile_number,
+      userId: partnerUser.id,
+      smsType: 'NEW_CLIENT_JOINED',
+    });
+  } catch (error) {
+    console.error('[register] partner notification failed:', error.message);
+  }
+}
+
+export async function registerUser(payload, { remoteIp } = {}) {
   const firstName = String(payload.first_name || payload.firstName || '').trim();
   const lastName = String(payload.last_name || payload.lastName || '').trim();
   const email = String(payload.email || '').trim().toLowerCase();
@@ -131,6 +165,29 @@ export async function registerUser(payload) {
   }
   if (password !== passwordConfirmation) {
     throw validationError('Password confirmation does not match.');
+  }
+
+  const turnstileToken =
+    payload.cf_turnstile_response ||
+    payload['cf-turnstile-response'] ||
+    payload.turnstile_token;
+  if (isTurnstileRequired()) {
+    const valid = await verifyTurnstileToken(turnstileToken, remoteIp);
+    if (!valid) {
+      throw validationError('You failed to verify that you are not a robot.');
+    }
+  } else if (env.turnstile?.secret && turnstileToken) {
+    const valid = await verifyTurnstileToken(turnstileToken, remoteIp);
+    if (!valid) {
+      throw validationError('You failed to verify that you are not a robot.');
+    }
+  }
+
+  if (mobileNumber) {
+    const mobileDuplicate = await findAccountHolderByMobile(mobileNumber);
+    if (mobileDuplicate) {
+      throw validationError('This mobile number is already registered.');
+    }
   }
 
   await cleanupOrphanCustomerUser(email);
@@ -173,6 +230,8 @@ export async function registerUser(payload) {
     const partner = await findPartnerByAffiliateCode(affiliateCode);
     if (partner) {
       await linkPartnerClient(partner.id, accountHolderId);
+      const clientAccountHolder = await findAccountHolderByUserId(userId);
+      await notifyPartnerNewClient(partner, clientAccountHolder);
     }
   }
 

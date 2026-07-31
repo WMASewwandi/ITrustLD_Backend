@@ -36,6 +36,21 @@ export async function findAccountHolderByEmail(email) {
   return rows[0] ?? null;
 }
 
+export async function findAccountHolderByMobile(mobileNumber, excludeUserId = null) {
+  const mobile = String(mobileNumber || '').trim();
+  if (!mobile) return null;
+
+  const rows = await query(
+    `SELECT id, user_id, mobile_number
+     FROM account_holders
+     WHERE mobile_number = ?
+     ${excludeUserId ? 'AND user_id != ?' : ''}
+     LIMIT 1`,
+    excludeUserId ? [mobile, excludeUserId] : [mobile],
+  );
+  return rows[0] ?? null;
+}
+
 export async function findPartnerByAffiliateCode(affiliateCode) {
   const rows = await query(
     `SELECT id, user_id, affiliate_code

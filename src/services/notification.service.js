@@ -28,6 +28,10 @@ export async function sendEmailAndSms({
   return mailResult;
 }
 
+export async function queueSmsMessage({ message, msisdn, userId, smsType }) {
+  return sendSms({ message, msisdn, userId, smsType });
+}
+
 async function sendSms({ message, msisdn, userId, smsType }) {
   if (!msisdn) return;
 

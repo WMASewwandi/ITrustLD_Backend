@@ -87,3 +87,75 @@ export function verificationPendingEmailHtml(userName) {
       </p>
     </div>`);
 }
+
+export function passwordResetEmailHtml(resetUrl) {
+  return wrap(`
+    <div style="padding:40px 30px;text-align:center;">
+      <h1 style="font-size:24px;color:#1a1a1a;">Password Reset</h1>
+      <p style="font-size:16px;line-height:25px;color:#4b5563;">
+        If you have lost your password or wish to reset it, use the link below to get started.
+      </p>
+      <p style="margin:40px 0;">
+        <a href="${resetUrl}" style="display:inline-block;background:#0f766e;color:#fff;text-decoration:none;padding:12px 24px;border-radius:9999px;">Reset Password</a>
+      </p>
+      <p style="font-size:16px;color:#6b7280;">If you did not request a password reset, you can safely ignore this email.</p>
+    </div>`);
+}
+
+export function documentsRejectedEmailHtml(uploadUrl, rejectionMessage = '') {
+  const reasonBlock = rejectionMessage
+    ? `<p style="font-size:16px;line-height:25px;color:#4b5563;margin:0 0 24px;text-align:center;">Reason: ${rejectionMessage}</p>`
+    : '';
+  return wrap(`
+    <div style="padding:40px 30px;text-align:center;">
+      <h1 style="font-size:24px;color:#1a1a1a;">Documents Rejected!</h1>
+      <p style="font-size:16px;line-height:25px;color:#4b5563;">
+        We regret to inform you that the documents you recently submitted for account verification have been rejected. Please review the documents and resubmit them.
+      </p>
+      ${reasonBlock}
+      <p style="margin:40px 0;">
+        <a href="${uploadUrl}" style="display:inline-block;background:#22c55e;color:#fff;text-decoration:none;padding:12px 24px;border-radius:9999px;">Resubmit</a>
+      </p>
+      <p style="font-size:16px;line-height:25px;color:#4b5563;margin-top:16px;">
+        Please take a moment to carefully review the submission guidelines and resubmit the corrected documents.
+      </p>
+    </div>`);
+}
+
+export function kycApprovedEmailHtml(label) {
+  const title = label === 'identity' ? 'Identity' : 'Address';
+  return wrap(`
+    <div style="padding:40px 30px;text-align:center;">
+      <h1 style="font-size:24px;color:#1a1a1a;">${title} Verification Approved</h1>
+      <p style="font-size:16px;line-height:25px;color:#4b5563;">
+        Your ${label} document has been successfully verified.
+      </p>
+    </div>`);
+}
+
+export function kycRejectedEmailHtml(label, rejectionMessage) {
+  const title = label === 'identity' ? 'Identity' : 'Address';
+  const message = rejectionMessage || 'Please resubmit your documents.';
+  return wrap(`
+    <div style="padding:40px 30px;text-align:center;">
+      <h1 style="font-size:24px;color:#1a1a1a;">${title} Verification Rejected</h1>
+      <p style="font-size:16px;line-height:25px;color:#4b5563;">
+        Your ${label} proof document has been rejected. ${message}
+      </p>
+      <p style="font-size:16px;line-height:25px;color:#4b5563;margin-top:16px;">
+        For more info, please contact us at +94 117 751 751
+      </p>
+    </div>`);
+}
+
+export function adminContactEmailHtml(body) {
+  const escaped = String(body || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\n/g, '<br>');
+  return wrap(`
+    <div style="padding:40px 30px;">
+      <p style="font-size:16px;line-height:25px;color:#0E1726;">${escaped}</p>
+    </div>`);
+}

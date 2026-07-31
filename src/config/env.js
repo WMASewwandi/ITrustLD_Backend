@@ -45,4 +45,8 @@ export const env = {
     forceSmtp: process.env.MAIL_FORCE_SMTP === 'true',
   },
   projectRoot,
+  turnstile: {
+    secret: process.env.TURNSTILE_SECRET_KEY || process.env.TURNSTILE_SECRET || '',
+    siteKey: process.env.TURNSTILE_SITE_KEY || process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || '',
+  },
 };

@@ -46,13 +46,14 @@ async function deliver(transport, payload) {
   await transport.sendMail(payload);
 }
 
-export async function sendMail({ to, subject, html, text }) {
+export async function sendMail({ to, subject, html, text, attachments }) {
   const payload = {
     from: buildFrom(),
     to,
     subject,
     html,
     text: text || undefined,
+    attachments: attachments?.length ? attachments : undefined,
   };
 
   const hasSmtpCredentials = Boolean(env.mail.user && env.mail.pass);

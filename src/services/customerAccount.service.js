@@ -1,11 +1,22 @@
 import { query } from '../config/database.js';
 import { sendEmailAndSms } from './notification.service.js';
 import {
+  documentsRejectedEmailHtml,
+  kycApprovedEmailHtml,
+  kycRejectedEmailHtml,
+} from './mail.templates.js';
+import {
   deriveBackDocumentFilename,
   documentExists,
   formatFileSize,
   getDocumentFileStats,
 } from './documentStorage.service.js';
+import {
+  logSystemUserAction,
+  SYSTEM_USER_ACTIONS,
+} from './systemUserActionLog.service.js';
+import { findUserById } from './user.service.js';
+import { env } from '../config/env.js';
 
 export const ACCOUNT_HOLDER_ID_OFFSET = 126872;
 
@@ -37,7 +48,6 @@ const FILTER_WHERE = {
     email_verification = 'VERIFIED'
     AND mobile_number_verification = 'VERIFIED'
     AND identity_document_status = 'RECEIVED'
-    AND address_document_status = 'RECEIVED'
     AND identity_verification = 'NOT_VERIFIED'
   `,
   'self-verified': `
@@ -62,8 +72,11 @@ const FILTER_WHERE = {
     AND identity_verification = 'VERIFIED'
   `,
   banned: `account_status = 'BANNED'`,
-  // Every account holder regardless of verification stage (includes new signups).
-  all: '1=1',
+  // Matches Laravel loadAllUsers — email + mobile verified customers.
+  all: `
+    email_verification = 'VERIFIED'
+    AND mobile_number_verification = 'VERIFIED'
+  `,
 };
 
 function mapKycStatus(verification, documentStatus) {
@@ -136,8 +149,15 @@ function buildSearchClause(search = {}) {
     values.push(String(search.email).trim().toLowerCase());
   }
   if (search.account_id) {
-    conditions.push('account_number = ?');
-    values.push(search.account_id);
+    const raw = String(search.account_id).trim();
+    const numeric = Number(raw);
+    if (Number.isFinite(numeric) && numeric > ACCOUNT_HOLDER_ID_OFFSET) {
+      conditions.push('(account_number = ? OR id = ?)');
+      values.push(raw, numeric - ACCOUNT_HOLDER_ID_OFFSET);
+    } else {
+      conditions.push('account_number = ?');
+      values.push(raw);
+    }
   }
   if (search.primary_id) {
     conditions.push('user_id = ?');
@@ -156,7 +176,10 @@ function buildSearchClause(search = {}) {
 }
 
 export async function listCustomerAccounts(filter = 'pending', search = {}) {
-  const filterWhere = FILTER_WHERE[filter] ?? FILTER_WHERE.pending;
+  const filterWhere = FILTER_WHERE[filter];
+  if (!filterWhere) {
+    throw customerValidationError(`Unknown filter: ${filter}`);
+  }
   const { conditions, values } = buildSearchClause(search);
 
   const whereParts = [`(${filterWhere})`, ...conditions];
@@ -322,12 +345,13 @@ export async function getCustomerKycDocuments(accountHolderId, field) {
 
 async function notifyKycDecision(accountHolder, field, status, rejectionMessage) {
   const label = field === 'nic' ? 'identity' : 'address';
+  const uploadUrl = `${env.userAppUrl}/verify`;
   try {
     if (status === 'VERIFIED') {
       await sendEmailAndSms({
         email: accountHolder.email,
         subject: `${label} verification approved`,
-        html: `<p>Your ${label} document has been successfully verified.</p>`,
+        html: kycApprovedEmailHtml(label),
         smsMessage: `Your ${label} verification has been approved.`,
         msisdn: accountHolder.mobile_number,
         userId: accountHolder.user_id,
@@ -338,11 +362,20 @@ async function notifyKycDecision(accountHolder, field, status, rejectionMessage)
       await sendEmailAndSms({
         email: accountHolder.email,
         subject: `${label} verification rejected`,
-        html: `<p>Your ${label} document has been rejected. ${message}</p>`,
-        smsMessage: `Your ${label} verification has been rejected.`,
+        html: kycRejectedEmailHtml(label, message),
+        smsMessage: `Your ${label} verification has been rejected: ${message}`,
         msisdn: accountHolder.mobile_number,
         userId: accountHolder.user_id,
         smsType: field === 'nic' ? 'ID_REJECTED' : 'ADDRESS_REJECTED',
+      });
+      await sendEmailAndSms({
+        email: accountHolder.email,
+        subject: 'Documents Rejected!',
+        html: documentsRejectedEmailHtml(uploadUrl, message),
+        smsMessage: 'Your verification documents have been rejected. Please resubmit.',
+        msisdn: accountHolder.mobile_number,
+        userId: accountHolder.user_id,
+        smsType: 'DOCUMENTS_REJECTED',
       });
     }
   } catch (error) {
@@ -354,7 +387,7 @@ export async function updateCustomerKycVerification(
   accountHolderId,
   field,
   status,
-  { rejectionReason, rejectionMessage } = {},
+  { rejectionReason, rejectionMessage, adminUserId } = {},
 ) {
   const normalizedField = String(field || '').toLowerCase();
   const normalizedStatus = String(status || '').toUpperCase();
@@ -392,6 +425,7 @@ export async function updateCustomerKycVerification(
         [reason, message, accountHolderId],
       );
       await notifyKycDecision(holder, 'nic', 'REJECTED', message);
+      await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.IDENTITY_REJECT);
     } else {
       await query(
         `UPDATE account_holders
@@ -403,6 +437,7 @@ export async function updateCustomerKycVerification(
         [accountHolderId],
       );
       await notifyKycDecision(holder, 'nic', 'VERIFIED');
+      await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.IDENTITY_APPROVE);
     }
   } else if (normalizedStatus === 'REJECTED') {
     const reason = String(rejectionReason || rejectionMessage || 'Rejected').trim();
@@ -417,6 +452,7 @@ export async function updateCustomerKycVerification(
       [reason, message, accountHolderId],
     );
     await notifyKycDecision(holder, 'address', 'REJECTED', message);
+    await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.ADDRESS_REJECT);
   } else {
     await query(
       `UPDATE account_holders
@@ -428,6 +464,158 @@ export async function updateCustomerKycVerification(
       [accountHolderId],
     );
     await notifyKycDecision(holder, 'address', 'VERIFIED');
+    await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.ADDRESS_APPROVE);
+  }
+
+  return findCustomerAccountById(accountHolderId);
+}
+
+function allocateUniqueAffiliateCode(length = 8) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let code = '';
+  for (let i = 0; i < length; i += 1) {
+    code += alphabet[Math.floor(Math.random() * alphabet.length)];
+  }
+  return code;
+}
+
+async function generateUniqueAffiliateCode() {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const code = allocateUniqueAffiliateCode();
+    const rows = await query(
+      `SELECT id FROM account_holders WHERE affiliate_code = ? LIMIT 1`,
+      [code],
+    );
+    if (!rows[0]) return code;
+  }
+  throw customerValidationError('Could not allocate affiliate code. Please try again.');
+}
+
+async function notifyAccountBanned(accountHolder) {
+  try {
+    await sendEmailAndSms({
+      email: accountHolder.email,
+      subject: 'Account banned',
+      html: '<p>Your iTrustLD account has been banned. Please contact support for assistance.</p>',
+      smsMessage: 'Your iTrustLD account has been banned. Please contact support for assistance.',
+      msisdn: accountHolder.mobile_number,
+      userId: accountHolder.user_id,
+      smsType: 'ACCOUNT_BANNED',
+    });
+  } catch (error) {
+    console.error('[ban] notification failed:', error.message);
+  }
+}
+
+async function notifyPartnerAccountCreated(accountHolder) {
+  try {
+    const user = await findUserById(accountHolder.user_id);
+    const profileUrl = `${env.userAppUrl}/dashboard`;
+    await sendEmailAndSms({
+      email: accountHolder.email,
+      subject: 'Partner account created',
+      html: `<p>Hi ${user?.name || 'there'}, your partner account has been successfully created. <a href="${profileUrl}">Open your dashboard</a> to get started.</p>`,
+      smsMessage:
+        'Your partner account has been successfully created! Start earning commissions with your audience.',
+      msisdn: accountHolder.mobile_number,
+      userId: accountHolder.user_id,
+      smsType: 'PARTNER_ACCOUNT_CREATED',
+    });
+  } catch (error) {
+    console.error('[partner] notification failed:', error.message);
+  }
+}
+
+export async function updateCustomerAccountStatus(
+  accountHolderId,
+  accountStatus,
+  { bannedReason } = {},
+) {
+  const normalizedStatus = String(accountStatus || '').toUpperCase();
+  if (!['ACTIVE', 'BANNED'].includes(normalizedStatus)) {
+    throw customerValidationError('Invalid account status.');
+  }
+
+  const holders = await query(
+    `SELECT id, user_id, email, mobile_number, account_status
+     FROM account_holders
+     WHERE id = ?
+     LIMIT 1`,
+    [accountHolderId],
+  );
+  const holder = holders[0];
+  if (!holder) {
+    throw customerValidationError('Customer not found.', 404);
+  }
+
+  const oldStatus = holder.account_status;
+  await query(
+    `UPDATE account_holders
+     SET account_status = ?,
+         banned_reason = ?,
+         updated_at = NOW()
+     WHERE id = ?`,
+    [
+      normalizedStatus,
+      normalizedStatus === 'BANNED' ? String(bannedReason || '').trim() || null : null,
+      accountHolderId,
+    ],
+  );
+
+  if (normalizedStatus === 'BANNED' && oldStatus !== 'BANNED') {
+    await notifyAccountBanned(holder);
+  }
+
+  return findCustomerAccountById(accountHolderId);
+}
+
+export async function updateMultipleCustomerAccountStatus(accountHolderIds, accountStatus) {
+  const ids = Array.isArray(accountHolderIds) ? accountHolderIds : [];
+  if (!ids.length) {
+    throw customerValidationError('No account holders selected.');
+  }
+
+  const results = [];
+  for (const accountHolderId of ids) {
+    const customer = await updateCustomerAccountStatus(Number(accountHolderId), accountStatus);
+    if (customer) results.push(customer);
+  }
+
+  return results;
+}
+
+export async function updateCustomerPartnerStatus(accountHolderId, isPartner) {
+  const holders = await query(
+    `SELECT id, user_id, email, mobile_number, affiliate_code, is_patner
+     FROM account_holders
+     WHERE id = ?
+     LIMIT 1`,
+    [accountHolderId],
+  );
+  const holder = holders[0];
+  if (!holder) {
+    throw customerValidationError('Customer not found.', 404);
+  }
+
+  if (isPartner) {
+    let affiliateCode = holder.affiliate_code;
+    if (!affiliateCode) {
+      affiliateCode = await generateUniqueAffiliateCode();
+    }
+
+    await query(
+      `UPDATE account_holders
+       SET is_patner = 'YES', affiliate_code = ?, updated_at = NOW()
+       WHERE id = ?`,
+      [affiliateCode, accountHolderId],
+    );
+
+    await notifyPartnerAccountCreated(holder);
+  } else {
+    await query(
+      `UPDATE account_holders SET is_patner = 'NO', updated_at = NOW() WHERE id = ?`,
+      [accountHolderId],
+    );
   }
 
   return findCustomerAccountById(accountHolderId);
