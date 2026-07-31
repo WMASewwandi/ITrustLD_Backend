@@ -8,7 +8,7 @@ const ACTIVITY_PERMISSION_ALIASES = {
   cusomer_withdrawal_activity: 'customer_withdrawal_activity',
 };
 
-function normalizeToActivityIdentifier(permissionName) {
+export function normalizeToActivityIdentifier(permissionName) {
   for (const [activityId, alias] of Object.entries(ACTIVITY_PERMISSION_ALIASES)) {
     if (permissionName === alias || permissionName === activityId) {
       return activityId;
@@ -162,18 +162,25 @@ export async function getAllActivitiesGrouped() {
      ORDER BY category_id ASC, activity_name ASC`,
   );
 
-  return categories.map((category) => ({
-    id: category.id,
-    identifier: category.category_identifier,
-    name: category.category_name,
-    activities: activities
-      .filter((a) => a.category_id === category.id)
-      .map((a) => ({
-        id: a.id,
-        identifier: a.activity_identifier,
-        name: a.activity_name,
-      })),
-  }));
+  return categories
+    .map((category) => ({
+      id: category.id,
+      identifier: category.category_identifier,
+      name: category.category_name,
+      activities: activities
+        .filter((a) => a.category_id === category.id)
+        .map((a) => ({
+          id: a.id,
+          identifier: a.activity_identifier,
+          name: a.activity_name,
+        })),
+    }))
+    .filter((category) => category.activities.length > 0)
+    .sort((a, b) => {
+      if (a.identifier === 'dashboard_activities') return -1;
+      if (b.identifier === 'dashboard_activities') return 1;
+      return a.id - b.id;
+    });
 }
 
 export async function createRole({ name }) {
