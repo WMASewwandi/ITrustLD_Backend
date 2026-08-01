@@ -7,10 +7,20 @@ import {
 } from './accountHolder.service.js';
 import { queueSmsMessage } from './notification.service.js';
 import {
+  getLevelDisplayName,
   getTierProgressPercentage,
   getUserPointLevel,
   updateUserPointLevel,
 } from './pointEarning.service.js';
+
+const PARTNER_TIER_THRESHOLDS = [
+  { id: 'normal', name: 'Normal', levelPoints: 0, pointsPerLot: 20 },
+  { id: 'silver', name: 'Silver', levelPoints: 10000, pointsPerLot: 40 },
+  { id: 'gold', name: 'Gold', levelPoints: 50000, pointsPerLot: 60 },
+  { id: 'diamond', name: 'Diamond', levelPoints: 100000, pointsPerLot: 70 },
+  { id: 'vip', name: 'VIP', levelPoints: 500000, pointsPerLot: 80 },
+  { id: 'vvip', name: 'VVIP', levelPoints: 1000000, pointsPerLot: 90 },
+];
 
 const POINT_DIVIDER = env.loyalty.pointDivider;
 const MIN_POINTS = env.loyalty.minimumPoints;
@@ -110,6 +120,169 @@ async function getEarnedForYear(userId) {
     [userId],
   );
   return Number(rows[0]?.total || 0);
+}
+
+function formatDisplayDate(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  const d = String(date.getDate()).padStart(2, '0');
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const y = date.getFullYear();
+  return `${d}/${m}/${y}`;
+}
+
+async function getPointsBreakdownForYear(userId) {
+  const rows = await query(
+    `SELECT earning_category, COALESCE(SUM(point_earning_amount), 0) AS total
+     FROM point_earnings
+     WHERE user_id = ?
+       AND created_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)
+     GROUP BY earning_category`,
+    [userId],
+  );
+
+  const totals = { Deposit: 0, Referral: 0 };
+  for (const row of rows) {
+    totals[row.earning_category] = Number(row.total || 0);
+  }
+
+  return [
+    { label: 'Deposit Points', points: totals.Deposit },
+    { label: 'Referral Points', points: totals.Referral },
+  ];
+}
+
+async function getPartnerLevelOverviewRows(userId, level, earnedForYear) {
+  const tiers = PARTNER_TIER_THRESHOLDS;
+  const currentTier = tiers[Math.max(0, Math.min(tiers.length - 1, level - 1))] || tiers[0];
+  const nextTier = tiers[level] || null;
+  const currentPts = Math.floor(Number(earnedForYear) || 0);
+  const tierEnd = nextTier ? nextTier.levelPoints : currentTier.levelPoints;
+
+  const now = new Date();
+  const periodStart = new Date(now);
+  periodStart.setFullYear(periodStart.getFullYear() - 1);
+  const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  const evaluationPeriod = `${formatDisplayDate(periodStart)} – ${formatDisplayDate(now)}`;
+
+  const changeRows = await query(
+    `SELECT point_level_id, point_level_label, event_type, created_at
+     FROM point_level_customers
+     WHERE user_id = ?
+       AND event_type IN ('PROMOTED', 'DEMOTED')
+     ORDER BY id DESC
+     LIMIT 10`,
+    [userId],
+  );
+
+  const lastPromotion = changeRows.find((row) => row.event_type === 'PROMOTED');
+
+  const currentRow = {
+    from_level: currentTier.name,
+    to_level: nextTier?.name || currentTier.name,
+    start_date: formatDisplayDate(periodStart),
+    monthly_review: formatDisplayDate(monthEnd),
+    last_upgrade: lastPromotion ? formatDisplayDate(lastPromotion.created_at) : '—',
+    progress: nextTier ? `${currentPts.toLocaleString()}/${tierEnd.toLocaleString()}` : `${currentPts.toLocaleString()}`,
+    evaluation_period: evaluationPeriod,
+    is_current: true,
+  };
+
+  const historyRows = changeRows.map((row) => {
+    const levelId = Number(row.point_level_id) || 1;
+    const toLevel = getLevelDisplayName(levelId);
+    const fromLevel =
+      row.event_type === 'PROMOTED'
+        ? getLevelDisplayName(Math.max(1, levelId - 1))
+        : getLevelDisplayName(Math.min(6, levelId + 1));
+    const createdAt = row.created_at ? new Date(row.created_at) : null;
+    const reviewDate = createdAt ? new Date(createdAt) : null;
+    if (reviewDate) reviewDate.setMonth(reviewDate.getMonth() + 1);
+
+    return {
+      from_level: fromLevel,
+      to_level: toLevel,
+      start_date: formatDisplayDate(createdAt),
+      monthly_review: formatDisplayDate(reviewDate),
+      last_upgrade: row.event_type === 'PROMOTED' ? formatDisplayDate(createdAt) : '—',
+      progress:
+        row.event_type === 'PROMOTED'
+          ? `Promoted to ${toLevel}`
+          : `Demoted to ${toLevel}`,
+      evaluation_period: evaluationPeriod,
+      is_current: false,
+    };
+  });
+
+  return [currentRow, ...historyRows];
+}
+
+function getTrackPositionPct(points, tiers = PARTNER_TIER_THRESHOLDS) {
+  if (!tiers.length) return 0;
+  const pts = Number(points) || 0;
+  const last = tiers[tiers.length - 1];
+  if (pts >= last.levelPoints) return 100;
+
+  let segmentIndex = 0;
+  for (let i = 0; i < tiers.length - 1; i += 1) {
+    if (pts >= (tiers[i].levelPoints || 0)) segmentIndex = i;
+  }
+  const from = tiers[segmentIndex].levelPoints || 0;
+  const to = tiers[segmentIndex + 1]?.levelPoints || from;
+  const frac = to > from ? Math.min(1, Math.max(0, (pts - from) / (to - from))) : 1;
+  return Math.min(100, ((segmentIndex + frac) / Math.max(tiers.length - 1, 1)) * 100);
+}
+
+function buildPartnerProgress(level, earnedForYear, levelOverviewRows) {
+  const tiers = PARTNER_TIER_THRESHOLDS;
+  const currentTier = tiers[Math.max(0, Math.min(tiers.length - 1, level - 1))] || tiers[0];
+  const nextTier = tiers[level] || null;
+  const currentPts = Number(earnedForYear) || 0;
+  const tierStart = currentTier.levelPoints;
+  const tierEnd = nextTier ? nextTier.levelPoints : currentTier.levelPoints;
+  const remaining = nextTier ? Math.max(0, tierEnd - currentPts) : 0;
+  const span = tierEnd - tierStart;
+  const progressPct = nextTier
+    ? Math.min(100, Math.max(0, span > 0 ? ((currentPts - tierStart) / span) * 100 : 100))
+    : 100;
+
+  const now = new Date();
+  const periodStart = new Date(now);
+  periodStart.setFullYear(periodStart.getFullYear() - 1);
+  const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  const daysLeft = Math.max(
+    0,
+    Math.ceil((monthEnd.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)),
+  );
+
+  const lastPromotion = levelOverviewRows.find(
+    (row) => !row.is_current && String(row.progress || '').startsWith('Promoted'),
+  );
+
+  return {
+    current_tier: currentTier.name,
+    next_tier: nextTier?.name || null,
+    period_points: currentPts,
+    tier_target: tierEnd,
+    tier_start: tierStart,
+    points_to_next: remaining,
+    progress_percentage: Math.round(progressPct),
+    track_position_pct: Math.round(getTrackPositionPct(currentPts, tiers)),
+    points_per_lot: currentTier.pointsPerLot,
+    tiers: tiers.map((tier) => ({ ...tier })),
+    level_overview: {
+      rows: levelOverviewRows,
+    },
+    evaluation: {
+      start_date: formatDisplayDate(periodStart),
+      end_date: formatDisplayDate(now),
+      period_label: `${formatDisplayDate(periodStart)} – ${formatDisplayDate(now)}`,
+      monthly_review: formatDisplayDate(monthEnd),
+      last_upgrade: lastPromotion?.last_upgrade || levelOverviewRows[0]?.last_upgrade || '—',
+      days_left: daysLeft,
+    },
+  };
 }
 
 function buildRateLabel(isPartner) {
@@ -254,6 +427,19 @@ export async function getUserLoyaltySummary(userId) {
   }
 
   const usdPerBlock = isPartner ? PARTNER_USD : STANDARD_USD;
+  const affiliateCode = accountHolder.affiliate_code || null;
+
+  let partnerProgress = null;
+  if (isPartner) {
+    const [pointsBreakdown, levelOverviewRows] = await Promise.all([
+      getPointsBreakdownForYear(userId),
+      getPartnerLevelOverviewRows(userId, level, earnedForYear),
+    ]);
+    partnerProgress = {
+      ...buildPartnerProgress(level, earnedForYear, levelOverviewRows),
+      points_breakdown: pointsBreakdown,
+    };
+  }
 
   return {
     point_summary: {
@@ -262,9 +448,14 @@ export async function getUserLoyaltySummary(userId) {
       remaining: totals.remaining,
       earned_for_year: earnedForYear,
       level,
+      level_label: getLevelDisplayName(level),
       percentage,
     },
     is_partner: isPartner,
+    affiliate_code: affiliateCode,
+    has_affiliate_link: Boolean(affiliateCode),
+    partner_tier: getLevelDisplayName(level),
+    partner_progress: partnerProgress,
     rate_label: buildRateLabel(isPartner),
     usd_value_of_earned: Number(((totals.earned / POINT_DIVIDER) * usdPerBlock).toFixed(2)),
     minimum_points: MIN_POINTS,

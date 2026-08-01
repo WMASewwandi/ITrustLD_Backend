@@ -2,6 +2,10 @@ import { Router } from 'express';
 import { requireUserAuth } from '../../middleware/requireUserAuth.js';
 import { requireCustomerLoyaltyActivity } from '../../middleware/requireCustomerLoyaltyActivity.js';
 import {
+  listPartnerClients,
+  listSubPartnerClients,
+} from '../../services/userAffiliate.service.js';
+import {
   createUserLoyaltyWithdrawal,
   getUserLoyaltySummary,
   listUserLoyaltyWithdrawals,
@@ -15,6 +19,24 @@ userLoyaltyRouter.use(requireCustomerLoyaltyActivity);
 userLoyaltyRouter.get('/summary', async (req, res, next) => {
   try {
     const data = await getUserLoyaltySummary(req.auth.userId);
+    res.json(data);
+  } catch (error) {
+    next(error);
+  }
+});
+
+userLoyaltyRouter.get('/clients', async (req, res, next) => {
+  try {
+    const data = await listPartnerClients(req.auth.userId, req.query ?? {});
+    res.json(data);
+  } catch (error) {
+    next(error);
+  }
+});
+
+userLoyaltyRouter.get('/sub-partners', async (req, res, next) => {
+  try {
+    const data = await listSubPartnerClients(req.auth.userId, req.query ?? {});
     res.json(data);
   } catch (error) {
     next(error);
