@@ -6,8 +6,10 @@ import {
   listSubPartnerClients,
 } from '../../services/userAffiliate.service.js';
 import {
+  createUserBonusClaim,
   createUserLoyaltyWithdrawal,
   getUserLoyaltySummary,
+  listUserBonusClaims,
   listUserLoyaltyWithdrawals,
 } from '../../services/userLoyalty.service.js';
 
@@ -55,6 +57,24 @@ userLoyaltyRouter.get('/withdrawals', async (req, res, next) => {
 userLoyaltyRouter.post('/withdrawals', async (req, res, next) => {
   try {
     const data = await createUserLoyaltyWithdrawal(req.auth.userId, req.body ?? {});
+    res.status(201).json(data);
+  } catch (error) {
+    next(error);
+  }
+});
+
+userLoyaltyRouter.get('/bonus-claims', async (req, res, next) => {
+  try {
+    const data = await listUserBonusClaims(req.auth.userId, req.query ?? {});
+    res.json({ ok: true, ...data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+userLoyaltyRouter.post('/bonus-claims', async (req, res, next) => {
+  try {
+    const data = await createUserBonusClaim(req.auth.userId, req.body ?? {});
     res.status(201).json(data);
   } catch (error) {
     next(error);

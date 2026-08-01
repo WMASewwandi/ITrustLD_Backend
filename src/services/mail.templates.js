@@ -267,3 +267,54 @@ export function loyaltyLevelUpgradeEmailHtml({ levelName, loyaltyPoints, feature
       </a>
     </div>`);
 }
+
+export function loyaltyRedemptionApprovedEmailHtml({ firstName, balanceUrl }) {
+  const name = firstName || 'Customer';
+  return wrap(`
+    <div style="padding:40px 30px;text-align:center;">
+      <h1 style="font-size:24px;color:#0E1726;margin:0 0 24px;">Redemption approved</h1>
+      <p style="font-size:16px;line-height:25px;color:#0E1726;margin:0 0 12px;">
+        Hi ${name}, your loyalty bonus redemption request has been approved.
+      </p>
+      <p style="font-size:16px;line-height:25px;color:#0E1726;margin:0 0 32px;">
+        Congratulations! Your loyalty points have been successfully redeemed.
+      </p>
+      <a href="${balanceUrl}" style="display:inline-block;background:#0f766e;color:#fff;text-decoration:none;padding:12px 24px;border-radius:9999px;font-size:16px;font-weight:500;">
+        View loyalty balance
+      </a>
+    </div>`);
+}
+
+export function loyaltyRedemptionRejectedEmailHtml({ firstName, balanceUrl }) {
+  const name = firstName || 'Customer';
+  return wrap(`
+    <div style="padding:40px 30px;text-align:center;">
+      <h1 style="font-size:24px;color:#0E1726;margin:0 0 24px;">Redemption rejected</h1>
+      <p style="font-size:16px;line-height:25px;color:#0E1726;margin:0 0 12px;">
+        Hi ${name}, your loyalty bonus redemption request has been rejected.
+      </p>
+      <p style="font-size:16px;line-height:25px;color:#0E1726;margin:0 0 32px;">
+        Please contact support if you need more information.
+      </p>
+      <a href="${balanceUrl}" style="display:inline-block;background:#0f766e;color:#fff;text-decoration:none;padding:12px 24px;border-radius:9999px;font-size:16px;font-weight:500;">
+        View loyalty balance
+      </a>
+    </div>`);
+}
+
+export function loyaltyRedemptionPendingEmailHtml({ firstName, balanceUrl }) {
+  const name = firstName || 'Customer';
+  return wrap(`
+    <div style="padding:40px 30px;text-align:center;">
+      <h1 style="font-size:24px;color:#0E1726;margin:0 0 24px;">Bonus claim submitted</h1>
+      <p style="font-size:16px;line-height:25px;color:#0E1726;margin:0 0 12px;">
+        Hi ${name}, your loyalty bonus claim has been submitted successfully.
+      </p>
+      <p style="font-size:16px;line-height:25px;color:#0E1726;margin:0 0 32px;">
+        Your request is being reviewed. We will notify you once it is processed.
+      </p>
+      <a href="${balanceUrl}" style="display:inline-block;background:#0f766e;color:#fff;text-decoration:none;padding:12px 24px;border-radius:9999px;font-size:16px;font-weight:500;">
+        View loyalty balance
+      </a>
+    </div>`);
+}

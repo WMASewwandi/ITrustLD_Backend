@@ -52,6 +52,8 @@ export const env = {
   loyalty: {
     starterWithdrawalTransactionId:
       Number(process.env.STARTER_LOYALTY_WITHDRAWAL_TRANSACTION) || 0,
+    starterBonusTransactionId:
+      Number(process.env.STARTER_LOYALTY_BONUS_COLLECTION_TRANSACTION) || 0,
     pointDivider: 10000,
     standardUsdPerBlock: 10,
     partnerUsdPerBlock: 35,
