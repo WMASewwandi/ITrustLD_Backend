@@ -1,5 +1,6 @@
 import { query } from '../config/database.js';
 import { buildDepositProofApiUrl } from './depositProofStorage.service.js';
+import { batchScammerCheck } from './scammer.service.js';
 
 const EXCLUDED_USER_IDS = [4, 16405];
 
@@ -182,6 +183,7 @@ function mapDepositRow(row, adminUsers, assignedUsers) {
       row.transaction_status === 'Rejected' ? row.rejected_reason || null : null,
     customerEmail: row.customer_email || null,
     customerMobile: row.customer_mobile || null,
+    isScammer: false,
   };
 }
 
@@ -479,8 +481,13 @@ export async function listDepositsForAdmin(auth, params = {}) {
         assignedToUserId,
       );
 
+  const scammerFlags = await batchScammerCheck(result.rows.map((row) => row.topup_account_id));
+
   return {
-    deposits: result.rows.map((row) => mapDepositRow(row, result.adminUsers, result.assignedUsers)),
+    deposits: result.rows.map((row) => ({
+      ...mapDepositRow(row, result.adminUsers, result.assignedUsers),
+      isScammer: Boolean(scammerFlags[row.topup_account_id]),
+    })),
     totals,
     pagination: result.pagination,
     isAdmin: isAdmin(roles),

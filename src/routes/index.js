@@ -13,6 +13,7 @@ import { adminCurrencyTypesRouter } from './admin/currencyTypes.routes.js';
 import { adminUserCountDisplayRouter } from './admin/userCountDisplay.routes.js';
 import { adminRatesRouter } from './admin/rates.routes.js';
 import { adminDepositsRouter } from './admin/deposits.routes.js';
+import { adminScammersRouter } from './admin/scammers.routes.js';
 import { adminNotificationsRouter } from './admin/notifications.routes.js';
 import { publicCommunityStatsRouter } from './public/community-stats.routes.js';
 import { healthRouter } from './health.routes.js';
@@ -45,6 +46,7 @@ apiRouter.use('/admin/currency-types', adminCurrencyTypesRouter);
 apiRouter.use('/admin/user-count-display', adminUserCountDisplayRouter);
 apiRouter.use('/admin/rates', adminRatesRouter);
 apiRouter.use('/admin/deposits', adminDepositsRouter);
+apiRouter.use('/admin/scammers', adminScammersRouter);
 apiRouter.use('/admin/notifications', adminNotificationsRouter);
 
 apiRouter.get('/', (_req, res) => {
