@@ -5,6 +5,7 @@ import {
   depositApprovedEmailHtml,
   depositRejectedEmailHtml,
 } from './mail.templates.js';
+import { awardDepositPoints } from './pointEarning.service.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -245,38 +246,6 @@ async function sendDetailedDepositSms(adminUserId, mobile, message, smsType) {
   });
 }
 
-async function awardDepositPoints(deposit) {
-  try {
-    const multiplierRows = await query(
-      `SELECT point_multiplier
-       FROM loyalty_management_point_collections
-       WHERE is_active = 1 AND is_for_affiliate = 0
-       ORDER BY id DESC
-       LIMIT 1`,
-    );
-    const multiplier = Number(multiplierRows[0]?.point_multiplier) || 0;
-    if (!multiplier) return;
-
-    const existing = await query(
-      `SELECT id FROM point_earnings
-       WHERE deposit_id = ? AND earning_category = 'Deposit'
-       LIMIT 1`,
-      [deposit.id],
-    );
-    if (existing[0]) return;
-
-    const points = Number(deposit.deposit_amount) * multiplier;
-    await query(
-      `INSERT INTO point_earnings
-        (user_id, deposit_id, deposit_amount, point_earning_amount, point_multiplier, earning_category, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 'Deposit', NOW(), NOW())`,
-      [deposit.user_id, deposit.id, deposit.deposit_amount, points, multiplier],
-    );
-  } catch (error) {
-    console.error('[deposit-points]', error.message);
-  }
-}
-
 export async function updateDepositStatus(
   auth,
   { depositId, transactionId, status, rejectedReason, rejectedReasonMessage },
@@ -348,7 +317,7 @@ export async function updateDepositStatus(
       }
     }
 
-    await awardDepositPoints(deposit);
+    await awardDepositPoints(deposit, accountHolder);
   } else if (normalizedStatus === 'Rejected') {
     await query(
       `UPDATE deposits

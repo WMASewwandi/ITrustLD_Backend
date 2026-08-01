@@ -250,3 +250,20 @@ export function withdrawalRejectedEmailHtml({ firstName, withdrawal }) {
     withdrawalDetailsTable({ firstName, withdrawal: { ...withdrawal, transaction_status: 'Rejected' } }),
   );
 }
+
+export function loyaltyLevelUpgradeEmailHtml({ levelName, loyaltyPoints, featureUrl }) {
+  const formattedPoints = Math.round(Number(loyaltyPoints) || 0).toLocaleString();
+  return wrap(`
+    <div style="padding:40px 30px;text-align:center;">
+      <h1 style="font-size:24px;color:#0E1726;margin:0 0 24px;">Congratulations!</h1>
+      <p style="font-size:16px;line-height:25px;color:#0E1726;margin:0 0 12px;">
+        You've just unlocked ${levelName} Trust Level by reaching ${formattedPoints} Loyalty Points!
+      </p>
+      <p style="font-size:16px;line-height:25px;color:#0E1726;margin:0 0 32px;">
+        We've unlocked some awesome benefits just for you.
+      </p>
+      <a href="${featureUrl}" style="display:inline-block;background:#0f766e;color:#fff;text-decoration:none;padding:12px 24px;border-radius:9999px;font-size:16px;font-weight:500;">
+        Check Now
+      </a>
+    </div>`);
+}

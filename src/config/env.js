@@ -49,4 +49,13 @@ export const env = {
     secret: process.env.TURNSTILE_SECRET_KEY || process.env.TURNSTILE_SECRET || '',
     siteKey: process.env.TURNSTILE_SITE_KEY || process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || '',
   },
+  loyalty: {
+    starterWithdrawalTransactionId:
+      Number(process.env.STARTER_LOYALTY_WITHDRAWAL_TRANSACTION) || 0,
+    pointDivider: 10000,
+    standardUsdPerBlock: 10,
+    partnerUsdPerBlock: 35,
+    minimumPoints: 10000,
+    staffAlertNumbers: ['94766850647', '94767676684', '94767676023', '94752256911', '94763383069'],
+  },
 };
