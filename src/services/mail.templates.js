@@ -208,3 +208,45 @@ export function depositApprovedEmailHtml({ firstName, deposit }) {
 export function depositRejectedEmailHtml({ firstName, deposit }) {
   return wrap(depositDetailsTable({ firstName, deposit: { ...deposit, transaction_status: 'Rejected' } }));
 }
+
+function withdrawalDetailsTable({ firstName, withdrawal }) {
+  const created = formatDepositDate(withdrawal.created_at);
+  const dateText = typeof created === 'string' ? created : created.date;
+  const timeText = typeof created === 'string' ? '' : created.time;
+  return `
+    <div style="padding:40px 30px;">
+      <h2 style="font-size:24px;color:#0f172a;">Hi ${firstName},</h2>
+      <p style="font-size:16px;line-height:25px;color:#0E1726;">
+        ${withdrawal.transaction_status === 'Completed'
+          ? 'Congratulations! Your withdrawal request has been approved. You can find the withdrawal information below.'
+          : 'Your withdrawal request has been rejected. You can find the withdrawal information below.'}
+      </p>
+      <table style="margin-top:16px;font-size:16px;line-height:25px;color:#0E1726;">
+        <tr><td>Transaction ID</td><td>- ${withdrawal.transaction_id}</td></tr>
+        <tr><td>Cashout Amount</td><td>- ${withdrawal.cashout_amount_currency} ${withdrawal.cashout_amount}</td></tr>
+        <tr><td>Receiving Amount</td><td>- ${withdrawal.receiving_amount_currency} ${withdrawal.receiving_amount}</td></tr>
+        <tr><td>Receiving Method</td><td>- ${withdrawal.receivingOptionName || '—'}</td></tr>
+        <tr><td>Transaction Date</td><td>- ${dateText}</td></tr>
+        <tr><td>Transaction Time</td><td>- ${timeText}</td></tr>
+        <tr><td>Cashout Method</td><td>- ${withdrawal.cashoutMethodName || '—'}</td></tr>
+        <tr><td>Cashout Account</td><td>- ${withdrawal.cashout_account_id || '—'}</td></tr>
+        <tr><td>Status</td><td>- ${withdrawal.transaction_status}</td></tr>
+        <tr><td>Message</td><td>- ${withdrawal.message || '—'}</td></tr>
+      </table>
+      <p style="font-size:16px;line-height:25px;color:#0E1726;margin-top:16px;">
+        If you have any questions or need assistance, please contact our support team.
+      </p>
+    </div>`;
+}
+
+export function withdrawalApprovedEmailHtml({ firstName, withdrawal }) {
+  return wrap(
+    withdrawalDetailsTable({ firstName, withdrawal: { ...withdrawal, transaction_status: 'Completed' } }),
+  );
+}
+
+export function withdrawalRejectedEmailHtml({ firstName, withdrawal }) {
+  return wrap(
+    withdrawalDetailsTable({ firstName, withdrawal: { ...withdrawal, transaction_status: 'Rejected' } }),
+  );
+}
