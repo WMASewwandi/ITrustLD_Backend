@@ -691,8 +691,16 @@ async function loadTopupMethodsForFilters() {
   return rows.map((row) => ({ id: row.id, name: row.topup_method_name }));
 }
 
+function parseTransactionStatusFilter(status) {
+  const value = String(status || '').trim();
+  if (!value || value === 'All Statuses' || value.toLowerCase() === 'all') {
+    return null;
+  }
+  return value;
+}
+
 function buildUserDepositListQuery(userId, filters = {}) {
-  const { fromDate, toDate, topupMethodId } = filters;
+  const { fromDate, toDate, topupMethodId, status, search } = filters;
   let sql = `SELECT d.*, po.payment_option_name, tm.topup_method_name
              FROM deposits d
              LEFT JOIN payment_options po ON po.id = d.payment_option_id
@@ -712,6 +720,21 @@ function buildUserDepositListQuery(userId, filters = {}) {
   if (topupMethodId) {
     sql += ` AND d.topup_method_id = ?`;
     values.push(topupMethodId);
+  }
+  if (status) {
+    sql += ` AND d.transaction_status = ?`;
+    values.push(status);
+  }
+  if (search) {
+    const term = `%${search}%`;
+    sql += ` AND (
+      d.transaction_id LIKE ? OR
+      tm.topup_method_name LIKE ? OR
+      d.topup_account_id LIKE ? OR
+      po.payment_option_name LIKE ? OR
+      d.message LIKE ?
+    )`;
+    values.push(term, term, term, term, term);
   }
 
   return { sql, values };
@@ -734,11 +757,15 @@ export async function listUserDepositTransactions(userId, params = {}) {
     topupMethodId != null && String(topupMethodId).trim() !== ''
       ? Number(topupMethodId)
       : null;
+  const status = parseTransactionStatusFilter(params.status ?? params.transaction_status);
+  const search = String(params.search ?? params.q ?? '').trim() || null;
 
   const { sql, values } = buildUserDepositListQuery(userId, {
     fromDate,
     toDate,
     topupMethodId: Number.isInteger(parsedTopupMethodId) ? parsedTopupMethodId : null,
+    status,
+    search,
   });
 
   const countRows = await query(
@@ -767,6 +794,8 @@ export async function listUserDepositTransactions(userId, params = {}) {
       to_date: toDate,
       topup_method_id: parsedTopupMethodId,
       filter_template: params.filter_template ?? params.filterTemplate ?? null,
+      status,
+      search,
     },
     topup_methods: topupMethods,
   };
@@ -860,11 +889,15 @@ export async function listUserDepositTransactionsForPrint(userId, params = {}) {
     topupMethodId != null && String(topupMethodId).trim() !== ''
       ? Number(topupMethodId)
       : null;
+  const status = parseTransactionStatusFilter(params.status ?? params.transaction_status);
+  const search = String(params.search ?? params.q ?? '').trim() || null;
 
   const { sql, values } = buildUserDepositListQuery(userId, {
     fromDate,
     toDate,
     topupMethodId: Number.isInteger(parsedTopupMethodId) ? parsedTopupMethodId : null,
+    status,
+    search,
   });
 
   const rows = await query(`${sql} ORDER BY d.id DESC LIMIT 10`, values);
