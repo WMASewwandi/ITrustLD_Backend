@@ -1,5 +1,6 @@
 import { query } from '../config/database.js';
 import { countCustomerAccounts } from './customerAccount.service.js';
+import { countHelpTickets, countUnreadHelpTickets } from './helpTicket.service.js';
 
 function isDepositExecutive(roles) {
   return (
@@ -85,6 +86,8 @@ export async function getAdminNavCounts(roles = [], userId = null) {
     loyaltyOrdersPending,
     loyaltyBonusPending,
     loyaltyVouchersPending,
+    helpTicketsTotal,
+    helpTicketsUnread,
   ] = await Promise.all([
     countCustomerAccounts('pending'),
     countCustomerAccounts('address-pending'),
@@ -94,6 +97,8 @@ export async function getAdminNavCounts(roles = [], userId = null) {
     countPendingLoyaltyOrders(),
     countPendingBonusClaims(),
     countPendingVoucherClaims(),
+    countHelpTickets(),
+    countUnreadHelpTickets(),
   ]);
 
   return {
@@ -109,5 +114,6 @@ export async function getAdminNavCounts(roles = [], userId = null) {
       bonus: loyaltyBonusPending,
       vouchers: loyaltyVouchersPending,
     },
+    help_tickets: { total: helpTicketsTotal, unread: helpTicketsUnread },
   };
 }

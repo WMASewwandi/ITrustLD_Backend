@@ -1,66 +1,10 @@
 import { query } from '../config/database.js';
 import { findAccountHolderByUserId } from './accountHolder.service.js';
-import {
-  deriveBackDocumentFilename,
-  documentExists,
-} from './documentStorage.service.js';
 import { listPublishedBlogPostsForUser } from './blog.service.js';
+import { getDashboardPromotionalContent } from './promotionalBanner.service.js';
+import { buildDocumentRows } from './userDocuments.service.js';
 import { getUserSession } from './userAuth.service.js';
 import { resolveUserType } from './userSummary.service.js';
-
-function mapVerificationStatus(verification, documentStatus) {
-  if (verification === 'VERIFIED') return 'Completed';
-  if (verification === 'REJECTED') return 'Rejected';
-  if (documentStatus === 'RECEIVED') return 'In-Progress';
-  return 'Pending';
-}
-
-async function buildDocumentOverview(accountHolder) {
-  if (!accountHolder) return [];
-
-  const docs = [];
-  const identityType = accountHolder.identity_document_type;
-  const isNic = String(identityType || '').toUpperCase() === 'NIC';
-
-  docs.push({
-    key: 'identity_front',
-    name: isNic ? 'National ID (Front)' : 'Identity Document',
-    status: mapVerificationStatus(
-      accountHolder.identity_verification,
-      accountHolder.identity_document_status,
-    ),
-  });
-
-  if (isNic) {
-    let backStatus = 'Pending';
-    if (accountHolder.identity_document_name) {
-      const backFilename = deriveBackDocumentFilename(accountHolder.identity_document_name);
-      const hasBack = backFilename ? await documentExists(backFilename) : false;
-      if (hasBack) {
-        backStatus = mapVerificationStatus(
-          accountHolder.identity_verification,
-          accountHolder.identity_document_status,
-        );
-      }
-    }
-    docs.push({
-      key: 'identity_back',
-      name: 'National ID (Back)',
-      status: backStatus,
-    });
-  }
-
-  docs.push({
-    key: 'address',
-    name: 'Proof of Address',
-    status: mapVerificationStatus(
-      accountHolder.address_verification,
-      accountHolder.address_document_status,
-    ),
-  });
-
-  return docs;
-}
 
 function formatTransactionDate(value) {
   if (!value) return '';
@@ -203,7 +147,7 @@ export async function getUserDashboard(userId) {
   const accountHolder = await findAccountHolderByUserId(userId);
   const [user, documents, recentTransactions, blogPosts] = await Promise.all([
     getUserSession(userId),
-    buildDocumentOverview(accountHolder),
+    buildDocumentRows(accountHolder),
     getRecentTransactions(userId),
     listPublishedBlogPostsForUser(),
   ]);
@@ -215,6 +159,7 @@ export async function getUserDashboard(userId) {
     pending_withdrawals_count: user.pending_withdrawals_count ?? 0,
   };
   const userType = resolveUserType(accountHolder);
+  const promotionalContent = await getDashboardPromotionalContent(userType);
   const notifications = buildNotifications({ accountHolder, summary, documents });
   const verificationComplete =
     accountHolder?.email_verification === 'VERIFIED' &&
@@ -233,6 +178,9 @@ export async function getUserDashboard(userId) {
     verification_complete: verificationComplete,
     recent_transactions: recentTransactions,
     blog_posts: blogPosts,
+    promo_banner: promotionalContent.promo_banner,
+    promotional_sliders: promotionalContent.promotional_sliders,
+    promotional_banners: promotionalContent.promotional_banners,
     notifications,
     affiliate_code: accountHolder?.affiliate_code || null,
   };

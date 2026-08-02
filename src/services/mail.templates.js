@@ -160,6 +160,35 @@ export function adminContactEmailHtml(body) {
     </div>`);
 }
 
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\n/g, '<br>');
+}
+
+export function helpTicketReplyEmailHtml({
+  firstName,
+  originalSubject,
+  originalMessage,
+  replyMessage,
+}) {
+  return wrap(`
+    <div style="padding:40px 30px;">
+      <p style="font-size:16px;line-height:25px;color:#0E1726;">Hi ${escapeHtml(firstName || 'there')},</p>
+      <p style="font-size:16px;line-height:25px;color:#0E1726;margin-top:16px;">${escapeHtml(replyMessage)}</p>
+      <div style="margin-top:28px;padding:18px 20px;border-radius:12px;background:#F7F9FC;border:1px solid #E5E7EB;">
+        <p style="font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#6B7280;margin:0;">Your original request</p>
+        <p style="font-size:15px;font-weight:600;color:#111827;margin:10px 0 0;">${escapeHtml(originalSubject)}</p>
+        <p style="font-size:14px;line-height:22px;color:#4B5563;margin:10px 0 0;">${escapeHtml(originalMessage)}</p>
+      </div>
+      <p style="font-size:14px;line-height:22px;color:#6B7280;margin-top:24px;">
+        If you need more help, reply to this email or submit a new ticket at iTrustLD Support.
+      </p>
+    </div>`);
+}
+
 function formatDepositDate(value) {
   if (!value) return '—';
   const date = value instanceof Date ? value : new Date(value);
