@@ -302,6 +302,27 @@ export function loyaltyRedemptionRejectedEmailHtml({ firstName, balanceUrl }) {
     </div>`);
 }
 
+export function clientBonusVoucherEmailHtml({ firstName, platformId, validUntil, amount, voucherUrl }) {
+  const name = String(firstName || 'there').split(' ')[0];
+  const formattedAmount = Number(amount || 0).toFixed(2);
+  return wrap(`
+    <div style="padding:40px 30px;">
+      <h1 style="font-size:24px;color:#0E1726;">Client Bonus Voucher</h1>
+      <p style="font-size:16px;line-height:25px;color:#0E1726;margin:0 0 12px;">
+        Hi ${name}, your client bonus voucher for USD ${formattedAmount} has been issued.
+      </p>
+      <p style="font-size:16px;line-height:25px;color:#0E1726;margin:0 0 12px;">
+        Platform ID: <strong>${platformId || '—'}</strong>
+      </p>
+      <p style="font-size:16px;line-height:25px;color:#0E1726;margin:0 0 32px;">
+        Valid until ${validUntil || '30 days from issue'}. Share the printable voucher with your client for deposit redemption.
+      </p>
+      <a href="${voucherUrl}" style="display:inline-block;background:#0f766e;color:#fff;text-decoration:none;padding:12px 24px;border-radius:9999px;font-size:16px;font-weight:500;">
+        View vouchers
+      </a>
+    </div>`);
+}
+
 export function loyaltyRedemptionPendingEmailHtml({ firstName, balanceUrl }) {
   const name = firstName || 'Customer';
   return wrap(`

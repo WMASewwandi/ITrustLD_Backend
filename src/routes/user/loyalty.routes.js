@@ -12,6 +12,12 @@ import {
   listUserBonusClaims,
   listUserLoyaltyWithdrawals,
 } from '../../services/userLoyalty.service.js';
+import {
+  createUserClientBonusVoucher,
+  getUserVoucherByToken,
+  listTopupMethodsForVoucher,
+  listUserVoucherClaims,
+} from '../../services/userVoucherClaims.service.js';
 
 export const userLoyaltyRouter = Router();
 
@@ -76,6 +82,42 @@ userLoyaltyRouter.post('/bonus-claims', async (req, res, next) => {
   try {
     const data = await createUserBonusClaim(req.auth.userId, req.body ?? {});
     res.status(201).json(data);
+  } catch (error) {
+    next(error);
+  }
+});
+
+userLoyaltyRouter.get('/vouchers', async (req, res, next) => {
+  try {
+    const data = await listUserVoucherClaims(req.auth.userId, req.query ?? {});
+    res.json({ ok: true, ...data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+userLoyaltyRouter.post('/vouchers', async (req, res, next) => {
+  try {
+    const data = await createUserClientBonusVoucher(req.auth.userId, req.body ?? {});
+    res.status(201).json(data);
+  } catch (error) {
+    next(error);
+  }
+});
+
+userLoyaltyRouter.get('/vouchers/:token', async (req, res, next) => {
+  try {
+    const data = await getUserVoucherByToken(req.auth.userId, req.params.token);
+    res.json({ ok: true, ...data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+userLoyaltyRouter.get('/topup-methods', async (req, res, next) => {
+  try {
+    const data = await listTopupMethodsForVoucher();
+    res.json({ ok: true, ...data });
   } catch (error) {
     next(error);
   }

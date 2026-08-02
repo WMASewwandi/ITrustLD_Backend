@@ -17,6 +17,7 @@ import {
   getUserPointLevel,
   updateUserPointLevel,
 } from './pointEarning.service.js';
+import { getClientBonusSummaryForUser } from './userVoucherClaims.service.js';
 
 const PARTNER_TIER_THRESHOLDS = [
   { id: 'normal', name: 'Normal', levelPoints: 0, pointsPerLot: 20 },
@@ -463,6 +464,7 @@ export async function getUserLoyaltySummary(userId) {
     partner_tier: getLevelDisplayName(level),
     partner_progress: partnerProgress,
     bonus_summary: await getBonusSummaryForUser(userId, isPartner, totals.remaining),
+    client_bonus_summary: await getClientBonusSummaryForUser(userId, isPartner),
     rate_label: buildRateLabel(isPartner),
     usd_value_of_earned: Number(((totals.earned / POINT_DIVIDER) * usdPerBlock).toFixed(2)),
     minimum_points: MIN_POINTS,
