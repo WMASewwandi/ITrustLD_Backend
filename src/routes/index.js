@@ -19,9 +19,13 @@ import { adminNotificationsRouter } from './admin/notifications.routes.js';
 import { adminLoyaltyRouter } from './admin/loyalty.routes.js';
 import { adminHelpTicketsRouter } from './admin/help-tickets.routes.js';
 import { adminPromotionalBannersRouter } from './admin/promotional-banners.routes.js';
+import { adminVideoTutorialsRouter } from './admin/video-tutorials.routes.js';
+import { adminLoyaltyMembershipTiersRouter } from './admin/loyalty-membership-tiers.routes.js';
 import { publicCommunityStatsRouter } from './public/community-stats.routes.js';
 import { publicHelpTicketsRouter } from './public/help-tickets.routes.js';
 import { publicPromotionalBannersRouter } from './public/promotional-banners.routes.js';
+import { publicVideoTutorialsRouter } from './public/video-tutorials.routes.js';
+import { publicLoyaltyMembershipTiersRouter } from './public/loyalty-membership-tiers.routes.js';
 import { healthRouter } from './health.routes.js';
 import { userDashboardRouter } from './user/dashboard.routes.js';
 import { userDepositsRouter } from './user/deposits.routes.js';
@@ -52,6 +56,8 @@ apiRouter.use('/public/wallet-logos', publicWalletLogosRouter);
 apiRouter.use('/public/community-stats', publicCommunityStatsRouter);
 apiRouter.use('/public/help-tickets', publicHelpTicketsRouter);
 apiRouter.use('/public/promotional-banners', publicPromotionalBannersRouter);
+apiRouter.use('/public/video-tutorials', publicVideoTutorialsRouter);
+apiRouter.use('/public/loyalty/membership-tiers', publicLoyaltyMembershipTiersRouter);
 apiRouter.use('/admin/auth', adminAuthRouter);
 apiRouter.use('/admin/roles', adminRolesRouter);
 apiRouter.use('/admin/system-users', adminSystemUsersRouter);
@@ -68,8 +74,10 @@ apiRouter.use('/admin/withdrawals', adminWithdrawalsRouter);
 apiRouter.use('/admin/scammers', adminScammersRouter);
 apiRouter.use('/admin/notifications', adminNotificationsRouter);
 apiRouter.use('/admin/loyalty', adminLoyaltyRouter);
+apiRouter.use('/admin/loyalty/membership-tiers', adminLoyaltyMembershipTiersRouter);
 apiRouter.use('/admin/help-tickets', adminHelpTicketsRouter);
 apiRouter.use('/admin/promotional-banners', adminPromotionalBannersRouter);
+apiRouter.use('/admin/video-tutorials', adminVideoTutorialsRouter);
 
 apiRouter.get('/', (_req, res) => {
   res.json({
