@@ -1,0 +1,29 @@
+# systemd unit — ITrustLD_Admin (Next.js)
+#
+# Install:
+#   sudo cp deploy/systemd/itrustld-admin.service.example /etc/systemd/system/itrustld-admin.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now itrustld-admin
+
+[Unit]
+Description=iTrustLD Admin Portal (Next.js)
+After=network.target itrustld-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/itrustld/ITrustLD_Admin
+EnvironmentFile=/var/www/itrustld/ITrustLD_Admin/.env.local
+Environment=NODE_ENV=production
+Environment=PORT=3001
+ExecStart=/usr/bin/node node_modules/next/dist/bin/next start -p 3001 -H 127.0.0.1
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=itrustld-admin
+
+[Install]
+WantedBy=multi-user.target

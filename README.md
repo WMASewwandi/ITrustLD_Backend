@@ -2,7 +2,14 @@
 
 Express.js API for the split iTrustLD stack. It uses the **same database** as `ITrustLD_Existing` (Laravel). Configure `DB_*` in `.env` to match the Laravel app's `.env`.
 
-**Linux deployment:** see [`deploy/README.md`](../../deploy/README.md) (PM2, nginx, systemd, env templates).
+**Linux deployment:** this repo includes `deploy/`. After cloning Backend + Admin + User into one folder, run:
+
+```bash
+cd /var/www/your-stack-folder
+bash ITrustLD_Backend/deploy/scripts/setup-stack.sh
+```
+
+Then follow `deploy/SETUP_ON_SERVER.md` and `deploy/README.md`.
 
 ## Prerequisites
 
