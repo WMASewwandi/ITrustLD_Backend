@@ -1,3 +1,4 @@
+import { normalizeToActivityIdentifier } from './role.service.js';
 import { query } from '../config/database.js';
 import { LARAVEL_USER_MODEL } from '../constants/adminRoles.js';
 
@@ -51,7 +52,7 @@ export async function getUserPermissions(userId) {
      ORDER BY p.name ASC`,
     [userId, LARAVEL_USER_MODEL],
   );
-  return rows.map((row) => row.name);
+  return rows.map((row) => normalizeToActivityIdentifier(row.name));
 }
 
 export async function setUserOnline(userId, isOnline) {

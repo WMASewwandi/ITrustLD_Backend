@@ -1,11 +1,15 @@
 import { createApp } from './app.js';
 import { closeDatabase, connectDatabase } from './config/database.js';
 import { env } from './config/env.js';
+import { ensureSystemActivitiesCatalog } from './services/ensureSystemActivities.service.js';
+import { startShiftRolloverScheduler } from './services/shiftAssignment.service.js';
 
 async function main() {
   await connectDatabase();
+  await ensureSystemActivitiesCatalog();
 
   const app = createApp();
+  startShiftRolloverScheduler();
   const server = app.listen(env.port, () => {
     console.log(`iTrustLD backend listening on http://localhost:${env.port}`);
     console.log(`Health: http://localhost:${env.port}/api/v1/health`);
