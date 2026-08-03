@@ -3,7 +3,7 @@
 set -euo pipefail
 
 DEPLOY_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-STACK_ROOT="$(cd "$DEPLOY_SRC/../../.." && pwd)"
+STACK_ROOT="$(cd "$DEPLOY_SRC/../.." && pwd)"
 DEPLOY_DEST="$STACK_ROOT/deploy"
 
 if [[ ! -d "$STACK_ROOT/ITrustLD_Backend" ]] || [[ ! -d "$STACK_ROOT/ITrustLD_Admin" ]]; then
