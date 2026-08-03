@@ -4,10 +4,12 @@ import {
   isAccountBanned,
   needsVerification,
 } from './accountHolder.service.js';
+import { env } from '../config/env.js';
 import { queueSmsMessage } from './notification.service.js';
 import { resolveWalletLogoPublicUrl } from './walletLogoStorage.service.js';
 import { autoAssignWithdrawal } from './withdrawalAssignment.service.js';
 import { storeWithdrawalProof } from './withdrawalProofStorage.service.js';
+import { formatDateTimeParts, resolveFilterDateRange } from '../utils/slTime.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -784,7 +786,13 @@ export async function getWithdrawalPaymentProofContext(userId, withdrawalId) {
   };
 }
 
-const WITHDRAWAL_OPS_SMS_NUMBERS = ['767676684', '767676023', '752256911', '763383069'];
+const WITHDRAWAL_OPS_SMS_NUMBERS_FALLBACK = ['767676684', '767676023', '752256911', '763383069'];
+
+function getWithdrawalOpsSmsNumbers() {
+  const fromEnv = env.loyalty?.staffAlertNumbers?.slice(1, 5)?.filter(Boolean);
+  if (fromEnv?.length) return fromEnv;
+  return WITHDRAWAL_OPS_SMS_NUMBERS_FALLBACK;
+}
 
 export async function saveWithdrawalPaymentProof(userId, withdrawalId, file, payload = {}) {
   await assertWithdrawalAccess(userId);
@@ -844,7 +852,7 @@ export async function saveWithdrawalPaymentProof(userId, withdrawalId, file, pay
   }
 
   const smsMessage = `Pending withdrawal request has been added: ${withdrawal.transaction_id}. Please review. Thanks`;
-  for (const msisdn of WITHDRAWAL_OPS_SMS_NUMBERS) {
+  for (const msisdn of getWithdrawalOpsSmsNumbers()) {
     try {
       await queueSmsMessage({
         message: smsMessage,
@@ -862,55 +870,12 @@ export async function saveWithdrawalPaymentProof(userId, withdrawalId, file, pay
   };
 }
 
-function formatYmd(date) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
-}
-
 function resolveFilterDates(filterTemplate, fromDate, toDate) {
-  const template = String(filterTemplate || '').trim().toUpperCase();
-  const today = new Date();
-
-  if (template === 'LAST_7_DAYS') {
-    const from = new Date(today);
-    from.setDate(from.getDate() - 7);
-    return { fromDate: formatYmd(from), toDate: formatYmd(today) };
-  }
-  if (template === 'LAST_MONTH') {
-    const from = new Date(today);
-    from.setMonth(from.getMonth() - 1);
-    return { fromDate: formatYmd(from), toDate: formatYmd(today) };
-  }
-  if (template === 'LAST_6_MONTHS') {
-    const from = new Date(today);
-    from.setMonth(from.getMonth() - 6);
-    return { fromDate: formatYmd(from), toDate: formatYmd(today) };
-  }
-
-  return {
-    fromDate: fromDate ? String(fromDate).slice(0, 10) : null,
-    toDate: toDate ? String(toDate).slice(0, 10) : null,
-  };
+  return resolveFilterDateRange(filterTemplate, fromDate, toDate);
 }
 
 function formatWithdrawalDateTime(value) {
-  const date = value ? new Date(value) : null;
-  if (!date || Number.isNaN(date.getTime())) {
-    return { date: '—', time: '—', iso: null };
-  }
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  const hh = String(date.getHours()).padStart(2, '0');
-  const mm = String(date.getMinutes()).padStart(2, '0');
-  const ss = String(date.getSeconds()).padStart(2, '0');
-  return {
-    date: `${y}-${m}-${d}`,
-    time: `${hh}:${mm}:${ss}`,
-    iso: date.toISOString(),
-  };
+  return formatDateTimeParts(value);
 }
 
 function parseAccountDetailsLog(raw) {

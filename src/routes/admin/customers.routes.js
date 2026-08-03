@@ -107,11 +107,15 @@ adminCustomersRouter.post(
         req.body?.subject || req.body?.['popup-email-subject'] || req.body?.popup_email_subject;
       const body =
         req.body?.body || req.body?.['popup-email-body'] || req.body?.popup_email_body;
+      const templateId = req.body?.template_id || req.body?.templateId || null;
+      const variables = req.body?.variables || {};
       const result = await sendEmailToCustomers({
         receivers,
         subject,
         body,
         attachment: req.file,
+        templateId,
+        variables: typeof variables === 'string' ? JSON.parse(variables) : variables,
       });
       res.json(result);
     } catch (error) {
@@ -128,10 +132,14 @@ adminCustomersRouter.post(
       const mobileNumbers =
         req.body?.mobile_numbers || req.body?.mobileNumbers || req.body?.mobiles;
       const message = req.body?.message;
+      const templateId = req.body?.template_id || req.body?.templateId || null;
+      const variables = req.body?.variables || {};
       const result = await sendSmsToCustomers({
         mobileNumbers,
         message,
         adminUserId: req.auth.userId,
+        templateId,
+        variables: typeof variables === 'string' ? JSON.parse(variables) : variables,
       });
       res.json(result);
     } catch (error) {

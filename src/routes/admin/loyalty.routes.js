@@ -20,6 +20,7 @@ import {
 import {
   checkVoucherDuplicatePlatformId,
   completeVoucherClaim,
+  getVoucherDuplicatePlatformStats,
   listVoucherClaimsForAdmin,
   rejectVoucherClaim,
 } from '../../services/adminVoucherClaims.service.js';
@@ -93,6 +94,19 @@ adminLoyaltyRouter.get(
     try {
       const data = await listVoucherClaimsForAdmin(req.query ?? {});
       res.json({ ok: true, ...data });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminLoyaltyRouter.get(
+  '/voucher-claims/duplicate-stats',
+  requirePermission('read_customer_loyalty_data'),
+  async (req, res, next) => {
+    try {
+      const data = await getVoucherDuplicatePlatformStats();
+      res.json(data);
     } catch (error) {
       next(error);
     }

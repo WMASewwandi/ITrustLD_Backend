@@ -1,4 +1,8 @@
 import { query } from '../config/database.js';
+import {
+  logSystemUserAction,
+  SYSTEM_USER_ACTIONS,
+} from './systemUserActionLog.service.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -113,6 +117,26 @@ function applyVoucherStatusFilter(sql, values, statusInput) {
   return `${sql} AND v.is_claimed = 0 AND v.rejection_reason IS NULL`;
 }
 
+const DUPLICATE_VOUCHER_SCOPE = `
+  rejection_reason IS NULL
+  AND (
+    is_claimed = 1
+    OR DATEDIFF(NOW(), created_at) < 30
+  )
+`;
+
+async function processExpiredVoucherAutoRejection() {
+  await query(
+    `UPDATE loyalty_client_bonus_vouchers
+     SET rejection_reason = 'Auto-rejected: Voucher expired after 30 days',
+         rejected_at = NOW(),
+         updated_at = NOW()
+     WHERE is_claimed = 0
+       AND rejection_reason IS NULL
+       AND DATEDIFF(NOW(), created_at) >= 30`,
+  );
+}
+
 const VOUCHER_BASE_FROM = `
   FROM loyalty_client_bonus_vouchers v
   INNER JOIN account_holders ah ON ah.user_id = v.user_id
@@ -129,13 +153,7 @@ async function countPlatformDuplicates(platformId, createdAt) {
   const monthStart = new Date(created);
   monthStart.setDate(monthStart.getDate() - 30);
 
-  const duplicateScope = `
-    rejection_reason IS NULL
-    AND (
-      is_claimed = 1
-      OR DATEDIFF(NOW(), created_at) < 30
-    )
-  `;
+  const duplicateScope = DUPLICATE_VOUCHER_SCOPE;
 
   const dailyRows = await query(
     `SELECT COUNT(*) AS total
@@ -196,6 +214,8 @@ function mapAdminVoucherRow(row, adminUsers, duplicates = null) {
 }
 
 export async function listVoucherClaimsForAdmin(params = {}) {
+  await processExpiredVoucherAutoRejection();
+
   const page = Math.max(1, Number(params.page) || 1);
   const perPage = Math.min(50, Math.max(1, Number(params.per_page) || 20));
   const offset = (page - 1) * perPage;
@@ -301,11 +321,7 @@ export async function completeVoucherClaim(adminUserId, payload = {}) {
     [adminUserId, voucherId],
   );
 
-  await query(
-    `INSERT INTO system_user_action_logs (system_user_action_id, admin_user_id, created_at, updated_at)
-     VALUES (47, ?, NOW(), NOW())`,
-    [adminUserId],
-  );
+  await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.VOUCHER_CLAIM_APPROVE);
 
   return {
     ok: true,
@@ -345,11 +361,7 @@ export async function rejectVoucherClaim(adminUserId, payload = {}) {
     [rejectionReason, adminUserId, voucherId],
   );
 
-  await query(
-    `INSERT INTO system_user_action_logs (system_user_action_id, admin_user_id, created_at, updated_at)
-     VALUES (48, ?, NOW(), NOW())`,
-    [adminUserId],
-  );
+  await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.VOUCHER_CLAIM_REJECT);
 
   return {
     ok: true,
@@ -378,5 +390,44 @@ export async function checkVoucherDuplicatePlatformId(voucherId) {
     voucher_id: id,
     platform_id: voucher.platform_id,
     ...duplicates,
+  };
+}
+
+function sumExtraDuplicates(rows) {
+  return rows.reduce((sum, row) => sum + Number(row.duplicate_count || 0) - 1, 0);
+}
+
+export async function getVoucherDuplicatePlatformStats() {
+  const duplicateScope = DUPLICATE_VOUCHER_SCOPE;
+
+  const dailyRows = await query(
+    `SELECT platform_id, COUNT(*) AS duplicate_count
+     FROM loyalty_client_bonus_vouchers
+     WHERE DATE(created_at) = CURDATE()
+       AND ${duplicateScope}
+     GROUP BY platform_id
+     HAVING duplicate_count > 1`,
+  );
+
+  const monthlyRows = await query(
+    `SELECT platform_id, COUNT(*) AS duplicate_count
+     FROM loyalty_client_bonus_vouchers
+     WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+       AND ${duplicateScope}
+     GROUP BY platform_id
+     HAVING duplicate_count > 1`,
+  );
+
+  return {
+    daily_duplicates: sumExtraDuplicates(dailyRows),
+    monthly_duplicates: sumExtraDuplicates(monthlyRows),
+    daily_details: dailyRows.map((row) => ({
+      platform_id: row.platform_id,
+      duplicate_count: Number(row.duplicate_count),
+    })),
+    monthly_details: monthlyRows.map((row) => ({
+      platform_id: row.platform_id,
+      duplicate_count: Number(row.duplicate_count),
+    })),
   };
 }

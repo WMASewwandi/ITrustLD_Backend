@@ -18,6 +18,17 @@ import {
   updateUserPointLevel,
 } from './pointEarning.service.js';
 import { getClientBonusSummaryForUser } from './userVoucherClaims.service.js';
+import {
+  logSystemUserAction,
+  SYSTEM_USER_ACTIONS,
+} from './systemUserActionLog.service.js';
+import {
+  addColomboDays,
+  formatTimestampSl,
+  formatYmdColombo,
+  getColomboDateParts,
+  parseDbDateTime,
+} from '../utils/slTime.js';
 
 const PARTNER_TIER_THRESHOLDS = [
   { id: 'normal', name: 'Normal', levelPoints: 0, pointsPerLot: 20 },
@@ -42,23 +53,15 @@ function validationError(message, status = 422) {
 }
 
 function formatYmdHis(value) {
-  const date = value ? new Date(value) : null;
-  if (!date || Number.isNaN(date.getTime())) return '—';
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  const hh = String(date.getHours()).padStart(2, '0');
-  const mm = String(date.getMinutes()).padStart(2, '0');
-  return `${y}-${m}-${d} ${hh}:${mm}`;
+  const formatted = formatTimestampSl(value);
+  if (!formatted) return '—';
+  return formatted.slice(0, 16);
 }
 
 function formatYmd(value) {
-  const date = value ? new Date(value) : null;
-  if (!date || Number.isNaN(date.getTime())) return '';
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
+  const date = value ? parseDbDateTime(value) : null;
+  if (!date) return '';
+  return formatYmdColombo(date);
 }
 
 function mapUserStatus(status) {
@@ -652,38 +655,28 @@ export async function listUserLoyaltyWithdrawals(userId, params = {}) {
 function buildAdminDateFilter(filter, fromDate, toDate) {
   const normalized = String(filter || '').trim().toLowerCase();
   const today = new Date();
-  const end = formatYmd(today);
+  const end = formatYmdColombo(today);
+  const parts = getColomboDateParts(today);
 
   switch (normalized) {
     case 'today':
       return { fromDate: end, toDate: end };
     case 'yesterday': {
-      const y = new Date(today);
-      y.setDate(y.getDate() - 1);
-      const day = formatYmd(y);
+      const day = formatYmdColombo(addColomboDays(today, -1));
       return { fromDate: day, toDate: day };
     }
-    case 'last7days': {
-      const from = new Date(today);
-      from.setDate(from.getDate() - 7);
-      return { fromDate: formatYmd(from), toDate: end };
-    }
-    case 'lastmonth': {
-      const from = new Date(today);
-      from.setMonth(from.getMonth() - 1);
-      return { fromDate: formatYmd(from), toDate: end };
-    }
-    case 'last6months': {
-      const from = new Date(today);
-      from.setMonth(from.getMonth() - 6);
-      return { fromDate: formatYmd(from), toDate: end };
-    }
+    case 'last7days':
+      return { fromDate: formatYmdColombo(addColomboDays(today, -7)), toDate: end };
+    case 'lastmonth':
+      return { fromDate: formatYmdColombo(addColomboDays(today, -30)), toDate: end };
+    case 'last6months':
+      return { fromDate: formatYmdColombo(addColomboDays(today, -180)), toDate: end };
     case 'currentyear':
-      return { fromDate: `${today.getFullYear()}-01-01`, toDate: end };
+      return { fromDate: `${parts.year}-01-01`, toDate: end };
     case 'lastyear':
       return {
-        fromDate: `${today.getFullYear() - 1}-01-01`,
-        toDate: `${today.getFullYear() - 1}-12-31`,
+        fromDate: `${parts.year - 1}-01-01`,
+        toDate: `${parts.year - 1}-12-31`,
       };
     case 'customdate':
       return {
@@ -863,11 +856,7 @@ export async function updateLoyaltyOrderStatus(adminUserId, payload = {}) {
        WHERE id = ?`,
       [nextStatus, adminUserId, withdrawalId],
     );
-    await query(
-      `INSERT INTO system_user_action_logs (system_user_action_id, admin_user_id, created_at, updated_at)
-       VALUES (40, ?, NOW(), NOW())`,
-      [adminUserId],
-    );
+    await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.LOYALTY_ORDER_PENDING);
   } else if (nextStatus === 'Approved') {
     await query(
       `UPDATE point_withdrawals
@@ -875,11 +864,7 @@ export async function updateLoyaltyOrderStatus(adminUserId, payload = {}) {
        WHERE id = ?`,
       [nextStatus, adminUserId, withdrawalId],
     );
-    await query(
-      `INSERT INTO system_user_action_logs (system_user_action_id, admin_user_id, created_at, updated_at)
-       VALUES (41, ?, NOW(), NOW())`,
-      [adminUserId],
-    );
+    await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.LOYALTY_ORDER_APPROVE);
   } else {
     await query(
       `UPDATE point_withdrawals
@@ -887,11 +872,7 @@ export async function updateLoyaltyOrderStatus(adminUserId, payload = {}) {
        WHERE id = ?`,
       [nextStatus, adminUserId, withdrawalId],
     );
-    await query(
-      `INSERT INTO system_user_action_logs (system_user_action_id, admin_user_id, created_at, updated_at)
-       VALUES (42, ?, NOW(), NOW())`,
-      [adminUserId],
-    );
+    await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.LOYALTY_ORDER_REJECT);
   }
 
   return {
@@ -1126,11 +1107,7 @@ export async function updateBonusClaimStatus(adminUserId, payload = {}) {
        WHERE id = ?`,
       [nextStatus, adminUserId, bonusId],
     );
-    await query(
-      `INSERT INTO system_user_action_logs (system_user_action_id, admin_user_id, created_at, updated_at)
-       VALUES (43, ?, NOW(), NOW())`,
-      [adminUserId],
-    );
+    await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.LOYALTY_BONUS_PENDING);
   } else if (nextStatus === 'Approved') {
     await query(
       `UPDATE loyalty_bonus_collects
@@ -1138,11 +1115,7 @@ export async function updateBonusClaimStatus(adminUserId, payload = {}) {
        WHERE id = ?`,
       [nextStatus, adminUserId, bonusId],
     );
-    await query(
-      `INSERT INTO system_user_action_logs (system_user_action_id, admin_user_id, created_at, updated_at)
-       VALUES (44, ?, NOW(), NOW())`,
-      [adminUserId],
-    );
+    await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.LOYALTY_BONUS_APPROVE);
     await notifyBonusClaimStatus(bonusClaim.user_id, true);
   } else {
     await query(
@@ -1151,11 +1124,7 @@ export async function updateBonusClaimStatus(adminUserId, payload = {}) {
        WHERE id = ?`,
       [nextStatus, adminUserId, bonusId],
     );
-    await query(
-      `INSERT INTO system_user_action_logs (system_user_action_id, admin_user_id, created_at, updated_at)
-       VALUES (45, ?, NOW(), NOW())`,
-      [adminUserId],
-    );
+    await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.LOYALTY_BONUS_REJECT);
     await notifyBonusClaimStatus(bonusClaim.user_id, false);
   }
 

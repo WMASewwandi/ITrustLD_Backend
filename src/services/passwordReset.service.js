@@ -2,10 +2,14 @@ import crypto from 'node:crypto';
 import { query } from '../config/database.js';
 import { env } from '../config/env.js';
 import { hashLaravelPassword, verifyLaravelPassword } from '../utils/laravelPassword.js';
+import { isStrongPassword, STRONG_PASSWORD_MESSAGE } from '../utils/passwordPolicy.js';
 import { sendMail } from './mail.service.js';
 import { passwordResetEmailHtml } from './mail.templates.js';
+import { resolveEmailContent } from './messageTemplateRuntime.service.js';
+import { MESSAGE_TEMPLATE_KEYS } from './messageTemplateKeys.js';
 
 const TOKEN_EXPIRY_MINUTES = 60;
+const REQUEST_THROTTLE_SECONDS = 60;
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -17,10 +21,31 @@ function normalizeEmail(email) {
   return String(email || '').trim().toLowerCase();
 }
 
+function buildResetUrl(plainToken, normalizedEmail) {
+  return `${env.userAppUrl}/reset-password/${encodeURIComponent(plainToken)}?email=${encodeURIComponent(normalizedEmail)}`;
+}
+
+async function assertNotThrottled(normalizedEmail) {
+  const rows = await query(
+    `SELECT created_at FROM password_reset_tokens WHERE email = ? LIMIT 1`,
+    [normalizedEmail],
+  );
+  const record = rows[0];
+  if (!record?.created_at) return;
+
+  const ageSeconds = (Date.now() - new Date(record.created_at).getTime()) / 1000;
+  if (ageSeconds < REQUEST_THROTTLE_SECONDS) {
+    throw validationError(
+      'Too many password reset attempts. Please wait before trying again.',
+      429,
+    );
+  }
+}
+
 export async function requestPasswordReset(email) {
   const normalizedEmail = normalizeEmail(email);
   if (!normalizedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
-    throw validationError('Enter a valid email address.');
+    throw validationError('Please enter a valid email address.');
   }
 
   const users = await query(
@@ -32,6 +57,8 @@ export async function requestPasswordReset(email) {
     throw validationError('We could not find a user with that email address.', 404);
   }
 
+  await assertNotThrottled(normalizedEmail);
+
   const plainToken = crypto.randomBytes(32).toString('hex');
   const hashedToken = await hashLaravelPassword(plainToken);
 
@@ -42,18 +69,26 @@ export async function requestPasswordReset(email) {
     [normalizedEmail, hashedToken],
   );
 
-  const resetUrl = `${env.userAppUrl}/reset-password?token=${encodeURIComponent(plainToken)}&email=${encodeURIComponent(normalizedEmail)}`;
-  const mailResult = await sendMail({
+  const resetUrl = buildResetUrl(plainToken, normalizedEmail);
+  const emailContent = await resolveEmailContent({
+    key: MESSAGE_TEMPLATE_KEYS.PASSWORD_RESET_EMAIL,
+    variables: { reset_url: resetUrl },
+    fallback: {
+      subject: 'Password reset',
+      html: passwordResetEmailHtml(resetUrl),
+      text: `Reset your password: ${resetUrl}`,
+    },
+  });
+  await sendMail({
     to: normalizedEmail,
-    subject: 'Password reset',
-    html: passwordResetEmailHtml(resetUrl),
-    text: `Reset your password: ${resetUrl}`,
+    subject: emailContent.subject,
+    html: emailContent.html,
+    text: emailContent.text,
   });
 
   return {
     ok: true,
     message: 'We have emailed your password reset link!',
-    mail: mailResult,
   };
 }
 
@@ -64,10 +99,10 @@ export async function resetPassword({ email, token, password, password_confirmat
   const confirmPassword = String(passwordConfirmation || '');
 
   if (!normalizedEmail || !plainToken) {
-    throw validationError('Invalid password reset link.');
+    throw validationError('This password reset token is invalid.');
   }
-  if (!nextPassword || nextPassword.length < 8) {
-    throw validationError('Password must be at least 8 characters.');
+  if (!nextPassword || !isStrongPassword(nextPassword)) {
+    throw validationError(STRONG_PASSWORD_MESSAGE);
   }
   if (nextPassword !== confirmPassword) {
     throw validationError('Password confirmation does not match.');
@@ -79,19 +114,19 @@ export async function resetPassword({ email, token, password, password_confirmat
   );
   const record = rows[0];
   if (!record) {
-    throw validationError('This password reset link is invalid or has expired.');
+    throw validationError('This password reset token is invalid.');
   }
 
   const createdAt = new Date(record.created_at);
   const ageMinutes = (Date.now() - createdAt.getTime()) / 60000;
   if (ageMinutes > TOKEN_EXPIRY_MINUTES) {
     await query(`DELETE FROM password_reset_tokens WHERE email = ?`, [normalizedEmail]);
-    throw validationError('This password reset link has expired. Please request a new one.');
+    throw validationError('This password reset token is invalid.');
   }
 
   const tokenValid = await verifyLaravelPassword(plainToken, record.token);
   if (!tokenValid) {
-    throw validationError('This password reset link is invalid or has expired.');
+    throw validationError('This password reset token is invalid.');
   }
 
   const users = await query(`SELECT id FROM users WHERE email = ? LIMIT 1`, [normalizedEmail]);
@@ -111,6 +146,6 @@ export async function resetPassword({ email, token, password, password_confirmat
 
   return {
     ok: true,
-    message: 'Your password has been reset. You can now sign in.',
+    message: 'Your password has been reset.',
   };
 }

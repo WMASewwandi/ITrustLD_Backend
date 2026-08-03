@@ -6,6 +6,7 @@ import {
   deleteMessageTemplate,
   duplicateMessageTemplate,
   listMessageTemplatesAdmin,
+  listSystemTemplateKeys,
   toggleMessageTemplateStatus,
 } from '../../services/messageTemplate.service.js';
 
@@ -14,8 +15,21 @@ export const adminMessageTemplatesRouter = Router();
 adminMessageTemplatesRouter.use(requireAdminAuth);
 
 adminMessageTemplatesRouter.get(
+  '/keys',
+  requirePermission('manage_message_templates', 'comunicatte_to_customer'),
+  async (_req, res, next) => {
+    try {
+      const data = listSystemTemplateKeys();
+      res.json(data);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminMessageTemplatesRouter.get(
   '/',
-  requirePermission('comunicatte_to_customer'),
+  requirePermission('manage_message_templates', 'comunicatte_to_customer'),
   async (_req, res, next) => {
     try {
       const data = await listMessageTemplatesAdmin();
@@ -28,7 +42,7 @@ adminMessageTemplatesRouter.get(
 
 adminMessageTemplatesRouter.post(
   '/',
-  requirePermission('comunicatte_to_customer'),
+  requirePermission('manage_message_templates', 'comunicatte_to_customer'),
   async (req, res, next) => {
     try {
       const data = await createMessageTemplate(req.auth.userId, req.body);
@@ -41,7 +55,7 @@ adminMessageTemplatesRouter.post(
 
 adminMessageTemplatesRouter.post(
   '/:id/toggle-status',
-  requirePermission('comunicatte_to_customer'),
+  requirePermission('manage_message_templates', 'comunicatte_to_customer'),
   async (req, res, next) => {
     try {
       const data = await toggleMessageTemplateStatus(req.params.id);
@@ -54,7 +68,7 @@ adminMessageTemplatesRouter.post(
 
 adminMessageTemplatesRouter.post(
   '/:id/duplicate',
-  requirePermission('comunicatte_to_customer'),
+  requirePermission('manage_message_templates', 'comunicatte_to_customer'),
   async (req, res, next) => {
     try {
       const data = await duplicateMessageTemplate(req.params.id, req.auth.userId);
@@ -67,7 +81,7 @@ adminMessageTemplatesRouter.post(
 
 adminMessageTemplatesRouter.post(
   '/:id/delete',
-  requirePermission('comunicatte_to_customer'),
+  requirePermission('manage_message_templates', 'comunicatte_to_customer'),
   async (req, res, next) => {
     try {
       const data = await deleteMessageTemplate(req.params.id);

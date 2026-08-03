@@ -1,4 +1,9 @@
 import { query } from '../config/database.js';
+import {
+  buildGroupedActivitiesFromCatalog,
+  sortActivitiesForDisplay,
+  sortCategoriesForDisplay,
+} from '../constants/systemActivityCatalog.js';
 
 const GUARD_NAME = 'web';
 
@@ -152,35 +157,49 @@ export async function getRoleWithPermissions(roleName) {
 export async function getAllActivitiesGrouped() {
   const categories = await query(
     `SELECT id, category_identifier, categoy_name AS category_name
-     FROM system_activity_categories
-     ORDER BY id ASC`,
+     FROM system_activity_categories`,
   );
 
   const activities = await query(
     `SELECT id, activity_identifier, activity_name, category_id
-     FROM system_activities
-     ORDER BY category_id ASC, activity_name ASC`,
+     FROM system_activities`,
   );
 
-  return categories
-    .map((category) => ({
-      id: category.id,
-      identifier: category.category_identifier,
-      name: category.category_name,
-      activities: activities
-        .filter((a) => a.category_id === category.id)
-        .map((a) => ({
-          id: a.id,
-          identifier: a.activity_identifier,
-          name: a.activity_name,
-        })),
-    }))
-    .filter((category) => category.activities.length > 0)
-    .sort((a, b) => {
-      if (a.identifier === 'dashboard_activities') return -1;
-      if (b.identifier === 'dashboard_activities') return 1;
-      return a.id - b.id;
+  const categoryMeta = new Map(
+    categories.map((category) => [
+      category.id,
+      {
+        id: category.id,
+        identifier: category.category_identifier,
+        name: category.category_name,
+      },
+    ]),
+  );
+
+  const grouped = new Map();
+  for (const activity of activities) {
+    const category = categoryMeta.get(activity.category_id);
+    if (!category) continue;
+    if (!grouped.has(category.id)) {
+      grouped.set(category.id, { ...category, activities: [] });
+    }
+    grouped.get(category.id).activities.push({
+      id: activity.id,
+      identifier: activity.activity_identifier,
+      name: activity.activity_name,
     });
+  }
+
+  const ordered = sortCategoriesForDisplay([...grouped.values()]).map((category) => ({
+    ...category,
+    activities: sortActivitiesForDisplay(category.activities),
+  }));
+
+  if (ordered.length > 0) {
+    return ordered;
+  }
+
+  return buildGroupedActivitiesFromCatalog();
 }
 
 export async function createRole({ name }) {

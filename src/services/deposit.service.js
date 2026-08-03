@@ -1,6 +1,11 @@
 import { query } from '../config/database.js';
 import { buildDepositProofApiUrl } from './depositProofStorage.service.js';
 import { batchScammerCheck } from './scammer.service.js';
+import {
+  formatTimestampSl,
+  getBusinessDayStart,
+  parseDateWindow,
+} from '../utils/slTime.js';
 
 const EXCLUDED_USER_IDS = [4, 16405];
 
@@ -26,14 +31,6 @@ function escapeLike(value) {
   return String(value).replace(/[\\%_]/g, (ch) => `\\${ch}`);
 }
 
-function formatTimestamp(value) {
-  if (!value) return '';
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
-}
-
 function formatMoney(currency, amount) {
   const value = Number(amount);
   const formatted = Number.isFinite(value)
@@ -44,54 +41,6 @@ function formatMoney(currency, amount) {
 
 function resolveDepositProofUrl(filename) {
   return buildDepositProofApiUrl(filename);
-}
-
-function parseDateWindow(filter, fromDate, toDate) {
-  const now = new Date();
-  const startOfDay = (date) => {
-    const d = new Date(date);
-    d.setHours(0, 10, 0, 0);
-    return d;
-  };
-
-  switch (filter) {
-    case 'today': {
-      const from = startOfDay(now);
-      const to = new Date(from);
-      to.setDate(to.getDate() + 1);
-      return { from, to };
-    }
-    case 'yesterday': {
-      const from = startOfDay(now);
-      from.setDate(from.getDate() - 1);
-      const to = startOfDay(now);
-      return { from, to };
-    }
-    case 'last7days':
-      return { from: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000), to: null };
-    case 'lastmonth':
-      return { from: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000), to: null };
-    case 'last6months':
-      return { from: new Date(now.getTime() - 180 * 24 * 60 * 60 * 1000), to: null };
-    case 'currentyear': {
-      const from = new Date(now.getFullYear(), 0, 1, 0, 10, 0, 0);
-      return { from, to: null };
-    }
-    case 'lastyear': {
-      const from = new Date(now.getFullYear() - 1, 0, 1, 0, 10, 0, 0);
-      const to = new Date(now.getFullYear(), 0, 1, 0, 10, 0, 0);
-      return { from, to };
-    }
-    case 'customdate': {
-      if (!fromDate) return { from: null, to: null };
-      const from = startOfDay(fromDate);
-      const to = toDate ? startOfDay(toDate) : null;
-      if (to) to.setDate(to.getDate() + 1);
-      return { from, to };
-    }
-    default:
-      return { from: null, to: null };
-  }
 }
 
 function normalizeStatus(status) {
@@ -118,7 +67,7 @@ function buildBaseConditions(status, assignedToUserId, { requirePaymentProof = t
     values.push(...EXCLUDED_USER_IDS);
   }
 
-  if (assignedToUserId != null) {
+  if (assignedToUserId != null && status === 'Pending') {
     conditions.push('d.assigned_to = ?');
     values.push(assignedToUserId);
   }
@@ -136,7 +85,46 @@ async function fetchAdminNames(adminIds) {
   return Object.fromEntries(rows.map((row) => [row.id, row.name]));
 }
 
-function mapDepositRow(row, adminUsers, assignedUsers) {
+async function batchSimilarDeposits(rows, status) {
+  if (!rows.length) return {};
+
+  const pairs = [
+    ...new Map(
+      rows.map((row) => [
+        `${row.topup_method_id}_${row.topup_account_id}`,
+        { methodId: row.topup_method_id, accountId: row.topup_account_id },
+      ]),
+    ).values(),
+  ];
+
+  const dayStart = getBusinessDayStart();
+  const statusSql =
+    status === 'Completed'
+      ? `transaction_status = 'Completed'`
+      : `transaction_status != 'Rejected'`;
+
+  const pairClauses = pairs.map(() => '(topup_method_id = ? AND topup_account_id = ?)').join(' OR ');
+  const pairValues = pairs.flatMap((pair) => [pair.methodId, pair.accountId]);
+
+  const countRows = await query(
+    `SELECT topup_method_id, topup_account_id, COUNT(*) AS cnt
+     FROM deposits
+     WHERE payment_proof IS NOT NULL
+       AND created_at >= ?
+       AND ${statusSql}
+       AND (${pairClauses})
+     GROUP BY topup_method_id, topup_account_id`,
+    [dayStart, ...pairValues],
+  );
+
+  const result = {};
+  for (const row of countRows) {
+    result[`${row.topup_method_id}_${row.topup_account_id}`] = Number(row.cnt) || 0;
+  }
+  return result;
+}
+
+function mapDepositRow(row, adminUsers, assignedUsers, similarCounts = {}) {
   const paymentAmount = Number(row.payment_amount) || 0;
   const depositAmount = Number(row.deposit_amount) || 0;
   const adminId =
@@ -149,11 +137,13 @@ function mapDepositRow(row, adminUsers, assignedUsers) {
   const assignedName = row.assigned_to
     ? assignedUsers[row.assigned_to] || String(row.assigned_to)
     : '—';
+  const simKey = `${row.topup_method_id}_${row.topup_account_id}`;
+  const todayTxCount = similarCounts[simKey] || 0;
 
   return {
     id: row.transaction_id,
     depositId: row.id,
-    date: formatTimestamp(row.updated_at),
+    date: formatTimestampSl(row.updated_at),
     userId: row.account_number || String(row.user_id),
     customer: row.user_name ? String(row.user_name).split(' ')[0] : 'N/A',
     platformId: row.topup_account_id || '—',
@@ -183,6 +173,8 @@ function mapDepositRow(row, adminUsers, assignedUsers) {
       row.transaction_status === 'Rejected' ? row.rejected_reason || null : null,
     customerEmail: row.customer_email || null,
     customerMobile: row.customer_mobile || null,
+    topupMethodId: row.topup_method_id,
+    todayTxCount,
     isScammer: false,
   };
 }
@@ -482,16 +474,21 @@ export async function listDepositsForAdmin(auth, params = {}) {
       );
 
   const scammerFlags = await batchScammerCheck(result.rows.map((row) => row.topup_account_id));
+  const similarCounts = await batchSimilarDeposits(
+    result.rows,
+    statusForTotals === 'All' ? 'Pending' : statusForTotals,
+  );
+  const permissions = auth?.permissions || [];
 
   return {
     deposits: result.rows.map((row) => ({
-      ...mapDepositRow(row, result.adminUsers, result.assignedUsers),
+      ...mapDepositRow(row, result.adminUsers, result.assignedUsers, similarCounts),
       isScammer: Boolean(scammerFlags[row.topup_account_id]),
     })),
     totals,
     pagination: result.pagination,
     isAdmin: isAdmin(roles),
-    canMutate: roles.includes('status_update_deposit_data') || isAdmin(roles),
+    canMutate: permissions.includes('status_update_deposit_data') || isAdmin(roles),
   };
 }
 

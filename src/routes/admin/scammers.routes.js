@@ -14,7 +14,7 @@ adminScammersRouter.use(requireAdminAuth);
 
 adminScammersRouter.get(
   '/',
-  requirePermission('read_customer_accounts_data'),
+  requirePermission('read_scammer_data', 'read_customer_accounts_data'),
   async (req, res, next) => {
     try {
       const data = await listScammers(req.query);
@@ -27,7 +27,7 @@ adminScammersRouter.get(
 
 adminScammersRouter.post(
   '/search-user',
-  requirePermission('read_customer_accounts_data'),
+  requirePermission('read_scammer_data', 'read_customer_accounts_data'),
   async (req, res, next) => {
     try {
       const platformId = req.body?.platform_id ?? req.body?.platformId;
@@ -41,7 +41,7 @@ adminScammersRouter.post(
 
 adminScammersRouter.post(
   '/',
-  requirePermission('change_customer_account_status'),
+  requirePermission('change_scammer_status', 'change_customer_account_status'),
   async (req, res, next) => {
     try {
       const data = await addScammer(req.body ?? {});
@@ -54,7 +54,7 @@ adminScammersRouter.post(
 
 adminScammersRouter.delete(
   '/:id',
-  requirePermission('change_customer_account_status'),
+  requirePermission('change_scammer_status', 'change_customer_account_status'),
   async (req, res, next) => {
     try {
       const data = await deleteScammer(req.params.id);

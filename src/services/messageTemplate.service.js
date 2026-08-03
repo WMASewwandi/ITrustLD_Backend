@@ -1,12 +1,20 @@
 import { getDbDriver, query } from '../config/database.js';
+import { SYSTEM_TEMPLATE_KEY_OPTIONS } from './messageTemplateKeys.js';
 
 let schemaReady = false;
 
 export const TEMPLATE_PLACEHOLDERS = [
   { key: '{{username}}', sample: 'John Doe' },
+  { key: '{{first_name}}', sample: 'John' },
   { key: '{{transaction_id}}', sample: 'TXN-88421' },
   { key: '{{amount}}', sample: 'LKR 25,000' },
+  { key: '{{status}}', sample: 'Completed' },
+  { key: '{{platform}}', sample: 'XM Global' },
+  { key: '{{account}}', sample: '12345678' },
+  { key: '{{reason}}', sample: 'Invalid payment proof' },
   { key: '{{promo_code}}', sample: 'TRUST10' },
+  { key: '{{verification_url}}', sample: 'https://app.itrustld.com/verify' },
+  { key: '{{reset_url}}', sample: 'https://app.itrustld.com/reset-password' },
 ];
 
 const TYPE_MAP = {
@@ -79,7 +87,31 @@ async function ensureMessageTemplatesSchema() {
     `);
   }
 
+  await ensureTemplateKeyColumn();
   schemaReady = true;
+}
+
+async function ensureTemplateKeyColumn() {
+  try {
+    if (getDbDriver() === 'sqlite') {
+      await query(`ALTER TABLE message_templates ADD COLUMN template_key TEXT`);
+    } else {
+      await query(
+        `ALTER TABLE message_templates ADD COLUMN template_key VARCHAR(80) NULL AFTER name`,
+      );
+    }
+  } catch {
+    // Column already exists.
+  }
+}
+
+export function renderTemplateVariables(text, variables = {}) {
+  let output = String(text || '');
+  for (const [rawKey, value] of Object.entries(variables)) {
+    const key = rawKey.startsWith('{{') ? rawKey : `{{${rawKey}}}`;
+    output = output.split(key).join(value == null ? '' : String(value));
+  }
+  return output;
 }
 
 function mapTemplateRow(row) {
@@ -87,6 +119,7 @@ function mapTemplateRow(row) {
   return {
     id: row.id,
     name: row.name,
+    templateKey: row.template_key || '',
     type: type === 'sms' ? 'SMS' : 'Email',
     subject: row.subject || '',
     body: row.body || '',
@@ -97,10 +130,43 @@ function mapTemplateRow(row) {
   };
 }
 
+export async function getActiveTemplateByKey(templateKey, type) {
+  if (!templateKey) return null;
+  await ensureMessageTemplatesSchema();
+  const normalizedType = normalizeType(type);
+  const rows = await query(
+    `SELECT * FROM message_templates
+     WHERE template_key = ? AND template_type = ? AND is_active = 1
+     ORDER BY updated_at DESC, id DESC
+     LIMIT 1`,
+    [String(templateKey).trim(), normalizedType],
+  );
+  return rows[0] ? mapTemplateRow(rows[0]) : null;
+}
+
+export async function getActiveTemplateById(id) {
+  if (!id) return null;
+  await ensureMessageTemplatesSchema();
+  const rows = await query(`SELECT * FROM message_templates WHERE id = ? LIMIT 1`, [id]);
+  const row = rows[0];
+  if (!row || !(row.is_active === 1 || row.is_active === true)) {
+    return null;
+  }
+  return mapTemplateRow(row);
+}
+
+export function listSystemTemplateKeys() {
+  return {
+    ok: true,
+    keys: SYSTEM_TEMPLATE_KEY_OPTIONS,
+    placeholders: TEMPLATE_PLACEHOLDERS,
+  };
+}
+
 export async function listMessageTemplatesAdmin() {
   await ensureMessageTemplatesSchema();
   const rows = await query(
-    `SELECT id, name, template_type, subject, body, audience, is_active, created_at, updated_at
+    `SELECT id, name, template_key, template_type, subject, body, audience, is_active, created_at, updated_at
      FROM message_templates
      ORDER BY updated_at DESC, id DESC`,
   );
@@ -109,6 +175,7 @@ export async function listMessageTemplatesAdmin() {
     ok: true,
     templates: rows.map(mapTemplateRow),
     placeholders: TEMPLATE_PLACEHOLDERS,
+    systemKeys: SYSTEM_TEMPLATE_KEY_OPTIONS,
   };
 }
 
@@ -116,6 +183,7 @@ export async function createMessageTemplate(userId, payload = {}) {
   await ensureMessageTemplatesSchema();
 
   const name = String(payload.name || '').trim();
+  const templateKey = String(payload.template_key || payload.templateKey || '').trim() || null;
   const type = normalizeType(payload.type || payload.template_type);
   const audience = normalizeAudience(payload.audience);
   const subject = String(payload.subject || '').trim();
@@ -136,9 +204,9 @@ export async function createMessageTemplate(userId, payload = {}) {
 
   const result = await query(
     `INSERT INTO message_templates (
-      name, template_type, subject, body, audience, is_active, created_by, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, 1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-    [name, type, type === 'email' ? subject : null, body, audience, userId],
+      name, template_key, template_type, subject, body, audience, is_active, created_by, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+    [name, templateKey, type, type === 'email' ? subject : null, body, audience, userId],
   );
 
   const id = result.insertId ?? result.lastInsertRowid;
@@ -174,10 +242,11 @@ export async function duplicateMessageTemplate(id, userId) {
 
   const result = await query(
     `INSERT INTO message_templates (
-      name, template_type, subject, body, audience, is_active, created_by, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, 0, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      name, template_key, template_type, subject, body, audience, is_active, created_by, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
     [
       `${row.name} (Copy)`,
+      null,
       row.template_type,
       row.subject,
       row.body,
@@ -203,9 +272,6 @@ export async function deleteMessageTemplate(id) {
 }
 
 export function renderTemplatePreview(text, placeholders = TEMPLATE_PLACEHOLDERS) {
-  let output = String(text || '');
-  placeholders.forEach(({ key, sample }) => {
-    output = output.split(key).join(sample);
-  });
-  return output;
+  const variables = Object.fromEntries(placeholders.map(({ key, sample }) => [key, sample]));
+  return renderTemplateVariables(text, variables);
 }

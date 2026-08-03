@@ -1,4 +1,5 @@
 import { query } from '../config/database.js';
+import { env } from '../config/env.js';
 import {
   findAccountHolderByUserId,
   isAccountBanned,
@@ -8,6 +9,10 @@ import { autoAssignDeposit } from './depositAssignment.service.js';
 import { storeDepositProof } from './depositProofStorage.service.js';
 import { queueSmsMessage } from './notification.service.js';
 import { resolveWalletLogoPublicUrl } from './walletLogoStorage.service.js';
+import {
+  formatDateTimeParts,
+  resolveFilterDateRange,
+} from '../utils/slTime.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -584,9 +589,10 @@ export async function saveDepositPaymentProof(userId, depositId, file) {
   }
 
   try {
+    const opsNumber = env.loyalty.staffAlertNumbers?.[0] || '94766850647';
     await queueSmsMessage({
       message: `Pending deposit request has been added: ${deposit.transaction_id}. Please review. Thanks`,
-      msisdn: '766850647',
+      msisdn: opsNumber,
       smsType: 'DEPOSIT_PENDING',
     });
   } catch (error) {
@@ -599,55 +605,12 @@ export async function saveDepositPaymentProof(userId, depositId, file) {
   };
 }
 
-function formatYmd(date) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
-}
-
 function resolveFilterDates(filterTemplate, fromDate, toDate) {
-  const template = String(filterTemplate || '').trim().toUpperCase();
-  const today = new Date();
-
-  if (template === 'LAST_7_DAYS') {
-    const from = new Date(today);
-    from.setDate(from.getDate() - 7);
-    return { fromDate: formatYmd(from), toDate: formatYmd(today) };
-  }
-  if (template === 'LAST_MONTH') {
-    const from = new Date(today);
-    from.setMonth(from.getMonth() - 1);
-    return { fromDate: formatYmd(from), toDate: formatYmd(today) };
-  }
-  if (template === 'LAST_6_MONTHS') {
-    const from = new Date(today);
-    from.setMonth(from.getMonth() - 6);
-    return { fromDate: formatYmd(from), toDate: formatYmd(today) };
-  }
-
-  return {
-    fromDate: fromDate ? String(fromDate).slice(0, 10) : null,
-    toDate: toDate ? String(toDate).slice(0, 10) : null,
-  };
+  return resolveFilterDateRange(filterTemplate, fromDate, toDate);
 }
 
 function formatDepositDateTime(value) {
-  const date = value ? new Date(value) : null;
-  if (!date || Number.isNaN(date.getTime())) {
-    return { date: '—', time: '—', iso: null };
-  }
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  const hh = String(date.getHours()).padStart(2, '0');
-  const mm = String(date.getMinutes()).padStart(2, '0');
-  const ss = String(date.getSeconds()).padStart(2, '0');
-  return {
-    date: `${y}-${m}-${d}`,
-    time: `${hh}:${mm}:${ss}`,
-    iso: date.toISOString(),
-  };
+  return formatDateTimeParts(value);
 }
 
 function mapUserDepositTransaction(row) {

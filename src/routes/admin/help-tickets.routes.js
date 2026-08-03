@@ -15,7 +15,7 @@ adminHelpTicketsRouter.use(requireAdminAuth);
 
 adminHelpTicketsRouter.get(
   '/',
-  requirePermission('read_customer_accounts_data'),
+  requirePermission('read_help_requests'),
   async (req, res, next) => {
     try {
       const data = await listHelpTickets(req.query ?? {});
@@ -28,7 +28,7 @@ adminHelpTicketsRouter.get(
 
 adminHelpTicketsRouter.patch(
   '/read-all',
-  requirePermission('read_customer_accounts_data'),
+  requirePermission('read_help_requests'),
   async (req, res, next) => {
     try {
       const data = await markAllHelpTicketsRead();
@@ -41,7 +41,7 @@ adminHelpTicketsRouter.patch(
 
 adminHelpTicketsRouter.get(
   '/:id',
-  requirePermission('read_customer_accounts_data'),
+  requirePermission('read_help_requests'),
   async (req, res, next) => {
     try {
       const data = await getHelpTicketById(req.params.id);
@@ -54,7 +54,7 @@ adminHelpTicketsRouter.get(
 
 adminHelpTicketsRouter.patch(
   '/:id/read',
-  requirePermission('read_customer_accounts_data'),
+  requirePermission('read_help_requests'),
   async (req, res, next) => {
     try {
       const data = await markHelpTicketRead(req.params.id);
@@ -67,7 +67,7 @@ adminHelpTicketsRouter.patch(
 
 adminHelpTicketsRouter.post(
   '/:id/reply',
-  requirePermission('read_customer_accounts_data'),
+  requirePermission('change_help_requests_status'),
   async (req, res, next) => {
     try {
       const data = await replyToHelpTicket(req.params.id, req.body ?? {});

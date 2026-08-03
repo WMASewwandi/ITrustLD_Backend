@@ -1,6 +1,11 @@
 import { query } from '../config/database.js';
 import { buildWithdrawalProofApiUrl } from './withdrawalProofStorage.service.js';
 import { batchScammerCheck } from './scammer.service.js';
+import {
+  formatTimestampSl,
+  getBusinessDayStart,
+  parseDateWindow,
+} from '../utils/slTime.js';
 
 const EXCLUDED_USER_IDS = [4, 16405];
 
@@ -24,14 +29,6 @@ function isAdmin(roles = []) {
 
 function escapeLike(value) {
   return String(value).replace(/[\\%_]/g, (ch) => `\\${ch}`);
-}
-
-function formatTimestamp(value) {
-  if (!value) return '';
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
 function formatMoney(currency, amount) {
@@ -73,54 +70,6 @@ function formatWithdrawalAccount(row) {
   }
 }
 
-function parseDateWindow(filter, fromDate, toDate) {
-  const now = new Date();
-  const startOfDay = (date) => {
-    const d = new Date(date);
-    d.setHours(0, 10, 0, 0);
-    return d;
-  };
-
-  switch (filter) {
-    case 'today': {
-      const from = startOfDay(now);
-      const to = new Date(from);
-      to.setDate(to.getDate() + 1);
-      return { from, to };
-    }
-    case 'yesterday': {
-      const from = startOfDay(now);
-      from.setDate(from.getDate() - 1);
-      const to = startOfDay(now);
-      return { from, to };
-    }
-    case 'last7days':
-      return { from: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000), to: null };
-    case 'lastmonth':
-      return { from: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000), to: null };
-    case 'last6months':
-      return { from: new Date(now.getTime() - 180 * 24 * 60 * 60 * 1000), to: null };
-    case 'currentyear': {
-      const from = new Date(now.getFullYear(), 0, 1, 0, 10, 0, 0);
-      return { from, to: null };
-    }
-    case 'lastyear': {
-      const from = new Date(now.getFullYear() - 1, 0, 1, 0, 10, 0, 0);
-      const to = new Date(now.getFullYear(), 0, 1, 0, 10, 0, 0);
-      return { from, to };
-    }
-    case 'customdate': {
-      if (!fromDate) return { from: null, to: null };
-      const from = startOfDay(fromDate);
-      const to = toDate ? startOfDay(toDate) : null;
-      if (to) to.setDate(to.getDate() + 1);
-      return { from, to };
-    }
-    default:
-      return { from: null, to: null };
-  }
-}
-
 function normalizeStatus(status) {
   const value = String(status || 'Pending').trim();
   if (['Pending', 'Completed', 'Rejected', 'All'].includes(value)) return value;
@@ -145,7 +94,7 @@ function buildBaseConditions(status, assignedToUserId, { requirePaymentProof = t
     values.push(...EXCLUDED_USER_IDS);
   }
 
-  if (assignedToUserId != null) {
+  if (assignedToUserId != null && status === 'Pending') {
     conditions.push('w.assigned_to = ?');
     values.push(assignedToUserId);
   }
@@ -161,13 +110,6 @@ async function fetchAdminNames(adminIds) {
     ids,
   );
   return Object.fromEntries(rows.map((row) => [row.id, row.name]));
-}
-
-function getBusinessDayStart() {
-  const now = new Date();
-  const start = new Date(now);
-  start.setHours(0, 10, 0, 0);
-  return start;
 }
 
 async function batchSimilarWithdrawals(rows, status) {
@@ -228,7 +170,7 @@ function mapWithdrawalRow(row, adminUsers, assignedUsers, similarCounts) {
   return {
     id: row.transaction_id,
     withdrawalId: row.id,
-    date: formatTimestamp(row.updated_at),
+    date: formatTimestampSl(row.updated_at),
     userId: row.account_number || String(row.user_id),
     customer: row.user_name ? String(row.user_name).split(' ')[0] : 'N/A',
     platformId: row.cashout_account_id || '—',
@@ -509,10 +451,14 @@ async function getWithdrawalTotals(status, assignedToUserId) {
 
 export async function listWithdrawalsForAdmin(auth, params = {}) {
   const roles = auth?.roles || [];
+  const permissions = auth?.permissions || [];
   const userId = auth?.userId;
-  const assignedToUserId = isWithdrawalExecutive(roles) && !isAdmin(roles) ? userId : null;
 
   const statusForTotals = normalizeStatus(params.status);
+  const assignedToUserId =
+    statusForTotals === 'Pending' && isWithdrawalExecutive(roles) && !isAdmin(roles)
+      ? userId
+      : null;
   const sanitized = sanitizePendingSearchParams(statusForTotals, {
     keyword: params.keyword,
     transactionId: params.transactionId,
@@ -571,7 +517,7 @@ export async function listWithdrawalsForAdmin(auth, params = {}) {
     totals,
     pagination: result.pagination,
     isAdmin: isAdmin(roles),
-    canMutate: roles.includes('status_update_withdrawal_data') || isAdmin(roles),
+    canMutate: permissions.includes('status_update_withdrawal_data') || isAdmin(roles),
   };
 }
 

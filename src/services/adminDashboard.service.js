@@ -1,4 +1,11 @@
 import { getDbDriver, query } from '../config/database.js';
+import {
+  addColomboDays,
+  formatTimestampSl,
+  getColomboDateParts,
+  yearRangeEndSl,
+  yearRangeStartSl,
+} from '../utils/slTime.js';
 
 const PLATFORM_META = {
   1: { name: 'XM', letter: 'X', bg: '#F59E0B', isUsdt: false },
@@ -45,11 +52,11 @@ function sqlDayOfMonth(column) {
 }
 
 function yearRangeStart(year) {
-  return `${year}-01-01 00:00:00`;
+  return yearRangeStartSl(year);
 }
 
 function yearRangeEnd(year) {
-  return `${year + 1}-01-01 00:00:00`;
+  return yearRangeEndSl(year);
 }
 
 function percentChange(current, previous) {
@@ -70,22 +77,22 @@ function calcGrowthPercentage(currentYearTotal, lastYearTotal) {
 function buildDepositDateFilter(filter, fromDate, toDate) {
   const conditions = [];
   const values = [];
-  const now = new Date();
-  const year = now.getFullYear();
+  const parts = getColomboDateParts();
+  const year = parts.year;
   const column = 'created_at';
 
   switch (filter) {
     case 'last7days':
       conditions.push(`${column} >= ?`);
-      values.push(new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString());
+      values.push(formatTimestampSl(addColomboDays(new Date(), -7)));
       break;
     case 'lastmonth':
       conditions.push(`${column} >= ?`);
-      values.push(new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString());
+      values.push(formatTimestampSl(addColomboDays(new Date(), -30)));
       break;
     case 'last6months':
       conditions.push(`${column} >= ?`);
-      values.push(new Date(now.getTime() - 180 * 24 * 60 * 60 * 1000).toISOString());
+      values.push(formatTimestampSl(addColomboDays(new Date(), -180)));
       break;
     case 'currentyear':
       conditions.push(`${column} >= ? AND ${column} < ?`);
@@ -111,22 +118,22 @@ function buildDepositDateFilter(filter, fromDate, toDate) {
 function buildTransactionDateFilter(filter, fromDate, toDate) {
   const conditions = [];
   const values = [];
-  const now = new Date();
-  const year = now.getFullYear();
+  const parts = getColomboDateParts();
+  const year = parts.year;
   const column = 'd.created_at';
 
   switch (filter) {
     case 'last7days':
       conditions.push(`${column} >= ?`);
-      values.push(new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString());
+      values.push(formatTimestampSl(addColomboDays(new Date(), -7)));
       break;
     case 'lastmonth':
       conditions.push(`${column} >= ?`);
-      values.push(new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString());
+      values.push(formatTimestampSl(addColomboDays(new Date(), -30)));
       break;
     case 'last6months':
       conditions.push(`${column} >= ?`);
-      values.push(new Date(now.getTime() - 180 * 24 * 60 * 60 * 1000).toISOString());
+      values.push(formatTimestampSl(addColomboDays(new Date(), -180)));
       break;
     case 'currentyear':
       conditions.push(`${column} >= ? AND ${column} < ?`);
@@ -285,10 +292,10 @@ async function getAlltimeTotalDeposits(filter, fromDate, toDate) {
 }
 
 async function buildAdminDashboard() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth() + 1;
-  const today = now.getDate();
+  const parts = getColomboDateParts();
+  const year = parts.year;
+  const month = parts.month;
+  const today = parts.day;
   const lastMonth = month - 1 > 0 ? month - 1 : 12;
 
   const [depositAggregates, totalCompletedWithdrawals, platforms] = await Promise.all([
@@ -364,7 +371,7 @@ export async function filterDashboardTransactions({ filter, fromDate, toDate } =
 }
 
 export async function getAdminDashboard() {
-  const cacheKey = String(new Date().getFullYear());
+  const cacheKey = String(getColomboDateParts().year);
   const now = Date.now();
   if (dashboardCache.key === cacheKey && dashboardCache.data && dashboardCache.expiresAt > now) {
     return dashboardCache.data;

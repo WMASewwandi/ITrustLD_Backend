@@ -1,0 +1,149 @@
+import { query } from '../config/database.js';
+import { env } from '../config/env.js';
+
+const API_LOGIN_URL = 'https://e-sms.dialog.lk/api/v1/login';
+const API_SEND_URL = 'https://e-sms.dialog.lk/api/v2/sms';
+const SOURCE_ADDRESS = 'ITrustLD';
+
+export function parseLkMobileNumber(msisdn) {
+  const digits = String(msisdn || '').replace(/\D/g, '');
+  if (!digits) return null;
+
+  const number = digits.slice(-9);
+  const countryCode = digits.slice(0, -9);
+
+  if (!['0', '94', ''].includes(countryCode) && countryCode !== '94') {
+    return null;
+  }
+
+  if (number.length !== 9) return null;
+  return number;
+}
+
+async function loadLatestToken() {
+  const rows = await query(
+    `SELECT token, token_expires_at
+     FROM tokens
+     ORDER BY created_at DESC
+     LIMIT 1`,
+  );
+  return rows[0] || null;
+}
+
+async function storeDialogToken({ token, refreshToken, expirationSec, refreshExpirationSec }) {
+  const tokenExpiresAt = new Date(Date.now() + Math.max(60, Number(expirationSec) || 3600) * 1000);
+  const refreshExpiresAt = new Date(
+    Date.now() + Math.max(60, Number(refreshExpirationSec) || Number(expirationSec) || 3600) * 1000,
+  );
+
+  await query(
+    `INSERT INTO tokens (token, refresh_token, token_expires_at, refresh_token_expires_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, NOW(), NOW())`,
+    [token, refreshToken || '', tokenExpiresAt, refreshExpiresAt],
+  );
+}
+
+async function fetchDialogToken() {
+  const username = env.sms.username;
+  const password = env.sms.password;
+
+  if (!username || !password) {
+    throw new Error('Dialog SMS credentials are not configured.');
+  }
+
+  const response = await fetch(API_LOGIN_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (data?.status !== 'success' || !data?.token) {
+    throw new Error(data?.message || 'Unable to retrieve Dialog SMS token.');
+  }
+
+  await storeDialogToken({
+    token: data.token,
+    refreshToken: data.refreshToken,
+    expirationSec: data.expiration,
+    refreshExpirationSec: data.refreshExpiration,
+  });
+
+  return data.token;
+}
+
+async function getDialogToken() {
+  const existing = await loadLatestToken();
+  if (existing?.token && existing?.token_expires_at) {
+    const expiresAt = new Date(existing.token_expires_at);
+    if (!Number.isNaN(expiresAt.getTime()) && expiresAt > new Date()) {
+      return existing.token;
+    }
+  }
+
+  return fetchDialogToken();
+}
+
+async function persistSmsResponse(smsTransactionId, responseData) {
+  try {
+    await query(`UPDATE sms_transactions SET response = ? WHERE id = ?`, [
+      JSON.stringify(responseData),
+      smsTransactionId,
+    ]);
+  } catch {
+    // response column may be unavailable in some environments
+  }
+}
+
+/**
+ * Send SMS via Dialog e-SMS (Laravel SmsService parity).
+ * Always records sms_transactions; dispatches to Dialog when credentials are configured.
+ */
+export async function sendDialogSms({
+  message,
+  msisdn,
+  userId = null,
+  smsType = 'GENERAL',
+  paymentMethod = '0',
+}) {
+  const mobile = parseLkMobileNumber(msisdn);
+  if (!mobile) return null;
+
+  const insertResult = await query(
+    `INSERT INTO sms_transactions (user_id, message, sms_type, created_at, updated_at)
+     VALUES (?, ?, ?, NOW(), NOW())`,
+    [userId, message, smsType],
+  );
+  const smsTransactionId = insertResult.insertId;
+
+  if (!env.sms.enabled) {
+    console.info('[sms:log-only]', { userId, smsType, to: mobile });
+    return { logged: true, id: smsTransactionId };
+  }
+
+  try {
+    const token = await getDialogToken();
+    const response = await fetch(API_SEND_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        sourceAddress: SOURCE_ADDRESS,
+        message,
+        transaction_id: smsTransactionId,
+        payment_method: paymentMethod,
+        msisdn: [{ mobile }],
+      }),
+    });
+
+    const responseData = await response.json().catch(() => ({}));
+    await persistSmsResponse(smsTransactionId, responseData);
+    return responseData;
+  } catch (error) {
+    console.error('[sms:dialog-error]', error.message);
+    await persistSmsResponse(smsTransactionId, { error: error.message });
+    return { error: error.message, id: smsTransactionId };
+  }
+}

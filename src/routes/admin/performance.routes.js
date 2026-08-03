@@ -6,6 +6,7 @@ import {
   getTeamPerformance,
 } from '../../services/adminPerformance.service.js';
 import { findSystemUserById } from '../../services/systemUser.service.js';
+import { getUserPermissions } from '../../services/user.service.js';
 
 export const adminPerformanceRouter = Router();
 
@@ -26,7 +27,8 @@ adminPerformanceRouter.get('/me', async (req, res, next) => {
 
 adminPerformanceRouter.get('/team', async (req, res, next) => {
   try {
-    if (!canViewTeamPerformance(req.auth.roles)) {
+    const permissions = await getUserPermissions(req.auth.userId);
+    if (!canViewTeamPerformance(req.auth.roles, permissions)) {
       return res.status(403).json({ message: 'You do not have permission to view team performance.' });
     }
     const data = await getTeamPerformance(req.query.period);

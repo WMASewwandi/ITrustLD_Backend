@@ -1,11 +1,17 @@
 import { query } from '../config/database.js';
-import { LARAVEL_USER_MODEL } from '../constants/adminRoles.js';
-import { sendEmailAndSms, queueSmsMessage } from './notification.service.js';
+import { sendTemplatedEmailAndSms, sendTemplatedSmsOnly } from './notification.service.js';
+import { buildExecutivesForAssignment } from './shiftAssignment.service.js';
+import { parseDateWindow } from '../utils/slTime.js';
 import {
   depositApprovedEmailHtml,
   depositRejectedEmailHtml,
 } from './mail.templates.js';
-import { awardDepositPoints } from './pointEarning.service.js';
+import { MESSAGE_TEMPLATE_KEYS } from './messageTemplateKeys.js';
+import { awardDepositPoints, reverseDepositPoints } from './pointEarning.service.js';
+import {
+  logSystemUserAction,
+  SYSTEM_USER_ACTIONS,
+} from './systemUserActionLog.service.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -17,143 +23,19 @@ function isAdmin(roles = []) {
   return roles.includes('super-admin') || roles.includes('sub-admin');
 }
 
-function getShiftDateString(date = new Date()) {
-  const d = new Date(date);
-  if (d.getHours() === 0 && d.getMinutes() < 10) {
-    d.setDate(d.getDate() - 1);
+function isDepositExecutiveOnly(roles = []) {
+  return roles.includes('deposit-executive') && !isAdmin(roles);
+}
+
+function assertCanUpdateDeposit(auth, deposit) {
+  if (!isDepositExecutiveOnly(auth?.roles || [])) return;
+  if (Number(deposit.assigned_to) !== Number(auth.userId)) {
+    throw validationError('This deposit is not assigned to you.', 403);
   }
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-
-async function getActiveShiftForDate() {
-  const shiftDate = getShiftDateString();
-  const rows = await query(
-    `SELECT active_shift FROM shift_history WHERE shift_date = ? LIMIT 1`,
-    [shiftDate],
-  );
-  if (rows[0]?.active_shift) return rows[0].active_shift;
-
-  const previousDate = new Date(`${shiftDate}T12:00:00`);
-  previousDate.setDate(previousDate.getDate() - 1);
-  const prevRows = await query(
-    `SELECT active_shift FROM shift_history WHERE shift_date = ? LIMIT 1`,
-    [getShiftDateString(previousDate)],
-  );
-  const previousShift = prevRows[0]?.active_shift || 'B';
-  const activeShift = previousShift === 'A' ? 'B' : 'A';
-
-  try {
-    await query(
-      `INSERT INTO shift_history (shift_date, active_shift, created_at, updated_at)
-       VALUES (?, ?, NOW(), NOW())`,
-      [shiftDate, activeShift],
-    );
-  } catch {
-    const again = await query(
-      `SELECT active_shift FROM shift_history WHERE shift_date = ? LIMIT 1`,
-      [shiftDate],
-    );
-    if (again[0]?.active_shift) return again[0].active_shift;
-  }
-
-  return activeShift;
-}
-
-function roleDisplayName(roles) {
-  if (roles.includes('sub-admin')) return 'Sub Admin';
-  if (roles.includes('deposit-executive')) return 'Deposit Executive';
-  if (roles.includes('withdrawal-executive')) return 'Withdrawal Executive';
-  return 'Executive';
-}
-
-async function getUserRoles(userId) {
-  const rows = await query(
-    `SELECT r.name
-     FROM roles r
-     INNER JOIN model_has_roles mhr ON mhr.role_id = r.id
-     WHERE mhr.model_id = ? AND mhr.model_type = ?`,
-    [userId, LARAVEL_USER_MODEL],
-  );
-  return rows.map((row) => row.name);
-}
-
-async function getPendingDepositCount(userId, roles) {
-  if (roles.includes('sub-admin')) {
-    const rows = await query(
-      `SELECT
-         (SELECT COUNT(*) FROM deposits
-          WHERE assigned_to = ? AND transaction_status = 'Pending' AND payment_proof IS NOT NULL)
-         +
-         (SELECT COUNT(*) FROM withdrawals
-          WHERE assigned_to = ? AND transaction_status = 'Pending' AND cashout_payment_proof IS NOT NULL)
-         AS total`,
-      [userId, userId],
-    );
-    return Number(rows[0]?.total) || 0;
-  }
-
-  const rows = await query(
-    `SELECT COUNT(*) AS total
-     FROM deposits
-     WHERE assigned_to = ?
-       AND transaction_status = 'Pending'
-       AND payment_proof IS NOT NULL`,
-    [userId],
-  );
-  return Number(rows[0]?.total) || 0;
 }
 
 export async function getExecutivesForAssignment() {
-  const activeShift = await getActiveShiftForDate();
-  const users = await query(
-    `SELECT DISTINCT u.id, u.name, u.email, u.is_online, u.shift, u.shift_start_time, u.shift_end_time
-     FROM users u
-     INNER JOIN model_has_roles mhr ON mhr.model_id = u.id AND mhr.model_type = ?
-     INNER JOIN roles r ON r.id = mhr.role_id
-     WHERE r.name IN ('deposit-executive', 'sub-admin')
-     ORDER BY u.name ASC`,
-    [LARAVEL_USER_MODEL],
-  );
-
-  const executives = [];
-  for (const user of users) {
-    const roles = await getUserRoles(user.id);
-    const pendingCount = await getPendingDepositCount(user.id, roles);
-    executives.push({
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      role: roleDisplayName(roles),
-      shift: user.shift,
-      is_online: Boolean(user.is_online),
-      is_in_active_shift: user.shift === activeShift,
-      is_in_shift_time: true,
-      pending_count: pendingCount,
-      shift_time_label:
-        user.shift === 'A' || user.shift === 'B' ? '0:10 AM – 0:10 AM (next day)' : '',
-      sort_key: [
-        user.shift !== activeShift,
-        !user.is_online,
-        pendingCount,
-        user.id,
-      ],
-    });
-  }
-
-  executives.sort((a, b) => {
-    for (let i = 0; i < a.sort_key.length; i += 1) {
-      if (a.sort_key[i] !== b.sort_key[i]) {
-        return a.sort_key[i] < b.sort_key[i] ? -1 : 1;
-      }
-    }
-    return 0;
-  });
-
-  return {
-    active_shift: activeShift,
-    executives: executives.map(({ sort_key: _sort, ...rest }) => rest),
-  };
+  return buildExecutivesForAssignment('deposit-executive');
 }
 
 export async function assignDeposits(auth, { depositIds, executiveId }) {
@@ -236,14 +118,84 @@ function buildDepositSmsMessage(status, ctx, rejectedReason, rejectedReasonMessa
   return `${base} Deposit Rejected to ${platform} for ${account}. ${reason}.\n- For more info: +94117 751 751, iTrustLD`;
 }
 
-async function sendDetailedDepositSms(adminUserId, mobile, message, smsType) {
-  if (!mobile) return;
-  await queueSmsMessage({
-    message,
-    msisdn: mobile,
-    userId: adminUserId,
-    smsType,
-  });
+async function notifyDepositStatus(auth, accountHolder, deposit, ctx, status, rejectedReason, rejectedReasonMessage) {
+  if (!accountHolder) return;
+
+  const firstName = String(accountHolder.first_name || accountHolder.email || 'Customer').split(' ')[0];
+  const { topupMethodName } = ctx;
+  const smsMessage = buildDepositSmsMessage(status, ctx, rejectedReason, rejectedReasonMessage);
+  const smsType = status === 'Completed' ? 'DEPOSIT_APPROVED' : 'DEPOSIT_REJECTED';
+  const subject =
+    status === 'Completed'
+      ? `TR# ${deposit.transaction_id} - Deposit Completed`
+      : `TR# ${deposit.transaction_id} - Deposit Rejected`;
+  const html =
+    status === 'Completed'
+      ? depositApprovedEmailHtml({
+          firstName,
+          deposit: { ...deposit, ...ctx },
+        })
+      : depositRejectedEmailHtml({
+          firstName,
+          deposit: { ...deposit, ...ctx },
+        });
+  const amount = `${deposit.payment_amount_currency} ${deposit.payment_amount}`;
+  const reason = rejectedReasonMessage || rejectedReason || '';
+  const variables = {
+    username: accountHolder.first_name || accountHolder.email || 'Customer',
+    first_name: firstName,
+    transaction_id: deposit.transaction_id,
+    amount,
+    status,
+    platform: topupMethodName,
+    account: deposit.topup_account_id,
+    reason,
+  };
+  const emailKey =
+    status === 'Completed'
+      ? MESSAGE_TEMPLATE_KEYS.DEPOSIT_COMPLETED_EMAIL
+      : MESSAGE_TEMPLATE_KEYS.DEPOSIT_REJECTED_EMAIL;
+  const smsKey =
+    status === 'Completed'
+      ? MESSAGE_TEMPLATE_KEYS.DEPOSIT_COMPLETED_SMS
+      : MESSAGE_TEMPLATE_KEYS.DEPOSIT_REJECTED_SMS;
+
+  if (accountHolder.email) {
+    try {
+      await sendTemplatedEmailAndSms({
+        email: accountHolder.email,
+        msisdn: accountHolder.mobile_number,
+        userId: accountHolder.user_id,
+        smsType,
+        emailKey,
+        smsKey,
+        variables,
+        fallback: {
+          subject,
+          html,
+          text:
+            status === 'Completed'
+              ? 'Your deposit request has been approved.'
+              : 'Your deposit has been rejected.',
+          smsMessage,
+        },
+      });
+    } catch (error) {
+      console.error(`[deposit-email-${status.toLowerCase()}]`, error.message);
+    }
+    return;
+  }
+
+  if (accountHolder.mobile_number) {
+    await sendTemplatedSmsOnly({
+      msisdn: accountHolder.mobile_number,
+      userId: accountHolder.user_id,
+      smsType,
+      smsKey,
+      variables,
+      fallback: smsMessage,
+    });
+  }
 }
 
 export async function updateDepositStatus(
@@ -260,6 +212,8 @@ export async function updateDepositStatus(
     throw validationError('Deposit not found.', 404);
   }
 
+  assertCanUpdateDeposit(auth, deposit);
+
   const ctx = await loadDepositContext(deposit);
   const adminId = auth?.userId;
   const accountHolder = ctx.accountHolder;
@@ -275,6 +229,7 @@ export async function updateDepositStatus(
        WHERE id = ?`,
       [adminId, deposit.id],
     );
+    await logSystemUserAction(adminId, SYSTEM_USER_ACTIONS.DEPOSIT_PENDING);
   } else if (normalizedStatus === 'Completed') {
     await query(
       `UPDATE deposits
@@ -287,37 +242,9 @@ export async function updateDepositStatus(
       [adminId, deposit.id],
     );
 
-    const smsMessage = buildDepositSmsMessage('Completed', ctx);
-    await sendDetailedDepositSms(
-      adminId,
-      accountHolder?.mobile_number,
-      smsMessage,
-      'Deposit Completed',
-    );
-
-    if (accountHolder?.email) {
-      const subject = `TR# ${deposit.transaction_id} - Deposit Completed`;
-      const html = depositApprovedEmailHtml({
-        firstName: String(accountHolder.first_name || accountHolder.email || 'Customer').split(' ')[0],
-        deposit: { ...deposit, ...ctx },
-      });
-      try {
-        await sendEmailAndSms({
-          email: accountHolder.email,
-          subject,
-          html,
-          text: 'Your deposit request has been approved.',
-          smsMessage: 'Your deposit has been approved.',
-          msisdn: accountHolder.mobile_number,
-          userId: accountHolder.user_id,
-          smsType: 'DEPOSIT_APPROVED',
-        });
-      } catch (error) {
-        console.error('[deposit-email-approved]', error.message);
-      }
-    }
-
+    await notifyDepositStatus(auth, accountHolder, deposit, ctx, 'Completed');
     await awardDepositPoints(deposit, accountHolder);
+    await logSystemUserAction(adminId, SYSTEM_USER_ACTIONS.DEPOSIT_APPROVE);
   } else if (normalizedStatus === 'Rejected') {
     await query(
       `UPDATE deposits
@@ -332,40 +259,17 @@ export async function updateDepositStatus(
       [adminId, rejectedReason || null, rejectedReasonMessage || null, deposit.id],
     );
 
-    const smsMessage = buildDepositSmsMessage(
-      'Rejected',
+    await notifyDepositStatus(
+      auth,
+      accountHolder,
+      deposit,
       ctx,
+      'Rejected',
       rejectedReason,
       rejectedReasonMessage,
     );
-    await sendDetailedDepositSms(
-      adminId,
-      accountHolder?.mobile_number,
-      smsMessage,
-      'Deposit Rejected',
-    );
-
-    if (accountHolder?.email) {
-      const subject = `TR# ${deposit.transaction_id} - Deposit Rejected`;
-      const html = depositRejectedEmailHtml({
-        firstName: String(accountHolder.first_name || accountHolder.email || 'Customer').split(' ')[0],
-        deposit: { ...deposit, ...ctx },
-      });
-      try {
-        await sendEmailAndSms({
-          email: accountHolder.email,
-          subject,
-          html,
-          text: 'Your deposit has been rejected.',
-          smsMessage: 'Your deposit has been rejected.',
-          msisdn: accountHolder.mobile_number,
-          userId: accountHolder.user_id,
-          smsType: 'DEPOSIT_REJECTED',
-        });
-      } catch (error) {
-        console.error('[deposit-email-rejected]', error.message);
-      }
-    }
+    await reverseDepositPoints(deposit);
+    await logSystemUserAction(adminId, SYSTEM_USER_ACTIONS.DEPOSIT_REJECT);
   }
 
   return {
@@ -418,39 +322,15 @@ export async function exportDepositsForAdmin(auth, params = {}) {
   }
 
   if (params.filter) {
-    const now = new Date();
-    const startOfDay = (date) => {
-      const d = new Date(date);
-      d.setHours(0, 10, 0, 0);
-      return d;
-    };
-    switch (params.filter) {
-      case 'today': {
-        const from = startOfDay(now);
-        const to = new Date(from);
-        to.setDate(to.getDate() + 1);
+    const { from, to } = parseDateWindow(params.filter, params.fromDate, params.toDate);
+    if (from) {
+      if (to) {
         sql += ' AND d.updated_at >= ? AND d.updated_at < ?';
         values.push(from, to);
-        break;
-      }
-      case 'yesterday': {
-        const from = startOfDay(now);
-        from.setDate(from.getDate() - 1);
-        const to = startOfDay(now);
-        sql += ' AND d.updated_at >= ? AND d.updated_at < ?';
-        values.push(from, to);
-        break;
-      }
-      case 'last7days':
+      } else {
         sql += ' AND d.updated_at >= ?';
-        values.push(new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000));
-        break;
-      case 'lastmonth':
-        sql += ' AND d.updated_at >= ?';
-        values.push(new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000));
-        break;
-      default:
-        break;
+        values.push(from);
+      }
     }
   }
 

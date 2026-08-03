@@ -1,7 +1,7 @@
 import { query } from '../config/database.js';
 import { findAccountHolderByUserId } from './accountHolder.service.js';
 import { findUserByEmail, findUserById } from './user.service.js';
-import { sendEmailAndSms } from './notification.service.js';
+import { sendTemplatedEmailAndSms, sendEmailAndSms } from './notification.service.js';
 import {
   accountVerifiedEmailHtml,
   verificationCodeEmailHtml,
@@ -9,6 +9,7 @@ import {
   verifyAccountEmailHtml,
   welcomeEmailHtml,
 } from './mail.templates.js';
+import { MESSAGE_TEMPLATE_KEYS } from './messageTemplateKeys.js';
 import {
   storePairedBackDocument,
   storeVerificationDocument,
@@ -98,31 +99,50 @@ async function checkAccountHolderByMobile(mobileNumber, excludeUserId = null) {
   return rows[0] ?? null;
 }
 
-export async function sendRegistrationEmails(user) {
+export async function sendRegistrationEmails(user, accountHolder = null) {
   const verificationUrl = `${env.userAppUrl}/verify`;
+  const holder = accountHolder ?? (await findAccountHolderByUserId(user.id));
+  const msisdn = holder?.mobile_number || null;
+  const firstName = String(user.name || 'there').split(' ')[0];
+  const variables = {
+    username: user.name || 'Customer',
+    first_name: firstName,
+    verification_url: verificationUrl,
+  };
 
   try {
-    await sendEmailAndSms({
+    await sendTemplatedEmailAndSms({
       email: user.email,
-      subject: 'Register Successful',
-      html: welcomeEmailHtml(user.name),
-      smsMessage: 'Welcome to iTrustLD. Your account is registered successfully.',
-      msisdn: null,
+      msisdn,
       userId: user.id,
       smsType: 'WELCOME',
+      emailKey: MESSAGE_TEMPLATE_KEYS.WELCOME_EMAIL,
+      smsKey: MESSAGE_TEMPLATE_KEYS.WELCOME_SMS,
+      variables,
+      fallback: {
+        subject: 'Register Successful',
+        html: welcomeEmailHtml(user.name),
+        smsMessage: 'Welcome to iTrustLD. Your account is registered successfully.',
+      },
     });
   } catch (error) {
     console.error('[register] welcome email failed:', error.message);
   }
 
   try {
-    await sendEmailAndSms({
+    await sendTemplatedEmailAndSms({
       email: user.email,
-      subject: 'Account verification',
-      html: verifyAccountEmailHtml(verificationUrl),
-      smsMessage: 'Please verify your iTrustLD account to get started.',
+      msisdn,
       userId: user.id,
       smsType: 'ACCOUNT_VERIFICATION',
+      emailKey: MESSAGE_TEMPLATE_KEYS.ACCOUNT_VERIFICATION_EMAIL,
+      smsKey: MESSAGE_TEMPLATE_KEYS.ACCOUNT_VERIFICATION_SMS,
+      variables,
+      fallback: {
+        subject: 'Account verification',
+        html: verifyAccountEmailHtml(verificationUrl),
+        smsMessage: 'Please verify your iTrustLD account to get started.',
+      },
     });
   } catch (error) {
     console.error('[register] verification email failed:', error.message);

@@ -1,5 +1,14 @@
 import { getDbDriver, query } from '../config/database.js';
 import { getAllSystemUsers } from './systemUser.service.js';
+import {
+  addColomboDays,
+  colomboLocalToDate,
+  formatDateTimeDisplaySl,
+  formatTimestampSl,
+  getColomboDateParts,
+  startOfColomboDay,
+  startOfColomboWeek,
+} from '../utils/slTime.js';
 
 const COMMISSION_PER_COMPLETED = 8;
 const CACHE_TTL_MS = 30_000;
@@ -17,50 +26,37 @@ function normalizePeriod(period) {
   return 'weekly';
 }
 
-function startOfDay(date) {
-  const d = new Date(date);
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
-
-function startOfWeek(date) {
-  const d = startOfDay(date);
-  const day = d.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
-  d.setDate(d.getDate() + diff);
-  return d;
-}
-
-function startOfMonth(date) {
-  return new Date(date.getFullYear(), date.getMonth(), 1, 0, 0, 0, 0);
-}
-
-function addDays(date, days) {
-  const d = new Date(date);
-  d.setDate(d.getDate() + days);
-  return d;
-}
-
-function addMonths(date, months) {
-  return new Date(date.getFullYear(), date.getMonth() + months, 1, 0, 0, 0, 0);
-}
-
 function getPeriodWindow(period, offset = 0) {
   const now = new Date();
   if (period === 'daily') {
-    const start = addDays(startOfDay(now), -offset);
-    return { start, end: addDays(start, 1) };
+    const start = addColomboDays(startOfColomboDay(now), -offset);
+    return { start, end: addColomboDays(start, 1) };
   }
   if (period === 'weekly') {
-    const start = addDays(startOfWeek(now), -7 * offset);
-    return { start, end: addDays(start, 7) };
+    const start = addColomboDays(startOfColomboWeek(now), -7 * offset);
+    return { start, end: addColomboDays(start, 7) };
   }
-  const start = addMonths(startOfMonth(now), -offset);
-  return { start, end: addMonths(start, 1) };
+
+  const parts = getColomboDateParts(now);
+  let month = parts.month - offset;
+  let year = parts.year;
+  while (month <= 0) {
+    month += 12;
+    year -= 1;
+  }
+  const start = colomboLocalToDate({ year, month, day: 1 });
+  let endMonth = month + 1;
+  let endYear = year;
+  if (endMonth > 12) {
+    endMonth = 1;
+    endYear += 1;
+  }
+  const end = colomboLocalToDate({ year: endYear, month: endMonth, day: 1 });
+  return { start, end };
 }
 
 function toSqlDate(date) {
-  return date.toISOString().slice(0, 19).replace('T', ' ');
+  return formatTimestampSl(date);
 }
 
 function sqlHour(column) {
@@ -202,7 +198,7 @@ function buildTrend(period, bucketMaps) {
   return {
     labels,
     values,
-    subtitle: `Weekly volume — ${new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' })}`,
+    subtitle: `Weekly volume — ${new Date().toLocaleString('en-US', { month: 'long', year: 'numeric', timeZone: 'Asia/Colombo' })}`,
   };
 }
 
@@ -379,13 +375,7 @@ function buildResponseFromStats(period, currentStats, previousStats, audit = {})
     breakdown: buildBreakdown(currentMetrics),
     audit: {
       by: audit.by || 'System',
-      at: audit.at || new Date().toLocaleString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-      }),
+      at: audit.at || formatDateTimeDisplaySl(new Date()),
     },
   };
 }
@@ -426,13 +416,7 @@ export async function getMyPerformance(userId, periodInput, auditUser = {}) {
 
   const data = buildResponseFromStats(period, currentStats, previousStats, {
     by: auditUser.name || auditUser.email || 'You',
-    at: new Date().toLocaleString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-    }),
+    at: formatDateTimeDisplaySl(new Date()),
   });
 
   writeCache(cacheKey, data);
@@ -546,6 +530,10 @@ export async function getTeamPerformance(periodInput) {
   return data;
 }
 
-export function canViewTeamPerformance(roles = []) {
-  return roles.includes('super-admin') || roles.includes('sub-admin');
+export function canViewTeamPerformance(roles = [], permissions = []) {
+  return (
+    permissions.includes('view_team_performance') ||
+    roles.includes('super-admin') ||
+    roles.includes('sub-admin')
+  );
 }

@@ -13,7 +13,7 @@ adminBulkSmsRouter.use(requireAdminAuth);
 
 adminBulkSmsRouter.get(
   '/',
-  requirePermission('comunicatte_to_customer'),
+  requirePermission('manage_bulk_sms', 'comunicatte_to_customer'),
   async (_req, res, next) => {
     try {
       const data = await listBulkSmsCampaignsAdmin();
@@ -26,7 +26,7 @@ adminBulkSmsRouter.get(
 
 adminBulkSmsRouter.post(
   '/',
-  requirePermission('comunicatte_to_customer'),
+  requirePermission('manage_bulk_sms', 'comunicatte_to_customer'),
   async (req, res, next) => {
     try {
       const data = await createBulkSmsCampaign(req.auth.userId, req.body);
@@ -39,7 +39,7 @@ adminBulkSmsRouter.post(
 
 adminBulkSmsRouter.post(
   '/:id/cancel',
-  requirePermission('comunicatte_to_customer'),
+  requirePermission('manage_bulk_sms', 'comunicatte_to_customer'),
   async (req, res, next) => {
     try {
       const data = await cancelBulkSmsCampaign(req.params.id);

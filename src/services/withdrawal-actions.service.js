@@ -1,10 +1,16 @@
 import { query } from '../config/database.js';
-import { LARAVEL_USER_MODEL } from '../constants/adminRoles.js';
-import { sendEmailAndSms, queueSmsMessage } from './notification.service.js';
+import { sendTemplatedEmailAndSms, sendTemplatedSmsOnly } from './notification.service.js';
+import { buildExecutivesForAssignment } from './shiftAssignment.service.js';
+import { parseDateWindow } from '../utils/slTime.js';
 import {
   withdrawalApprovedEmailHtml,
   withdrawalRejectedEmailHtml,
 } from './mail.templates.js';
+import { MESSAGE_TEMPLATE_KEYS } from './messageTemplateKeys.js';
+import {
+  logSystemUserAction,
+  SYSTEM_USER_ACTIONS,
+} from './systemUserActionLog.service.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -16,143 +22,19 @@ function isAdmin(roles = []) {
   return roles.includes('super-admin') || roles.includes('sub-admin');
 }
 
-function getShiftDateString(date = new Date()) {
-  const d = new Date(date);
-  if (d.getHours() === 0 && d.getMinutes() < 10) {
-    d.setDate(d.getDate() - 1);
+function isWithdrawalExecutiveOnly(roles = []) {
+  return roles.includes('withdrawal-executive') && !isAdmin(roles);
+}
+
+function assertCanUpdateWithdrawal(auth, withdrawal) {
+  if (!isWithdrawalExecutiveOnly(auth?.roles || [])) return;
+  if (Number(withdrawal.assigned_to) !== Number(auth.userId)) {
+    throw validationError('This withdrawal is not assigned to you.', 403);
   }
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-
-async function getActiveShiftForDate() {
-  const shiftDate = getShiftDateString();
-  const rows = await query(
-    `SELECT active_shift FROM shift_history WHERE shift_date = ? LIMIT 1`,
-    [shiftDate],
-  );
-  if (rows[0]?.active_shift) return rows[0].active_shift;
-
-  const previousDate = new Date(`${shiftDate}T12:00:00`);
-  previousDate.setDate(previousDate.getDate() - 1);
-  const prevRows = await query(
-    `SELECT active_shift FROM shift_history WHERE shift_date = ? LIMIT 1`,
-    [getShiftDateString(previousDate)],
-  );
-  const previousShift = prevRows[0]?.active_shift || 'B';
-  const activeShift = previousShift === 'A' ? 'B' : 'A';
-
-  try {
-    await query(
-      `INSERT INTO shift_history (shift_date, active_shift, created_at, updated_at)
-       VALUES (?, ?, NOW(), NOW())`,
-      [shiftDate, activeShift],
-    );
-  } catch {
-    const again = await query(
-      `SELECT active_shift FROM shift_history WHERE shift_date = ? LIMIT 1`,
-      [shiftDate],
-    );
-    if (again[0]?.active_shift) return again[0].active_shift;
-  }
-
-  return activeShift;
-}
-
-function roleDisplayName(roles) {
-  if (roles.includes('sub-admin')) return 'Sub Admin';
-  if (roles.includes('deposit-executive')) return 'Deposit Executive';
-  if (roles.includes('withdrawal-executive')) return 'Withdrawal Executive';
-  return 'Executive';
-}
-
-async function getUserRoles(userId) {
-  const rows = await query(
-    `SELECT r.name
-     FROM roles r
-     INNER JOIN model_has_roles mhr ON mhr.role_id = r.id
-     WHERE mhr.model_id = ? AND mhr.model_type = ?`,
-    [userId, LARAVEL_USER_MODEL],
-  );
-  return rows.map((row) => row.name);
-}
-
-async function getPendingWithdrawalCount(userId, roles) {
-  if (roles.includes('sub-admin')) {
-    const rows = await query(
-      `SELECT
-         (SELECT COUNT(*) FROM deposits
-          WHERE assigned_to = ? AND transaction_status = 'Pending' AND payment_proof IS NOT NULL)
-         +
-         (SELECT COUNT(*) FROM withdrawals
-          WHERE assigned_to = ? AND transaction_status = 'Pending' AND cashout_payment_proof IS NOT NULL)
-         AS total`,
-      [userId, userId],
-    );
-    return Number(rows[0]?.total) || 0;
-  }
-
-  const rows = await query(
-    `SELECT COUNT(*) AS total
-     FROM withdrawals
-     WHERE assigned_to = ?
-       AND transaction_status = 'Pending'
-       AND cashout_payment_proof IS NOT NULL`,
-    [userId],
-  );
-  return Number(rows[0]?.total) || 0;
 }
 
 export async function getExecutivesForWithdrawalAssignment() {
-  const activeShift = await getActiveShiftForDate();
-  const users = await query(
-    `SELECT DISTINCT u.id, u.name, u.email, u.is_online, u.shift, u.shift_start_time, u.shift_end_time
-     FROM users u
-     INNER JOIN model_has_roles mhr ON mhr.model_id = u.id AND mhr.model_type = ?
-     INNER JOIN roles r ON r.id = mhr.role_id
-     WHERE r.name IN ('withdrawal-executive', 'sub-admin')
-     ORDER BY u.name ASC`,
-    [LARAVEL_USER_MODEL],
-  );
-
-  const executives = [];
-  for (const user of users) {
-    const roles = await getUserRoles(user.id);
-    const pendingCount = await getPendingWithdrawalCount(user.id, roles);
-    executives.push({
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      role: roleDisplayName(roles),
-      shift: user.shift,
-      is_online: Boolean(user.is_online),
-      is_in_active_shift: user.shift === activeShift,
-      is_in_shift_time: true,
-      pending_count: pendingCount,
-      shift_time_label:
-        user.shift === 'A' || user.shift === 'B' ? '0:10 AM – 0:10 AM (next day)' : '',
-      sort_key: [
-        user.shift !== activeShift,
-        !user.is_online,
-        pendingCount,
-        user.id,
-      ],
-    });
-  }
-
-  executives.sort((a, b) => {
-    for (let i = 0; i < a.sort_key.length; i += 1) {
-      if (a.sort_key[i] !== b.sort_key[i]) {
-        return a.sort_key[i] < b.sort_key[i] ? -1 : 1;
-      }
-    }
-    return 0;
-  });
-
-  return {
-    active_shift: activeShift,
-    executives: executives.map(({ sort_key: _sort, ...rest }) => rest),
-  };
+  return buildExecutivesForAssignment('withdrawal-executive');
 }
 
 export async function assignWithdrawals(auth, { withdrawalIds, executiveId }) {
@@ -234,14 +116,91 @@ function buildWithdrawalSmsMessage(status, ctx, rejectedReason, rejectedReasonMe
   return `${base} Withdrawal Rejected to ${cashoutMethodName} for ${account}. ${reason}.\n- For more info: +94117 751 751, iTrustLD`;
 }
 
-async function sendDetailedWithdrawalSms(adminUserId, mobile, message, smsType) {
-  if (!mobile) return;
-  await queueSmsMessage({
-    message,
-    msisdn: mobile,
-    userId: adminUserId,
-    smsType,
-  });
+async function notifyWithdrawalStatus(
+  accountHolder,
+  withdrawal,
+  ctx,
+  status,
+  rejectedReason,
+  rejectedReasonMessage,
+) {
+  if (!accountHolder) return;
+
+  const firstName = String(accountHolder.first_name || accountHolder.email || 'Customer').split(' ')[0];
+  const { cashoutMethodName } = ctx;
+  const smsMessage = buildWithdrawalSmsMessage(status, ctx, rejectedReason, rejectedReasonMessage);
+  const smsType = status === 'Completed' ? 'WITHDRAWAL_APPROVED' : 'WITHDRAWAL_REJECTED';
+  const subject =
+    status === 'Completed'
+      ? `TR# ${withdrawal.transaction_id} - Withdrawal Completed`
+      : `TR# ${withdrawal.transaction_id} - Withdrawal Rejected`;
+  const html =
+    status === 'Completed'
+      ? withdrawalApprovedEmailHtml({
+          firstName,
+          withdrawal: { ...withdrawal, ...ctx },
+        })
+      : withdrawalRejectedEmailHtml({
+          firstName,
+          withdrawal: { ...withdrawal, ...ctx },
+        });
+  const amount = `${withdrawal.receiving_amount_currency} ${withdrawal.receiving_amount}`;
+  const reason = rejectedReasonMessage || rejectedReason || '';
+  const variables = {
+    username: accountHolder.first_name || accountHolder.email || 'Customer',
+    first_name: firstName,
+    transaction_id: withdrawal.transaction_id,
+    amount,
+    status,
+    platform: cashoutMethodName,
+    account: withdrawal.cashout_account_id,
+    reason,
+  };
+  const emailKey =
+    status === 'Completed'
+      ? MESSAGE_TEMPLATE_KEYS.WITHDRAWAL_COMPLETED_EMAIL
+      : MESSAGE_TEMPLATE_KEYS.WITHDRAWAL_REJECTED_EMAIL;
+  const smsKey =
+    status === 'Completed'
+      ? MESSAGE_TEMPLATE_KEYS.WITHDRAWAL_COMPLETED_SMS
+      : MESSAGE_TEMPLATE_KEYS.WITHDRAWAL_REJECTED_SMS;
+
+  if (accountHolder.email) {
+    try {
+      await sendTemplatedEmailAndSms({
+        email: accountHolder.email,
+        msisdn: accountHolder.mobile_number,
+        userId: accountHolder.user_id,
+        smsType,
+        emailKey,
+        smsKey,
+        variables,
+        fallback: {
+          subject,
+          html,
+          text:
+            status === 'Completed'
+              ? 'Your withdrawal request has been approved.'
+              : 'Your withdrawal has been rejected.',
+          smsMessage,
+        },
+      });
+    } catch (error) {
+      console.error(`[withdrawal-email-${status.toLowerCase()}]`, error.message);
+    }
+    return;
+  }
+
+  if (accountHolder.mobile_number) {
+    await sendTemplatedSmsOnly({
+      msisdn: accountHolder.mobile_number,
+      userId: accountHolder.user_id,
+      smsType,
+      smsKey,
+      variables,
+      fallback: smsMessage,
+    });
+  }
 }
 
 export async function updateWithdrawalStatus(
@@ -258,6 +217,8 @@ export async function updateWithdrawalStatus(
     throw validationError('Withdrawal not found.', 404);
   }
 
+  assertCanUpdateWithdrawal(auth, withdrawal);
+
   const ctx = await loadWithdrawalContext(withdrawal);
   const adminId = auth?.userId;
   const accountHolder = ctx.accountHolder;
@@ -273,6 +234,7 @@ export async function updateWithdrawalStatus(
        WHERE id = ?`,
       [adminId, withdrawal.id],
     );
+    await logSystemUserAction(adminId, SYSTEM_USER_ACTIONS.WITHDRAWAL_PENDING);
   } else if (normalizedStatus === 'Completed') {
     await query(
       `UPDATE withdrawals
@@ -285,35 +247,8 @@ export async function updateWithdrawalStatus(
       [adminId, withdrawal.id],
     );
 
-    const smsMessage = buildWithdrawalSmsMessage('Completed', ctx);
-    await sendDetailedWithdrawalSms(
-      adminId,
-      accountHolder?.mobile_number,
-      smsMessage,
-      'Your transaction has been Completed',
-    );
-
-    if (accountHolder?.email) {
-      const subject = `TR# ${withdrawal.transaction_id} - Withdrawal Completed`;
-      const html = withdrawalApprovedEmailHtml({
-        firstName: String(accountHolder.first_name || accountHolder.email || 'Customer').split(' ')[0],
-        withdrawal: { ...withdrawal, ...ctx },
-      });
-      try {
-        await sendEmailAndSms({
-          email: accountHolder.email,
-          subject,
-          html,
-          text: 'Your withdrawal request has been approved.',
-          smsMessage: 'Your withdrawal has been approved.',
-          msisdn: accountHolder.mobile_number,
-          userId: accountHolder.user_id,
-          smsType: 'WITHDRAWAL_APPROVED',
-        });
-      } catch (error) {
-        console.error('[withdrawal-email-approved]', error.message);
-      }
-    }
+    await notifyWithdrawalStatus(accountHolder, withdrawal, ctx, 'Completed');
+    await logSystemUserAction(adminId, SYSTEM_USER_ACTIONS.WITHDRAWAL_APPROVE);
   } else if (normalizedStatus === 'Rejected') {
     await query(
       `UPDATE withdrawals
@@ -328,40 +263,15 @@ export async function updateWithdrawalStatus(
       [adminId, rejectedReason || null, rejectedReasonMessage || null, withdrawal.id],
     );
 
-    const smsMessage = buildWithdrawalSmsMessage(
-      'Rejected',
+    await notifyWithdrawalStatus(
+      accountHolder,
+      withdrawal,
       ctx,
+      'Rejected',
       rejectedReason,
       rejectedReasonMessage,
     );
-    await sendDetailedWithdrawalSms(
-      adminId,
-      accountHolder?.mobile_number,
-      smsMessage,
-      'Withdrawal Rejected',
-    );
-
-    if (accountHolder?.email) {
-      const subject = `TR# ${withdrawal.transaction_id} - Withdrawal Rejected`;
-      const html = withdrawalRejectedEmailHtml({
-        firstName: String(accountHolder.first_name || accountHolder.email || 'Customer').split(' ')[0],
-        withdrawal: { ...withdrawal, ...ctx },
-      });
-      try {
-        await sendEmailAndSms({
-          email: accountHolder.email,
-          subject,
-          html,
-          text: 'Your withdrawal has been rejected.',
-          smsMessage: 'Your withdrawal has been rejected.',
-          msisdn: accountHolder.mobile_number,
-          userId: accountHolder.user_id,
-          smsType: 'WITHDRAWAL_REJECTED',
-        });
-      } catch (error) {
-        console.error('[withdrawal-email-rejected]', error.message);
-      }
-    }
+    await logSystemUserAction(adminId, SYSTEM_USER_ACTIONS.WITHDRAWAL_REJECT);
   }
 
   return {
@@ -414,39 +324,15 @@ export async function exportWithdrawalsForAdmin(auth, params = {}) {
   }
 
   if (params.filter) {
-    const now = new Date();
-    const startOfDay = (date) => {
-      const d = new Date(date);
-      d.setHours(0, 10, 0, 0);
-      return d;
-    };
-    switch (params.filter) {
-      case 'today': {
-        const from = startOfDay(now);
-        const to = new Date(from);
-        to.setDate(to.getDate() + 1);
+    const { from, to } = parseDateWindow(params.filter, params.fromDate, params.toDate);
+    if (from) {
+      if (to) {
         sql += ' AND w.updated_at >= ? AND w.updated_at < ?';
         values.push(from, to);
-        break;
-      }
-      case 'yesterday': {
-        const from = startOfDay(now);
-        from.setDate(from.getDate() - 1);
-        const to = startOfDay(now);
-        sql += ' AND w.updated_at >= ? AND w.updated_at < ?';
-        values.push(from, to);
-        break;
-      }
-      case 'last7days':
+      } else {
         sql += ' AND w.updated_at >= ?';
-        values.push(new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000));
-        break;
-      case 'lastmonth':
-        sql += ' AND w.updated_at >= ?';
-        values.push(new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000));
-        break;
-      default:
-        break;
+        values.push(from);
+      }
     }
   }
 

@@ -1,6 +1,11 @@
 import { sendMail } from './mail.service.js';
 import { adminContactEmailHtml } from './mail.templates.js';
 import { queueSmsMessage } from './notification.service.js';
+import {
+  resolveManualEmailFromTemplateId,
+  resolveManualSmsFromTemplateId,
+} from './messageTemplateRuntime.service.js';
+import { renderTemplateVariables } from './messageTemplate.service.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -31,10 +36,20 @@ export async function sendEmailToCustomers({
   subject,
   body,
   attachment,
+  templateId = null,
+  variables = {},
 }) {
   const emails = parseEmailList(receivers);
-  const emailSubject = String(subject || '').trim();
-  const emailBody = String(body || '').trim();
+  let emailSubject = String(subject || '').trim();
+  let emailBody = String(body || '').trim();
+
+  if (templateId) {
+    const rendered = await resolveManualEmailFromTemplateId(templateId, variables);
+    if (rendered) {
+      emailSubject = emailSubject || rendered.subject;
+      emailBody = emailBody || rendered.text;
+    }
+  }
 
   if (!emails.length) {
     throw validationError('At least one recipient email is required.');
@@ -96,9 +111,24 @@ export async function sendEmailToCustomers({
   return { ok: true, message, successCount, failureCount };
 }
 
-export async function sendSmsToCustomers({ mobileNumbers, message, adminUserId = null }) {
+export async function sendSmsToCustomers({
+  mobileNumbers,
+  message,
+  adminUserId = null,
+  templateId = null,
+  variables = {},
+}) {
   const numbers = parseMobileList(mobileNumbers);
-  const smsBody = String(message || '').trim();
+  let smsBody = String(message || '').trim();
+
+  if (templateId) {
+    const rendered = await resolveManualSmsFromTemplateId(templateId, variables);
+    if (rendered?.message) {
+      smsBody = smsBody || rendered.message;
+    }
+  } else if (Object.keys(variables).length && smsBody) {
+    smsBody = renderTemplateVariables(smsBody, variables);
+  }
 
   if (!numbers.length) {
     throw validationError('At least one mobile number is required.');

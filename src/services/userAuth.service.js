@@ -240,7 +240,7 @@ export async function registerUser(payload, { remoteIp } = {}) {
   const roles = await getUserRoles(userId);
   const accountHolder = await findAccountHolderByUserId(userId);
 
-  await sendRegistrationEmails(user);
+  await sendRegistrationEmails(user, accountHolder);
 
   await setUserOnline(userId, true);
 
