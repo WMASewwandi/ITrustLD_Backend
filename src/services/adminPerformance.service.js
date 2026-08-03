@@ -182,7 +182,7 @@ function buildTrend(period, bucketMaps) {
     const labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     const { start } = getPeriodWindow('weekly', 0);
     const values = labels.map((_, index) => {
-      const day = addDays(start, index);
+      const day = addColomboDays(start, index);
       const key = day.toISOString().slice(0, 10);
       return merged[key] || 0;
     });

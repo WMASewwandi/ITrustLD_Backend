@@ -2,6 +2,8 @@
 
 Express.js API for the split iTrustLD stack. It uses the **same database** as `ITrustLD_Existing` (Laravel). Configure `DB_*` in `.env` to match the Laravel app's `.env`.
 
+**Linux deployment:** see [`deploy/README.md`](../../deploy/README.md) (PM2, nginx, systemd, env templates).
+
 ## Prerequisites
 
 - Node.js 20+
