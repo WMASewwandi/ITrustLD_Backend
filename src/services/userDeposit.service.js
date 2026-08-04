@@ -9,6 +9,7 @@ import { autoAssignDeposit } from './depositAssignment.service.js';
 import { storeDepositProof } from './depositProofStorage.service.js';
 import { queueSmsMessage } from './notification.service.js';
 import { resolveWalletLogoPublicUrl } from './walletLogoStorage.service.js';
+import { ensureWalletNavigateSchema } from './wallet.service.js';
 import {
   formatDateTimeParts,
   resolveFilterDateRange,
@@ -45,15 +46,28 @@ async function assertDepositAccess(userId) {
 }
 
 function mapTopupMethodRow(row) {
+  const platformTypeRaw = row.platform_id_type || row.topup_method_id_type || '';
+  const platformTypes = String(platformTypeRaw)
+    .split(/[,|]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const allowNavigateButton = Boolean(Number(row.allow_navigate_button));
+  const navigateUrl = allowNavigateButton ? String(row.navigate_url || '').trim() || null : null;
+
   return {
     id: row.id,
     name: row.topup_method_name,
     currency: row.topup_method_currency || 'USD',
-    platformType: row.platform_id_type || row.topup_method_id_type || '',
+    platformType: platformTypes.join(',') || platformTypeRaw,
+    platformTypes,
     minLimit: Number(row.minimum_limit ?? 0),
     maxLimit: Number(row.maximum_limit ?? 0),
     terms: row.tnc || '',
     logoUrl: resolveWalletLogoPublicUrl(row.topup_method_logo),
+    allowNavigateButton,
+    allow_navigate_button: allowNavigateButton,
+    navigateUrl,
+    navigate_url: navigateUrl,
   };
 }
 
@@ -67,6 +81,7 @@ function mapPaymentOptionRow(row) {
 }
 
 async function loadTopupMethods() {
+  await ensureWalletNavigateSchema();
   const rows = await query(
     `SELECT tm.*
      FROM topup_methods tm

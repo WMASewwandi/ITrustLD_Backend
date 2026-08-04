@@ -1,6 +1,6 @@
 import { query } from '../config/database.js';
 import { buildWithdrawalProofApiUrl } from './withdrawalProofStorage.service.js';
-import { batchScammerCheck } from './scammer.service.js';
+import { batchScammerCheck, isScammerMatch } from './scammer.service.js';
 import {
   formatTimestampSl,
   getBusinessDayStart,
@@ -505,14 +505,20 @@ export async function listWithdrawalsForAdmin(auth, params = {}) {
       );
 
   const [scammerFlags, similarCounts] = await Promise.all([
-    batchScammerCheck(result.rows.map((row) => row.cashout_account_id)),
+    batchScammerCheck({
+      platformIds: result.rows.map((row) => row.cashout_account_id),
+      userIds: result.rows.map((row) => row.user_id),
+    }),
     batchSimilarWithdrawals(result.rows, statusForTotals === 'All' ? 'Pending' : statusForTotals),
   ]);
 
   return {
     withdrawals: result.rows.map((row) => ({
       ...mapWithdrawalRow(row, result.adminUsers, result.assignedUsers, similarCounts),
-      isScammer: Boolean(scammerFlags[row.cashout_account_id]),
+      isScammer: isScammerMatch(scammerFlags, {
+        platformId: row.cashout_account_id,
+        userId: row.user_id,
+      }),
     })),
     totals,
     pagination: result.pagination,
@@ -589,7 +595,10 @@ export async function listSimilarWithdrawalsToday(auth, { withdrawalId, transact
   const [adminUsers, assignedUsers, scammerFlags] = await Promise.all([
     fetchAdminNames(adminIds),
     fetchAdminNames(assignedIds),
-    batchScammerCheck(rows.map((row) => row.cashout_account_id)),
+    batchScammerCheck({
+      platformIds: rows.map((row) => row.cashout_account_id),
+      userIds: rows.map((row) => row.user_id),
+    }),
   ]);
 
   const count = rows.length;
@@ -600,7 +609,10 @@ export async function listSimilarWithdrawalsToday(auth, { withdrawalId, transact
   return {
     withdrawals: rows.map((row) => ({
       ...mapWithdrawalRow(row, adminUsers, assignedUsers, similarCounts),
-      isScammer: Boolean(scammerFlags[row.cashout_account_id]),
+      isScammer: isScammerMatch(scammerFlags, {
+        platformId: row.cashout_account_id,
+        userId: row.user_id,
+      }),
     })),
   };
 }

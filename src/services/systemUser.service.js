@@ -1,5 +1,6 @@
 import { query } from '../config/database.js';
 import { LARAVEL_USER_MODEL } from '../constants/adminRoles.js';
+import { nowSqlDateTime } from '../utils/slTime.js';
 import { formatRoleDisplayName } from './role.service.js';
 import { hashLaravelPassword } from '../utils/laravelPassword.js';
 
@@ -175,7 +176,7 @@ export async function updateSystemUser(userId, payload) {
   }
 
   const shiftTimes = toShiftTimes(shift);
-  const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  const now = nowSqlDateTime();
 
   const updateFields = [
     'name = ?',
@@ -266,7 +267,7 @@ export async function createSystemUser(payload) {
   }
 
   const shiftTimes = toShiftTimes(shift);
-  const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  const now = nowSqlDateTime();
   const hashedPassword = await hashLaravelPassword(password);
 
   const result = await query(

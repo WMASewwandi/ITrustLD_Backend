@@ -1,4 +1,5 @@
 import { query } from '../config/database.js';
+import { formatTimestampSl, formatYmdColombo, parseDbDateTime } from '../utils/slTime.js';
 import {
   logSystemUserAction,
   SYSTEM_USER_ACTIONS,
@@ -11,23 +12,15 @@ function validationError(message, status = 422) {
 }
 
 function formatYmd(value) {
-  const date = value ? new Date(value) : null;
-  if (!date || Number.isNaN(date.getTime())) return null;
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
+  const date = parseDbDateTime(value);
+  if (!date) return null;
+  return formatYmdColombo(date);
 }
 
 function formatYmdHis(value) {
-  const date = value ? new Date(value) : null;
-  if (!date || Number.isNaN(date.getTime())) return '—';
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  const hh = String(date.getHours()).padStart(2, '0');
-  const mm = String(date.getMinutes()).padStart(2, '0');
-  return `${y}-${m}-${d} ${hh}:${mm}`;
+  const formatted = formatTimestampSl(value);
+  if (!formatted) return '—';
+  return formatted.slice(0, 16);
 }
 
 function buildAdminDateFilter(filter, fromDate, toDate) {

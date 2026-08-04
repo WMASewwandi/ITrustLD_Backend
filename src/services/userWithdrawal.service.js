@@ -7,6 +7,7 @@ import {
 import { env } from '../config/env.js';
 import { queueSmsMessage } from './notification.service.js';
 import { resolveWalletLogoPublicUrl } from './walletLogoStorage.service.js';
+import { ensureWalletNavigateSchema } from './wallet.service.js';
 import { autoAssignWithdrawal } from './withdrawalAssignment.service.js';
 import { storeWithdrawalProof } from './withdrawalProofStorage.service.js';
 import { formatDateTimeParts, resolveFilterDateRange } from '../utils/slTime.js';
@@ -42,6 +43,9 @@ async function assertWithdrawalAccess(userId) {
 }
 
 function mapCashoutMethodRow(row) {
+  const allowNavigateButton = Boolean(Number(row.allow_navigate_button));
+  const navigateUrl = allowNavigateButton ? String(row.navigate_url || '').trim() || null : null;
+
   return {
     id: row.id,
     name: row.cashout_method_name,
@@ -51,6 +55,10 @@ function mapCashoutMethodRow(row) {
     maxLimit: Number(row.maximum_limit ?? 0),
     terms: row.tnc || '',
     logoUrl: resolveWalletLogoPublicUrl(row.cashout_method_logo),
+    allowNavigateButton,
+    allow_navigate_button: allowNavigateButton,
+    navigateUrl,
+    navigate_url: navigateUrl,
   };
 }
 
@@ -64,6 +72,7 @@ function mapPaymentOptionRow(row) {
 }
 
 async function loadCashoutMethods() {
+  await ensureWalletNavigateSchema();
   const rows = await query(
     `SELECT cm.*
      FROM cashout_methods cm

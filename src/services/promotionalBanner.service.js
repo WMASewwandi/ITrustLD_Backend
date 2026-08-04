@@ -51,8 +51,10 @@ function normalizeAudience(value) {
 }
 
 function formatDateInput(value) {
-  if (!value) return null;
-  const date = value instanceof Date ? value : new Date(value);
+  if (value == null || value === '') return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const date = value instanceof Date ? value : new Date(raw);
   if (Number.isNaN(date.getTime())) return null;
   const pad = (n) => String(n).padStart(2, '0');
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
@@ -96,6 +98,7 @@ export async function ensurePromotionalBannersSchema() {
           active_from TEXT,
           active_to TEXT,
           media_filename TEXT,
+          media_filenames TEXT,
           is_active INTEGER NOT NULL DEFAULT 1,
           sort_order INTEGER NOT NULL DEFAULT 0,
           created_at TEXT,
@@ -116,6 +119,7 @@ export async function ensurePromotionalBannersSchema() {
           active_from DATE NULL,
           active_to DATE NULL,
           media_filename VARCHAR(255) NULL,
+          media_filenames TEXT NULL,
           is_active TINYINT(1) NOT NULL DEFAULT 1,
           sort_order INT UNSIGNED NOT NULL DEFAULT 0,
           created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
@@ -125,13 +129,70 @@ export async function ensurePromotionalBannersSchema() {
     }
   }
 
+  await ensureMediaFilenamesColumn();
+  await sanitizePromotionalBannerDates();
   schemaReady = true;
 }
 
+async function ensureMediaFilenamesColumn() {
+  if (getDbDriver() === 'sqlite') {
+    const cols = await query(`PRAGMA table_info(promotional_banners)`);
+    if (!cols.some((col) => col.name === 'media_filenames')) {
+      await query(`ALTER TABLE promotional_banners ADD COLUMN media_filenames TEXT`);
+    }
+    return;
+  }
+
+  const cols = await query(`SHOW COLUMNS FROM promotional_banners LIKE 'media_filenames'`);
+  if (!cols.length) {
+    await query(
+      `ALTER TABLE promotional_banners ADD COLUMN media_filenames TEXT NULL AFTER media_filename`,
+    );
+  }
+}
+
+function parseStoredMediaFilenames(row) {
+  const raw = row.media_filenames;
+  if (raw != null && raw !== '') {
+    try {
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      if (Array.isArray(parsed)) {
+        return parsed.map((name) => String(name || '').trim()).filter(Boolean);
+      }
+    } catch {
+      // fall through to single media_filename
+    }
+  }
+  const single = String(row.media_filename || '').trim();
+  return single ? [single] : [];
+}
+
+function serializeMediaFilenames(filenames = []) {
+  const names = (Array.isArray(filenames) ? filenames : []).filter(Boolean);
+  return names.length ? JSON.stringify(names) : null;
+}
+
+async function storeMediaFiles(mediaFiles = []) {
+  const files = Array.isArray(mediaFiles) ? mediaFiles.filter(Boolean) : [];
+  const filenames = [];
+  for (const file of files) {
+    const mediaError = validatePromotionalMediaUpload(file);
+    if (mediaError) throw validationError(mediaError);
+    filenames.push(await storePromotionalMedia(file));
+  }
+  return filenames;
+}
+
+async function deleteMediaFilenames(filenames = []) {
+  for (const name of filenames) {
+    if (name) await deletePromotionalMediaFile(name);
+  }
+}
+
 async function mapPromotionalBannerRow(row) {
-  const mediaUrl = await resolvePromotionalMediaPublicUrl(
-    row.media_filename,
-    row.updated_at,
+  const mediaNames = parseStoredMediaFilenames(row);
+  const mediaUrls = await Promise.all(
+    mediaNames.map((name) => resolvePromotionalMediaPublicUrl(name, row.updated_at)),
   );
 
   return {
@@ -149,8 +210,11 @@ async function mapPromotionalBannerRow(row) {
     activeTo: formatDateInput(row.active_to),
     activeFromLabel: formatDisplayDate(row.active_from),
     activeToLabel: formatDisplayDate(row.active_to),
-    mediaName: row.media_filename || '',
-    mediaUrl,
+    mediaName: mediaNames[0] || '',
+    mediaNames,
+    mediaUrl: mediaUrls[0] || null,
+    mediaUrls,
+    mediaCount: mediaNames.length,
     isActive: row.is_active === 1 || row.is_active === true,
     sortOrder: Number(row.sort_order) || 0,
     createdAt: row.created_at,
@@ -158,17 +222,86 @@ async function mapPromotionalBannerRow(row) {
   };
 }
 
+/** One banner row with N images → N slides for that banner's carousel. */
+export function expandBannerToSlides(banner = {}) {
+  const urls =
+    Array.isArray(banner.mediaUrls) && banner.mediaUrls.length
+      ? banner.mediaUrls
+      : banner.mediaUrl
+        ? [banner.mediaUrl]
+        : [null];
+  const names =
+    Array.isArray(banner.mediaNames) && banner.mediaNames.length
+      ? banner.mediaNames
+      : banner.mediaName
+        ? [banner.mediaName]
+        : [];
+
+  return urls.map((mediaUrl, index) => ({
+    ...banner,
+    id: `${banner.id}-${index}`,
+    bannerId: banner.id,
+    mediaUrl,
+    mediaName: names[index] || names[0] || '',
+    mediaUrls: [mediaUrl].filter(Boolean),
+    mediaNames: names[index] ? [names[index]] : names.slice(0, 1),
+  }));
+}
+
+/** Flatten all banners into one slide list (legacy). Prefer one slider per banner on the site. */
+export function expandPromotionalSliderSlides(banners = []) {
+  const slides = [];
+  for (const banner of banners) {
+    slides.push(...expandBannerToSlides(banner));
+  }
+  return slides;
+}
+
 function todaySqlExpression() {
   return getDbDriver() === 'sqlite' ? "date('now')" : 'CURDATE()';
 }
 
-function buildActiveConditions(audienceKey, displayTypeKey) {
+/** Banners must have active_from + active_to and today must fall inside that range. */
+function activeDateSqlConditions() {
   const today = todaySqlExpression();
-  const conditions = [
-    'is_active = 1',
-    `(active_from IS NULL OR active_from = '' OR date(active_from) <= ${today})`,
-    `(active_to IS NULL OR active_to = '' OR date(active_to) >= ${today})`,
+  if (getDbDriver() === 'sqlite') {
+    return [
+      `active_from IS NOT NULL AND active_from != ''`,
+      `active_to IS NOT NULL AND active_to != ''`,
+      `date(active_from) <= date('now')`,
+      `date(active_to) >= date('now')`,
+    ];
+  }
+  return [
+    'active_from IS NOT NULL',
+    'active_to IS NOT NULL',
+    `active_from <= ${today}`,
+    `active_to >= ${today}`,
   ];
+}
+
+async function sanitizePromotionalBannerDates() {
+  if (getDbDriver() === 'sqlite') return;
+  try {
+    await query(
+      `UPDATE promotional_banners
+       SET active_from = NULL
+       WHERE active_from IS NOT NULL
+         AND (CAST(active_from AS CHAR) = '' OR active_from < '1000-01-01')`,
+    );
+    await query(
+      `UPDATE promotional_banners
+       SET active_to = NULL
+       WHERE active_to IS NOT NULL
+         AND (CAST(active_to AS CHAR) = '' OR active_to < '1000-01-01')`,
+    );
+  } catch (error) {
+    console.warn('[promotional-banners:sanitize-dates]', error.message);
+  }
+}
+
+function buildActiveConditions(audienceKey, displayTypeKey) {
+  const conditions = ['is_active = 1', ...activeDateSqlConditions()];
   const values = [];
 
   if (displayTypeKey) {
@@ -192,12 +325,7 @@ function resolveAudiencesForUserType(userType = 'normal') {
 }
 
 function buildActiveConditionsForAudiences(audiences, displayTypeKey) {
-  const today = todaySqlExpression();
-  const conditions = [
-    'is_active = 1',
-    `(active_from IS NULL OR active_from = '' OR date(active_from) <= ${today})`,
-    `(active_to IS NULL OR active_to = '' OR date(active_to) >= ${today})`,
-  ];
+  const conditions = ['is_active = 1', ...activeDateSqlConditions()];
   const values = [];
 
   if (displayTypeKey) {
@@ -306,22 +434,27 @@ function parseBannerPayload(body = {}) {
   };
 }
 
-export async function createPromotionalBanner(body = {}, mediaFile = null) {
+export async function createPromotionalBanner(body = {}, mediaFileOrFiles = null) {
   await ensurePromotionalBannersSchema();
   const payload = parseBannerPayload(body);
+  const files = Array.isArray(mediaFileOrFiles)
+    ? mediaFileOrFiles.filter(Boolean)
+    : mediaFileOrFiles
+      ? [mediaFileOrFiles]
+      : [];
 
-  let mediaFilename = null;
-  if (mediaFile) {
-    const mediaError = validatePromotionalMediaUpload(mediaFile);
-    if (mediaError) throw validationError(mediaError);
-    mediaFilename = await storePromotionalMedia(mediaFile);
+  if (files.length > 1 && payload.displayType !== 'slider') {
+    throw validationError('Upload one image for static banners, or choose Slider for multiple images.');
   }
+
+  const mediaNames = await storeMediaFiles(files);
+  const primaryMedia = mediaNames[0] || null;
 
   const result = await query(
     `INSERT INTO promotional_banners (
       title, description, color, cta_link, cta_label, display_type, audience,
-      active_from, active_to, media_filename, is_active, sort_order, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      active_from, active_to, media_filename, media_filenames, is_active, sort_order, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
     [
       payload.title,
       payload.description,
@@ -332,7 +465,8 @@ export async function createPromotionalBanner(body = {}, mediaFile = null) {
       payload.audience,
       payload.activeFrom,
       payload.activeTo,
-      mediaFilename,
+      primaryMedia,
+      serializeMediaFilenames(mediaNames),
       payload.isActive,
       payload.sortOrder,
     ],
@@ -342,7 +476,12 @@ export async function createPromotionalBanner(body = {}, mediaFile = null) {
   return getPromotionalBannerById(id);
 }
 
-export async function updatePromotionalBanner(id, body = {}, mediaFile = null) {
+/** @deprecated Use createPromotionalBanner with multiple files — kept for route compatibility. */
+export async function createPromotionalBanners(body = {}, mediaFiles = []) {
+  return createPromotionalBanner(body, mediaFiles);
+}
+
+export async function updatePromotionalBanner(id, body = {}, mediaFileOrFiles = null) {
   await ensurePromotionalBannersSchema();
   const { banner: existing } = await getPromotionalBannerById(id);
   const payload = parseBannerPayload({
@@ -359,27 +498,38 @@ export async function updatePromotionalBanner(id, body = {}, mediaFile = null) {
     sort_order: body.sort_order ?? body.sortOrder ?? existing.sortOrder,
   });
 
-  let mediaFilename = existing.mediaName || null;
-  if (mediaFile) {
-    const mediaError = validatePromotionalMediaUpload(mediaFile);
-    if (mediaError) throw validationError(mediaError);
-    if (mediaFilename) {
-      await deletePromotionalMediaFile(mediaFilename);
-    }
-    mediaFilename = await storePromotionalMedia(mediaFile);
+  const files = Array.isArray(mediaFileOrFiles)
+    ? mediaFileOrFiles.filter(Boolean)
+    : mediaFileOrFiles
+      ? [mediaFileOrFiles]
+      : [];
+
+  if (files.length > 1 && payload.displayType !== 'slider') {
+    throw validationError('Upload one image for static banners, or choose Slider for multiple images.');
+  }
+
+  let mediaNames = Array.isArray(existing.mediaNames) ? [...existing.mediaNames] : [];
+  if (!mediaNames.length && existing.mediaName) mediaNames = [existing.mediaName];
+
+  if (files.length) {
+    const uploaded = await storeMediaFiles(files);
+    await deleteMediaFilenames(mediaNames);
+    mediaNames = uploaded;
   }
 
   const removeMedia = ['1', 'true', true].includes(body.remove_media ?? body.removeMedia ?? false);
-  if (removeMedia && mediaFilename) {
-    await deletePromotionalMediaFile(mediaFilename);
-    mediaFilename = null;
+  if (removeMedia) {
+    await deleteMediaFilenames(mediaNames);
+    mediaNames = [];
   }
+
+  const primaryMedia = mediaNames[0] || null;
 
   await query(
     `UPDATE promotional_banners
      SET title = ?, description = ?, color = ?, cta_link = ?, cta_label = ?,
          display_type = ?, audience = ?, active_from = ?, active_to = ?,
-         media_filename = ?, is_active = ?, sort_order = ?, updated_at = CURRENT_TIMESTAMP
+         media_filename = ?, media_filenames = ?, is_active = ?, sort_order = ?, updated_at = CURRENT_TIMESTAMP
      WHERE id = ?`,
     [
       payload.title,
@@ -391,7 +541,8 @@ export async function updatePromotionalBanner(id, body = {}, mediaFile = null) {
       payload.audience,
       payload.activeFrom,
       payload.activeTo,
-      mediaFilename,
+      primaryMedia,
+      serializeMediaFilenames(mediaNames),
       payload.isActive,
       payload.sortOrder,
       Number(id),
@@ -404,11 +555,70 @@ export async function updatePromotionalBanner(id, body = {}, mediaFile = null) {
 export async function deletePromotionalBanner(id) {
   await ensurePromotionalBannersSchema();
   const { banner } = await getPromotionalBannerById(id);
-  if (banner.mediaName) {
-    await deletePromotionalMediaFile(banner.mediaName);
-  }
+  await deleteMediaFilenames(
+    Array.isArray(banner.mediaNames) && banner.mediaNames.length
+      ? banner.mediaNames
+      : banner.mediaName
+        ? [banner.mediaName]
+        : [],
+  );
   await query(`DELETE FROM promotional_banners WHERE id = ?`, [Number(id)]);
   return { ok: true, message: 'Promotional banner deleted.' };
+}
+
+function sliderContentKey(banner = {}) {
+  return [
+    String(banner.title || '').trim().toLowerCase(),
+    String(banner.description || '').trim().toLowerCase(),
+    String(banner.audienceKey || '').trim().toLowerCase(),
+    String(banner.activeFrom || '').slice(0, 10),
+    String(banner.activeTo || '').slice(0, 10),
+    String(banner.color || '').trim().toLowerCase(),
+    String(banner.ctaLink || '').trim(),
+  ].join('|');
+}
+
+/** Merge legacy one-image-per-row slider banners into one promotion with many images. */
+export function consolidateSliderBanners(banners = []) {
+  const groups = new Map();
+
+  for (const banner of banners) {
+    if (!banner) continue;
+    const key = sliderContentKey(banner);
+    if (!groups.has(key)) {
+      groups.set(key, {
+        ...banner,
+        mediaUrls: Array.isArray(banner.mediaUrls) ? [...banner.mediaUrls.filter(Boolean)] : banner.mediaUrl ? [banner.mediaUrl] : [],
+        mediaNames: Array.isArray(banner.mediaNames) ? [...banner.mediaNames] : banner.mediaName ? [banner.mediaName] : [],
+      });
+      continue;
+    }
+
+    const group = groups.get(key);
+    const urls = Array.isArray(banner.mediaUrls) && banner.mediaUrls.length
+      ? banner.mediaUrls.filter(Boolean)
+      : banner.mediaUrl
+        ? [banner.mediaUrl]
+        : [];
+    const names = Array.isArray(banner.mediaNames) && banner.mediaNames.length
+      ? banner.mediaNames
+      : banner.mediaName
+        ? [banner.mediaName]
+        : [];
+
+    urls.forEach((url, index) => {
+      if (!url || group.mediaUrls.includes(url)) return;
+      group.mediaUrls.push(url);
+      group.mediaNames.push(names[index] || '');
+    });
+  }
+
+  return Array.from(groups.values()).map((banner) => ({
+    ...banner,
+    mediaUrl: banner.mediaUrls[0] || null,
+    mediaName: banner.mediaNames[0] || '',
+    mediaCount: banner.mediaUrls.length,
+  }));
 }
 
 export async function getDashboardPromotionalContent(userType = 'normal') {
@@ -418,9 +628,12 @@ export async function getDashboardPromotionalContent(userType = 'normal') {
     listActivePromotionalBannersForUserType(userType, { displayType: 'all' }),
   ]);
 
+  const consolidatedSliders = consolidateSliderBanners(sliderBanners);
+
   return {
     promo_banner: staticBanners[0] || null,
-    promotional_sliders: sliderBanners,
+    promotional_slider_banners: consolidatedSliders,
+    promotional_sliders: consolidatedSliders,
     promotional_banners: allBanners,
   };
 }

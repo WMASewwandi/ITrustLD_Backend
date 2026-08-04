@@ -1,18 +1,14 @@
 import { Router } from 'express';
-import { getUserCountDisplay } from '../../services/userCountDisplay.service.js';
+import { getPublicCommunityStats } from '../../services/communityStats.service.js';
 
 export const publicCommunityStatsRouter = Router();
 
 publicCommunityStatsRouter.get('/', async (_req, res, next) => {
   try {
-    const userCount = await getUserCountDisplay();
+    const stats = await getPublicCommunityStats();
     res.json({
       ok: true,
-      members: {
-        baseCount: userCount.baseCount,
-        liveCount: userCount.liveCount,
-        displayedCount: userCount.displayedCount,
-      },
+      ...stats,
     });
   } catch (error) {
     next(error);

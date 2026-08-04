@@ -4,6 +4,7 @@ import {
   SYSTEM_ACTIVITIES,
   SYSTEM_ACTIVITY_CATEGORIES,
 } from '../constants/systemActivityCatalog.js';
+import { nowSqlDateTime } from '../utils/slTime.js';
 import { syncRolePermissions, normalizeToActivityIdentifier } from './role.service.js';
 
 const GUARD_NAME = 'web';
@@ -74,7 +75,7 @@ async function ensurePermissionRecord(activityIdentifier) {
   );
   if (rows[0]) return;
 
-  const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  const now = nowSqlDateTime();
   await query(
     `INSERT INTO permissions (name, guard_name, created_at, updated_at)
      VALUES (?, ?, ?, ?)`,

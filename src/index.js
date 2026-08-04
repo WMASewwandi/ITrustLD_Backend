@@ -1,12 +1,16 @@
 import { createApp } from './app.js';
 import { closeDatabase, connectDatabase } from './config/database.js';
 import { env } from './config/env.js';
+import { warmAdminDashboardCache } from './services/adminDashboard.service.js';
 import { ensureSystemActivitiesCatalog } from './services/ensureSystemActivities.service.js';
 import { startShiftRolloverScheduler } from './services/shiftAssignment.service.js';
 
 async function main() {
   await connectDatabase();
   await ensureSystemActivitiesCatalog();
+
+  // Warm default dashboard before accepting traffic so the first admin load is fast.
+  await warmAdminDashboardCache();
 
   const app = createApp();
   startShiftRolloverScheduler();
