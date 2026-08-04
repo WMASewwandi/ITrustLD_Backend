@@ -15,9 +15,13 @@ adminDashboardRouter.use(requireAdminAuth);
 adminDashboardRouter.get(
   '/',
   requirePermission('view_admin_dashboard'),
-  async (_req, res, next) => {
+  async (req, res, next) => {
     try {
-      const data = await getAdminDashboard();
+      const data = await getAdminDashboard({
+        filter: req.query.filter,
+        fromDate: req.query.from || req.query.from_date || req.query.fromDate,
+        toDate: req.query.to || req.query.to_date || req.query.toDate,
+      });
       res.json({ ok: true, ...data });
     } catch (error) {
       next(error);

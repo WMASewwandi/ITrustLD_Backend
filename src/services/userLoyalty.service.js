@@ -409,12 +409,18 @@ function resolveFilterDates(filterTemplate, fromDate, toDate) {
 
 export async function getUserLoyaltySummary(userId) {
   const accountHolder = await assertLoyaltyAccess(userId);
-  const totals = await getPointTotals(userId);
-  const earnedForYear = await getEarnedForYear(userId);
   const isPartner = accountHolder.is_patner === 'YES';
 
-  await updateUserPointLevel(userId);
-  const pointLevelDetails = await getUserPointLevel(userId);
+  // Refresh level in the background so SMTP/SMS or writes never stall this GET.
+  void updateUserPointLevel(userId).catch((error) => {
+    console.error('[loyalty-summary-level-update]', error.message);
+  });
+
+  const [totals, earnedForYear, pointLevelDetails] = await Promise.all([
+    getPointTotals(userId),
+    getEarnedForYear(userId),
+    getUserPointLevel(userId),
+  ]);
 
   let level = 1;
   let percentage = 0;
@@ -439,17 +445,21 @@ export async function getUserLoyaltySummary(userId) {
   const usdPerBlock = isPartner ? PARTNER_USD : STANDARD_USD;
   const affiliateCode = accountHolder.affiliate_code || null;
 
-  let partnerProgress = null;
-  if (isPartner) {
-    const [pointsBreakdown, levelOverviewRows] = await Promise.all([
-      getPointsBreakdownForYear(userId),
-      getPartnerLevelOverviewRows(userId, level, earnedForYear),
-    ]);
-    partnerProgress = {
-      ...buildPartnerProgress(level, earnedForYear, levelOverviewRows),
-      points_breakdown: pointsBreakdown,
-    };
-  }
+  const partnerProgressPromise = isPartner
+    ? Promise.all([
+        getPointsBreakdownForYear(userId),
+        getPartnerLevelOverviewRows(userId, level, earnedForYear),
+      ]).then(([pointsBreakdown, levelOverviewRows]) => ({
+        ...buildPartnerProgress(level, earnedForYear, levelOverviewRows),
+        points_breakdown: pointsBreakdown,
+      }))
+    : Promise.resolve(null);
+
+  const [partnerProgress, bonusSummary, clientBonusSummary] = await Promise.all([
+    partnerProgressPromise,
+    getBonusSummaryForUser(userId, isPartner, totals.remaining),
+    getClientBonusSummaryForUser(userId, isPartner),
+  ]);
 
   return {
     point_summary: {
@@ -466,8 +476,8 @@ export async function getUserLoyaltySummary(userId) {
     has_affiliate_link: Boolean(affiliateCode),
     partner_tier: getLevelDisplayName(level),
     partner_progress: partnerProgress,
-    bonus_summary: await getBonusSummaryForUser(userId, isPartner, totals.remaining),
-    client_bonus_summary: await getClientBonusSummaryForUser(userId, isPartner),
+    bonus_summary: bonusSummary,
+    client_bonus_summary: clientBonusSummary,
     rate_label: buildRateLabel(isPartner),
     usd_value_of_earned: Number(((totals.earned / POINT_DIVIDER) * usdPerBlock).toFixed(2)),
     minimum_points: MIN_POINTS,

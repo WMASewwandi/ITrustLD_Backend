@@ -1,4 +1,5 @@
 import { query } from '../config/database.js';
+import { formatTimestampSl } from '../utils/slTime.js';
 
 const VALID_IDENTIFIERS = [
   'POINT-COLLECTION',
@@ -8,9 +9,11 @@ const VALID_IDENTIFIERS = [
   'SILVER-BONUS',
   'GOLD-BONUS',
   'DIAMOND-BONUS',
+  'VIP-BONUS',
+  'VVIP-BONUS',
 ];
 
-const VALID_LOYALTY_LEVELS = ['SILVER', 'GOLD', 'DIAMOND'];
+const VALID_LOYALTY_LEVELS = ['SILVER', 'GOLD', 'DIAMOND', 'VIP', 'VVIP'];
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -25,15 +28,9 @@ function normalizeAudience(audience) {
 }
 
 function formatYmdHis(value) {
-  const date = value ? new Date(value) : null;
-  if (!date || Number.isNaN(date.getTime())) return '—';
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  const hh = String(date.getHours()).padStart(2, '0');
-  const mm = String(date.getMinutes()).padStart(2, '0');
-  const ss = String(date.getSeconds()).padStart(2, '0');
-  return `${y}-${m}-${d} ${hh}:${mm}:${ss}`;
+  const formatted = formatTimestampSl(value);
+  if (!formatted) return '—';
+  return formatted;
 }
 
 function mapPointCollectionRow(row) {
@@ -159,22 +156,24 @@ export async function getLoyaltyManagementData(audience) {
     const levelRows = await query(
       `SELECT id, display_id, client_bonus_amount, client_count, is_active, loyalty_level, is_deleted, admin_user_id, updated_at
        FROM loyalty_management_levels
-       WHERE loyalty_level IN ('SILVER', 'GOLD', 'DIAMOND')
+       WHERE loyalty_level IN ('SILVER', 'GOLD', 'DIAMOND', 'VIP', 'VVIP')
          AND (is_deleted = 0 OR is_deleted IS NULL OR is_deleted = FALSE)
-       ORDER BY loyalty_level ASC, display_id DESC`,
+       ORDER BY FIELD(loyalty_level, 'SILVER', 'GOLD', 'DIAMOND', 'VIP', 'VVIP'), display_id DESC`,
     );
 
     loyaltyLevels = {
       SILVER: [],
       GOLD: [],
       DIAMOND: [],
+      VIP: [],
+      VVIP: [],
     };
 
     for (const row of levelRows) {
-      const key = row.loyalty_level;
+      const key = String(row.loyalty_level || '').trim().toUpperCase();
       if (!loyaltyLevels[key]) continue;
       if (loyaltyLevels[key].length >= 5) continue;
-      loyaltyLevels[key].push(mapLevelRow(row));
+      loyaltyLevels[key].push(mapLevelRow({ ...row, loyalty_level: key }));
     }
   }
 
@@ -188,6 +187,8 @@ export async function getLoyaltyManagementData(audience) {
       silver_bonus: masterConfigs['SILVER-BONUS'] || null,
       gold_bonus: masterConfigs['GOLD-BONUS'] || null,
       diamond_bonus: masterConfigs['DIAMOND-BONUS'] || null,
+      vip_bonus: masterConfigs['VIP-BONUS'] || null,
+      vvip_bonus: masterConfigs['VVIP-BONUS'] || null,
     },
     point_collections: pointRows.map(mapPointCollectionRow),
     bonuses: bonusRows.map(mapBonusRow),

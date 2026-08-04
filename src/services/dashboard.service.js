@@ -176,6 +176,7 @@ export async function getUserDashboard(userId) {
     recent_transactions: recentTransactions,
     blog_posts: blogPosts,
     promo_banner: promotionalContent.promo_banner,
+    promotional_slider_banners: promotionalContent.promotional_slider_banners,
     promotional_sliders: promotionalContent.promotional_sliders,
     promotional_banners: promotionalContent.promotional_banners,
     notifications,

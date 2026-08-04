@@ -3,6 +3,7 @@ import path from 'node:path';
 import mysql from 'mysql2/promise';
 import Database from 'better-sqlite3';
 import { env } from './env.js';
+import { SL_MYSQL_OFFSET } from '../utils/slTime.js';
 
 /** @type {import('mysql2/promise').Pool | null} */
 let mysqlPool = null;
@@ -35,6 +36,8 @@ export async function connectDatabase() {
     return { driver: 'sqlite' };
   }
 
+  // Store and read naive DATETIMEs as Sri Lanka wall-clock (matches Laravel business time).
+  // Session time_zone makes NOW()/CURRENT_TIMESTAMP return SL time on every connection.
   mysqlPool = mysql.createPool({
     host: env.db.host,
     port: env.db.port,
@@ -44,12 +47,20 @@ export async function connectDatabase() {
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0,
-    timezone: 'Z',
+    timezone: SL_MYSQL_OFFSET,
+  });
+
+  mysqlPool.on('connection', (connection) => {
+    connection.query(`SET time_zone = '${SL_MYSQL_OFFSET}'`);
   });
 
   const connection = await mysqlPool.getConnection();
-  await connection.ping();
-  connection.release();
+  try {
+    await connection.query(`SET time_zone = '${SL_MYSQL_OFFSET}'`);
+    await connection.ping();
+  } finally {
+    connection.release();
+  }
 
   return { driver: 'mysql' };
 }
@@ -77,7 +88,9 @@ export async function query(sql, params = []) {
     throw new Error('Database not connected. Call connectDatabase() first.');
   }
 
-  const [rows] = await mysqlPool.execute(sql, params);
+  // pool.query (not execute) avoids MySQL 8.0.22+ ER_WRONG_ARGUMENTS when
+  // LIMIT/OFFSET placeholders are sent as JS numbers (mysql2 maps them to DOUBLE).
+  const [rows] = await mysqlPool.query(sql, params);
   return rows;
 }
 

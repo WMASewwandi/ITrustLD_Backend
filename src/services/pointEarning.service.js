@@ -144,24 +144,23 @@ async function notifyLevelUpgrade(userId, levelId, loyaltyPoints) {
   const subject = `Congratulations! You've unlocked ${levelName} Trust Level!`;
   const smsMessage = `Congratulations! You've unlocked ${levelName} Trust Level by reaching ${Math.round(loyaltyPoints).toLocaleString()} Loyalty Points!`;
 
-  try {
-    await sendEmailAndSms({
-      email: account.email,
-      subject,
-      html: loyaltyLevelUpgradeEmailHtml({
-        levelName,
-        loyaltyPoints,
-        featureUrl,
-      }),
-      text: smsMessage,
-      smsMessage,
-      msisdn: account.mobile_number,
-      userId,
-      smsType: 'LOYALTY_LEVEL_UPGRADE',
-    });
-  } catch (error) {
+  // Never block the request path on SMTP/SMS latency.
+  void sendEmailAndSms({
+    email: account.email,
+    subject,
+    html: loyaltyLevelUpgradeEmailHtml({
+      levelName,
+      loyaltyPoints,
+      featureUrl,
+    }),
+    text: smsMessage,
+    smsMessage,
+    msisdn: account.mobile_number,
+    userId,
+    smsType: 'LOYALTY_LEVEL_UPGRADE',
+  }).catch((error) => {
     console.error('[loyalty-level-upgrade-notify]', error.message);
-  }
+  });
 }
 
 export async function updateUserPointLevel(userId) {

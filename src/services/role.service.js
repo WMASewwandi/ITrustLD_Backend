@@ -4,6 +4,7 @@ import {
   sortActivitiesForDisplay,
   sortCategoriesForDisplay,
 } from '../constants/systemActivityCatalog.js';
+import { nowSqlDateTime } from '../utils/slTime.js';
 
 const GUARD_NAME = 'web';
 
@@ -48,7 +49,7 @@ async function resolvePermissionId(activityIdentifier, permissionMap) {
     if (id) return id;
   }
 
-  const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  const now = nowSqlDateTime();
   const result = await query(
     `INSERT INTO permissions (name, guard_name, created_at, updated_at)
      VALUES (?, ?, ?, ?)`,
@@ -221,7 +222,7 @@ export async function createRole({ name }) {
     throw error;
   }
 
-  const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  const now = nowSqlDateTime();
   const result = await query(
     `INSERT INTO roles (name, guard_name, created_at, updated_at)
      VALUES (?, ?, ?, ?)`,

@@ -29,22 +29,73 @@ function mapScammerRow(row) {
   };
 }
 
-export async function batchScammerCheck(platformIds = []) {
-  const ids = [...new Set(platformIds.map((id) => String(id || '').trim()).filter(Boolean))];
-  if (!ids.length) return {};
+/**
+ * Batch-check scammer flags by platform ID and/or user ID.
+ * Accepts either a list of platform ID strings (legacy) or
+ * `{ platformIds, userIds }`.
+ *
+ * Returns `{ byPlatform, byUser }` maps used with `isScammerMatch`.
+ */
+export async function batchScammerCheck(platformIdsOrOptions = []) {
+  const options = Array.isArray(platformIdsOrOptions)
+    ? { platformIds: platformIdsOrOptions, userIds: [] }
+    : platformIdsOrOptions || {};
+
+  const platformIds = [
+    ...new Set((options.platformIds || []).map((id) => String(id || '').trim()).filter(Boolean)),
+  ];
+  const userIds = [
+    ...new Set(
+      (options.userIds || [])
+        .map((id) => Number(id))
+        .filter((id) => Number.isInteger(id) && id > 0),
+    ),
+  ];
+
+  const byPlatform = {};
+  const byUser = {};
+
+  if (!platformIds.length && !userIds.length) {
+    return { byPlatform, byUser };
+  }
+
+  const conditions = [];
+  const values = [];
+
+  if (platformIds.length) {
+    conditions.push(`platform_id IN (${platformIds.map(() => '?').join(', ')})`);
+    values.push(...platformIds);
+  }
+  if (userIds.length) {
+    conditions.push(`user_id IN (${userIds.map(() => '?').join(', ')})`);
+    values.push(...userIds);
+  }
 
   const rows = await query(
-    `SELECT platform_id
+    `SELECT platform_id, user_id
      FROM scammer_transactions
-     WHERE platform_id IN (${ids.map(() => '?').join(', ')})`,
-    ids,
+     WHERE ${conditions.join(' OR ')}`,
+    values,
   );
 
-  const flags = {};
   for (const row of rows) {
-    if (row.platform_id) flags[row.platform_id] = true;
+    if (row.platform_id) byPlatform[String(row.platform_id)] = true;
+    if (row.user_id != null && Number(row.user_id) > 0) {
+      byUser[String(row.user_id)] = true;
+    }
   }
-  return flags;
+
+  return { byPlatform, byUser };
+}
+
+/** True if this transaction's platform ID or user ID is flagged as a scammer. */
+export function isScammerMatch(flags, { platformId, userId } = {}) {
+  if (!flags) return false;
+  const platformKey = String(platformId || '').trim();
+  if (platformKey && flags.byPlatform?.[platformKey]) return true;
+  const userKey = userId != null && String(userId).trim() !== '' ? String(userId) : '';
+  if (userKey && flags.byUser?.[userKey]) return true;
+  return false;
 }
 
 export async function listScammers(params = {}) {

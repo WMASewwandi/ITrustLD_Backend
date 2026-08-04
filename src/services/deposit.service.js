@@ -1,6 +1,6 @@
 import { query } from '../config/database.js';
 import { buildDepositProofApiUrl } from './depositProofStorage.service.js';
-import { batchScammerCheck } from './scammer.service.js';
+import { batchScammerCheck, isScammerMatch } from './scammer.service.js';
 import {
   formatTimestampSl,
   getBusinessDayStart,
@@ -473,7 +473,10 @@ export async function listDepositsForAdmin(auth, params = {}) {
         assignedToUserId,
       );
 
-  const scammerFlags = await batchScammerCheck(result.rows.map((row) => row.topup_account_id));
+  const scammerFlags = await batchScammerCheck({
+    platformIds: result.rows.map((row) => row.topup_account_id),
+    userIds: result.rows.map((row) => row.user_id),
+  });
   const similarCounts = await batchSimilarDeposits(
     result.rows,
     statusForTotals === 'All' ? 'Pending' : statusForTotals,
@@ -483,7 +486,10 @@ export async function listDepositsForAdmin(auth, params = {}) {
   return {
     deposits: result.rows.map((row) => ({
       ...mapDepositRow(row, result.adminUsers, result.assignedUsers, similarCounts),
-      isScammer: Boolean(scammerFlags[row.topup_account_id]),
+      isScammer: isScammerMatch(scammerFlags, {
+        platformId: row.topup_account_id,
+        userId: row.user_id,
+      }),
     })),
     totals,
     pagination: result.pagination,

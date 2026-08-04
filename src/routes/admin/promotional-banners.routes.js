@@ -23,6 +23,47 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 },
 });
 
+const parseBannerMediaUpload = upload.fields([{ name: 'media', maxCount: 12 }]);
+
+function getUploadedMedia(req) {
+  const media = req.files?.media;
+  return Array.isArray(media) ? media : [];
+}
+
+function handleMulterError(error, next) {
+  if (error instanceof multer.MulterError) {
+    const limitError = new Error(
+      error.code === 'LIMIT_FILE_SIZE'
+        ? 'Media file must not exceed 10MB.'
+        : error.code === 'LIMIT_UNEXPECTED_FILE'
+          ? 'Only the "media" field is accepted for banner images (up to 12 per slider).'
+          : error.code === 'LIMIT_FILE_COUNT' || error.code === 'LIMIT_PART_COUNT'
+            ? 'You can upload up to 12 images per slider.'
+            : error.message,
+    );
+    limitError.status = 422;
+    next(limitError);
+    return;
+  }
+  next(error);
+}
+
+function withBannerMediaUpload(handler) {
+  return (req, res, next) => {
+    parseBannerMediaUpload(req, res, async (err) => {
+      if (err) {
+        handleMulterError(err, next);
+        return;
+      }
+      try {
+        await handler(req, res, next);
+      } catch (error) {
+        next(error);
+      }
+    });
+  };
+}
+
 adminPromotionalBannersRouter.use(requireAdminAuth);
 
 adminPromotionalBannersRouter.get(
@@ -41,49 +82,21 @@ adminPromotionalBannersRouter.get(
 adminPromotionalBannersRouter.post(
   '/',
   requirePermission('manage_blog_posts'),
-  upload.single('media'),
-  async (req, res, next) => {
-    try {
-      const data = await createPromotionalBanner(req.body ?? {}, req.file ?? null);
-      res.status(201).json(data);
-    } catch (error) {
-      if (error instanceof multer.MulterError) {
-        const limitError = new Error(
-          error.code === 'LIMIT_FILE_SIZE'
-            ? 'Media file must not exceed 10MB.'
-            : error.message,
-        );
-        limitError.status = 422;
-        next(limitError);
-        return;
-      }
-      next(error);
-    }
-  },
+  withBannerMediaUpload(async (req, res) => {
+    const files = getUploadedMedia(req);
+    const data = await createPromotionalBanner(req.body ?? {}, files);
+    res.status(201).json(data);
+  }),
 );
 
 adminPromotionalBannersRouter.post(
   '/:id/update',
   requirePermission('manage_blog_posts'),
-  upload.single('media'),
-  async (req, res, next) => {
-    try {
-      const data = await updatePromotionalBanner(req.params.id, req.body ?? {}, req.file ?? null);
-      res.json(data);
-    } catch (error) {
-      if (error instanceof multer.MulterError) {
-        const limitError = new Error(
-          error.code === 'LIMIT_FILE_SIZE'
-            ? 'Media file must not exceed 10MB.'
-            : error.message,
-        );
-        limitError.status = 422;
-        next(limitError);
-        return;
-      }
-      next(error);
-    }
-  },
+  withBannerMediaUpload(async (req, res) => {
+    const files = getUploadedMedia(req);
+    const data = await updatePromotionalBanner(req.params.id, req.body ?? {}, files);
+    res.json(data);
+  }),
 );
 
 adminPromotionalBannersRouter.post(

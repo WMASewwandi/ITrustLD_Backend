@@ -2,7 +2,9 @@ import { env } from '../config/env.js';
 
 export const SL_TIMEZONE = env.shiftTimezone || 'Asia/Colombo';
 export const SHIFT_TIMEZONE = SL_TIMEZONE;
-const SL_OFFSET = '+05:30';
+/** MySQL session / mysql2 offset for Asia/Colombo wall-clock storage. */
+export const SL_MYSQL_OFFSET = '+05:30';
+const SL_OFFSET = SL_MYSQL_OFFSET;
 const BUSINESS_DAY_START_MINUTES = 10; // 0:10 AM
 
 function pad2(n) {
@@ -60,6 +62,20 @@ export function parseDbDateTime(value) {
   const normalized = raw.includes('T') ? raw : raw.replace(' ', 'T');
   const parsed = new Date(`${normalized}${SL_OFFSET}`);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/**
+ * Parse MySQL DATETIME values for this app.
+ * Pool uses `timezone: '+05:30'` and session `time_zone`, so mysql2 Date
+ * values are already correct instants; naive strings are treated as SL.
+ */
+export function parseMysqlWallClockDateTime(value) {
+  return parseDbDateTime(value);
+}
+
+/** Format a MySQL DATETIME as SL `YYYY-MM-DD HH:mm:ss`. */
+export function formatMysqlTimestampSl(value) {
+  return formatTimestampSl(value);
 }
 
 export function normalizeShiftDateKey(value) {
