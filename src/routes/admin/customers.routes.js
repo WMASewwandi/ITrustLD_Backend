@@ -1,5 +1,4 @@
 import { Router } from 'express';
-import fs from 'fs/promises';
 import multer from 'multer';
 import { requireAdminAuth } from '../../middleware/requireAdminAuth.js';
 import { requirePermission } from '../../middleware/requirePermission.js';
@@ -18,7 +17,7 @@ import {
 } from '../../services/customerMessaging.service.js';
 import {
   guessDocumentMimeType,
-  resolveDocumentPath,
+  readDocumentBuffer,
 } from '../../services/documentStorage.service.js';
 
 export const adminCustomersRouter = Router();
@@ -57,17 +56,10 @@ adminCustomersRouter.get(
   requirePermission('read_customer_accounts_data'),
   async (req, res, next) => {
     try {
-      const filePath = resolveDocumentPath(req.params.filename);
-      await fs.access(filePath);
+      const buffer = await readDocumentBuffer(req.params.filename);
       res.type(guessDocumentMimeType(req.params.filename));
-      res.sendFile(filePath);
+      res.send(buffer);
     } catch (error) {
-      if (error.code === 'ENOENT') {
-        const notFound = new Error('Document not found.');
-        notFound.status = 404;
-        next(notFound);
-        return;
-      }
       next(error);
     }
   },
