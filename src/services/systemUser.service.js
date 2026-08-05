@@ -1,10 +1,55 @@
-import { query } from '../config/database.js';
+import { getDbDriver, query } from '../config/database.js';
 import { LARAVEL_USER_MODEL } from '../constants/adminRoles.js';
 import { nowSqlDateTime } from '../utils/slTime.js';
 import { formatRoleDisplayName } from './role.service.js';
 import { hashLaravelPassword } from '../utils/laravelPassword.js';
 
 const GUARD_NAME = 'web';
+const MAX_PENDING_SHOW_COUNT = 1000;
+
+let pendingShowCountColumnReady = false;
+
+async function columnExists(table, column) {
+  if (getDbDriver() === 'sqlite') {
+    const rows = await query(`PRAGMA table_info(${table})`);
+    return rows.some((row) => String(row.name).toLowerCase() === String(column).toLowerCase());
+  }
+  const rows = await query(`SHOW COLUMNS FROM ${table} LIKE ?`, [column]);
+  return rows.length > 0;
+}
+
+export async function ensurePendingShowCountColumn() {
+  if (pendingShowCountColumnReady) return;
+  if (!(await columnExists('users', 'pending_show_count'))) {
+    if (getDbDriver() === 'sqlite') {
+      await query(`ALTER TABLE users ADD COLUMN pending_show_count INTEGER NULL`);
+    } else {
+      try {
+        await query(
+          `ALTER TABLE users ADD COLUMN pending_show_count INT UNSIGNED NULL AFTER shift_end_time`,
+        );
+      } catch {
+        await query(`ALTER TABLE users ADD COLUMN pending_show_count INT UNSIGNED NULL`);
+      }
+    }
+  }
+  pendingShowCountColumnReady = true;
+}
+
+export function parsePendingShowCount(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.min(MAX_PENDING_SHOW_COUNT, Math.floor(n));
+}
+
+/** Positive pending load cap for executives, or null = load all (normal pagination). */
+export async function getUserPendingShowCount(userId) {
+  if (!userId) return null;
+  await ensurePendingShowCountColumn();
+  const rows = await query(`SELECT pending_show_count FROM users WHERE id = ? LIMIT 1`, [userId]);
+  return parsePendingShowCount(rows[0]?.pending_show_count);
+}
 
 function formatShift(shift) {
   if (!shift) return null;
@@ -37,6 +82,7 @@ function mapSystemUser(user, roles) {
     is_active: user.is_active === undefined ? true : Boolean(user.is_active),
     is_online: Boolean(user.is_online),
     shift: formatShift(user.shift),
+    pending_show_count: parsePendingShowCount(user.pending_show_count),
     created_at: user.created_at,
     roles,
     role: primaryRole,
@@ -77,8 +123,9 @@ export async function getAssignableRoles() {
 }
 
 export async function getAllSystemUsers() {
+  await ensurePendingShowCountColumn();
   const users = await query(
-    `SELECT DISTINCT u.id, u.name, u.email, u.is_active, u.is_online, u.shift, u.created_at
+    `SELECT DISTINCT u.id, u.name, u.email, u.is_active, u.is_online, u.shift, u.pending_show_count, u.created_at
      FROM users u
      INNER JOIN model_has_roles mhr ON mhr.model_id = u.id AND mhr.model_type = ?
      INNER JOIN roles r ON r.id = mhr.role_id
@@ -93,8 +140,9 @@ export async function getAllSystemUsers() {
 }
 
 export async function findSystemUserById(userId) {
+  await ensurePendingShowCountColumn();
   const rows = await query(
-    `SELECT u.id, u.name, u.email, u.is_active, u.is_online, u.shift, u.created_at
+    `SELECT u.id, u.name, u.email, u.is_active, u.is_online, u.shift, u.pending_show_count, u.created_at
      FROM users u
      WHERE u.id = ?
      LIMIT 1`,
@@ -139,6 +187,7 @@ export async function updateSystemUser(userId, payload) {
   const password = payload.password ? String(payload.password) : '';
   const isActive = payload.is_active !== false && payload.is_active !== 0 && payload.is_active !== '0';
   const shift = parseShiftToDb(payload.shift);
+  const pendingShowCount = parsePendingShowCount(payload.pending_show_count);
 
   if (!name || !email || !role) {
     const error = new Error('Name, email, and role are required.');
@@ -175,6 +224,7 @@ export async function updateSystemUser(userId, payload) {
     throw error;
   }
 
+  await ensurePendingShowCountColumn();
   const shiftTimes = toShiftTimes(shift);
   const now = nowSqlDateTime();
 
@@ -185,6 +235,7 @@ export async function updateSystemUser(userId, payload) {
     'shift = ?',
     'shift_start_time = ?',
     'shift_end_time = ?',
+    'pending_show_count = ?',
     'updated_at = ?',
   ];
   const updateParams = [
@@ -194,6 +245,7 @@ export async function updateSystemUser(userId, payload) {
     shift,
     shiftTimes.shift_start_time,
     shiftTimes.shift_end_time,
+    pendingShowCount,
     now,
   ];
 
@@ -230,6 +282,7 @@ export async function createSystemUser(payload) {
   const password = String(payload.password || '');
   const isActive = payload.is_active !== false && payload.is_active !== 0 && payload.is_active !== '0';
   const shift = parseShiftToDb(payload.shift);
+  const pendingShowCount = parsePendingShowCount(payload.pending_show_count);
 
   if (!name || !email || !role || !password) {
     const error = new Error('Name, email, password, and role are required.');
@@ -266,13 +319,14 @@ export async function createSystemUser(payload) {
     throw error;
   }
 
+  await ensurePendingShowCountColumn();
   const shiftTimes = toShiftTimes(shift);
   const now = nowSqlDateTime();
   const hashedPassword = await hashLaravelPassword(password);
 
   const result = await query(
-    `INSERT INTO users (name, email, password, is_active, is_online, shift, shift_start_time, shift_end_time, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
+    `INSERT INTO users (name, email, password, is_active, is_online, shift, shift_start_time, shift_end_time, pending_show_count, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
     [
       name,
       email,
@@ -281,6 +335,7 @@ export async function createSystemUser(payload) {
       shift,
       shiftTimes.shift_start_time,
       shiftTimes.shift_end_time,
+      pendingShowCount,
       now,
       now,
     ],

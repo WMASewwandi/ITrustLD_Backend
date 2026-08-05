@@ -10,7 +10,7 @@ adminShiftsRouter.use(requireAdminAuth);
 
 adminShiftsRouter.get(
   '/calendar',
-  requirePermission('system_user_manage_activity'),
+  requirePermission('view_shift_schedule'),
   async (req, res, next) => {
     try {
       const parts = getColomboDateParts();
@@ -26,7 +26,7 @@ adminShiftsRouter.get(
 
 adminShiftsRouter.patch(
   '/schedule',
-  requirePermission('system_user_manage_activity'),
+  requirePermission('change_shift_schedule'),
   async (req, res, next) => {
     try {
       const shiftDate = req.body?.shift_date ?? req.body?.shiftDate;

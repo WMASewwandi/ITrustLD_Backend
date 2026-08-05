@@ -1,5 +1,6 @@
 import { query, getDbDriver } from '../config/database.js';
 import { LARAVEL_USER_MODEL } from '../constants/adminRoles.js';
+import { getUserPendingShowCount } from './systemUser.service.js';
 import { getUserRoles } from './user.service.js';
 import {
   SL_TIMEZONE,
@@ -382,7 +383,15 @@ export async function findExecutiveAmongCandidates(roleName, executiveIds) {
   if (!idSet.size) return null;
 
   const candidates = await getCandidateExecutives(roleName);
-  return candidates.find((user) => idSet.has(Number(user.id))) || null;
+  for (const user of candidates) {
+    if (!idSet.has(Number(user.id))) continue;
+    const roles = await getUserRoles(user.id);
+    const pendingCount = await getPendingCountForRole(user.id, roles, roleName);
+    const showCount = await getUserPendingShowCount(user.id);
+    if (showCount != null && pendingCount >= showCount) continue;
+    return user;
+  }
+  return null;
 }
 
 export async function findBestExecutive(roleName) {
@@ -395,10 +404,16 @@ export async function findBestExecutive(roleName) {
   for (const user of candidates) {
     const roles = await getUserRoles(user.id);
     const pendingCount = await getPendingCountForRole(user.id, roles, roleName);
-    scored.push({ user, pendingCount });
+    const showCount = await getUserPendingShowCount(user.id);
+    const atCapacity = showCount != null && pendingCount >= showCount;
+    scored.push({ user, pendingCount, atCapacity });
   }
 
   scored.sort((a, b) => {
+    // Prefer executives still under their pending show count.
+    if (a.atCapacity !== b.atCapacity) {
+      return a.atCapacity ? 1 : -1;
+    }
     if (a.pendingCount !== b.pendingCount) {
       return a.pendingCount - b.pendingCount;
     }

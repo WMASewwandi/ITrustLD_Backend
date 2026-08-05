@@ -12,6 +12,7 @@ import {
   logSystemUserAction,
   SYSTEM_USER_ACTIONS,
 } from './systemUserActionLog.service.js';
+import { refillDepositPendingForExecutive } from './depositAssignment.service.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -270,6 +271,15 @@ export async function updateDepositStatus(
     );
     await reverseDepositPoints(deposit);
     await logSystemUserAction(adminId, SYSTEM_USER_ACTIONS.DEPOSIT_REJECT);
+  }
+
+  if (normalizedStatus === 'Completed' || normalizedStatus === 'Rejected') {
+    const refillUserId = deposit.assigned_to || adminId;
+    try {
+      await refillDepositPendingForExecutive(refillUserId);
+    } catch (error) {
+      console.error('[deposit:refill-pending]', error.message);
+    }
   }
 
   return {

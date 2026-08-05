@@ -1,24 +1,47 @@
+/**
+ * Global email chrome — used by every template via wrap().
+ * Keep visual parity with Laravel: emails/layouts/mail.blade.php
+ */
 function header() {
   return `
-    <div style="background-color:#F8F8F8;padding:20px;text-align:left;">
-      <span style="font-family:Poppins,Arial,sans-serif;font-size:16px;font-weight:600;">iTrustLD</span>
+    <div style="padding:0 8px 20px 8px;text-align:left;">
+      <span style="font-family:Poppins,Arial,sans-serif;font-size:18px;font-weight:600;color:#111827;letter-spacing:-0.01em;">iTrustLD</span>
     </div>`;
 }
 
 function footer(extra = '') {
+  const extraBlock = extra
+    ? `<div style="padding:0 8px;text-align:center;">${extra}</div>`
+    : '';
   return `
-    <div style="background-color:#f8f9fa;padding:30px;text-align:center;border-top:1px solid #e5e7eb;">
-      ${extra}
-      <p style="font-family:Poppins,Arial,sans-serif;font-size:16px;color:#6b7280;margin:20px 0 0;">
+    ${extraBlock}
+    <div style="padding:28px 8px 8px;text-align:center;">
+      <p style="font-family:Poppins,Arial,sans-serif;font-size:14px;line-height:22px;color:#6b7280;margin:0;">
         For more info, please contact us at +94 117 751 751
       </p>
     </div>`;
 }
 
 function wrap(content, footerExtra = '') {
-  return `<!DOCTYPE html><html><body style="margin:0;padding:0;font-family:Poppins,Arial,sans-serif;background:#f8f9fa;">
-    <div style="max-width:842px;margin:0 auto;background:#fff;">${header()}${content}${footer(footerExtra)}</div>
-  </body></html>`;
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>iTrustLD</title>
+</head>
+<body style="margin:0;padding:0;font-family:Poppins,Arial,sans-serif;background-color:#f8f8f8;">
+  <div style="padding:40px 16px;">
+    <div style="max-width:600px;margin:0 auto;">
+      ${header()}
+      <div style="background-color:#ffffff;border-radius:12px;overflow:hidden;">
+        ${content}
+      </div>
+      ${footer(footerExtra)}
+    </div>
+  </div>
+</body>
+</html>`;
 }
 
 export function welcomeEmailHtml(userName) {

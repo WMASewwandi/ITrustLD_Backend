@@ -18,6 +18,11 @@ import {
   listTopupMethodsForVoucher,
   listUserVoucherClaims,
 } from '../../services/userVoucherClaims.service.js';
+import {
+  createGiftClaim,
+  listAvailableGiftsForUser,
+  listUserGiftClaims,
+} from '../../services/userLoyaltyGifts.service.js';
 
 export const userLoyaltyRouter = Router();
 
@@ -117,6 +122,33 @@ userLoyaltyRouter.get('/vouchers/:token', async (req, res, next) => {
 userLoyaltyRouter.get('/topup-methods', async (req, res, next) => {
   try {
     const data = await listTopupMethodsForVoucher();
+    res.json({ ok: true, ...data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+userLoyaltyRouter.get('/gifts', async (req, res, next) => {
+  try {
+    const data = await listAvailableGiftsForUser(req.auth.userId);
+    res.json({ ok: true, ...data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+userLoyaltyRouter.post('/gifts/claim', async (req, res, next) => {
+  try {
+    const data = await createGiftClaim(req.auth.userId, req.body ?? {});
+    res.status(201).json(data);
+  } catch (error) {
+    next(error);
+  }
+});
+
+userLoyaltyRouter.get('/gift-claims', async (req, res, next) => {
+  try {
+    const data = await listUserGiftClaims(req.auth.userId);
     res.json({ ok: true, ...data });
   } catch (error) {
     next(error);
