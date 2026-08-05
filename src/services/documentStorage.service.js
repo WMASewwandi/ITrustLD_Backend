@@ -9,18 +9,87 @@ function documentsDir() {
   return path.resolve(env.projectRoot, '../ITrustLD_Existing/storage/app/documents');
 }
 
-export function getDocumentsDirectory() {
-  return documentsDir();
+function shouldUseS3Storage() {
+  const disk = String(process.env.FILESYSTEM_DISK || '').trim().toLowerCase();
+  return disk === 's3' || Boolean(process.env.AWS_BUCKET);
 }
 
-export function resolveDocumentPath(filename) {
+function sanitizeFilename(filename) {
   const safeName = path.basename(String(filename || ''));
   if (!safeName || safeName !== filename) {
     const error = new Error('Invalid document filename.');
     error.status = 400;
     throw error;
   }
-  return path.join(documentsDir(), safeName);
+  return safeName;
+}
+
+function buildDocumentS3Key(filename) {
+  return `documents/${sanitizeFilename(filename)}`;
+}
+
+async function createS3Client() {
+  const { S3Client } = await import('@aws-sdk/client-s3');
+  return new S3Client({
+    region: process.env.AWS_DEFAULT_REGION || 'us-east-1',
+    credentials:
+      process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY
+        ? {
+            accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+            secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+          }
+        : undefined,
+  });
+}
+
+async function headS3Document(filename) {
+  const bucket = process.env.AWS_BUCKET;
+  if (!bucket) return null;
+
+  try {
+    const { HeadObjectCommand } = await import('@aws-sdk/client-s3');
+    const client = await createS3Client();
+    const response = await client.send(
+      new HeadObjectCommand({
+        Bucket: bucket,
+        Key: buildDocumentS3Key(filename),
+      }),
+    );
+    return {
+      size: response.ContentLength ?? 0,
+      mtime: response.LastModified ?? new Date(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function readS3DocumentBuffer(filename) {
+  const bucket = process.env.AWS_BUCKET;
+  if (!bucket) return null;
+
+  try {
+    const { GetObjectCommand } = await import('@aws-sdk/client-s3');
+    const client = await createS3Client();
+    const response = await client.send(
+      new GetObjectCommand({
+        Bucket: bucket,
+        Key: buildDocumentS3Key(filename),
+      }),
+    );
+    const bytes = await response.Body.transformToByteArray();
+    return Buffer.from(bytes);
+  } catch {
+    return null;
+  }
+}
+
+export function getDocumentsDirectory() {
+  return documentsDir();
+}
+
+export function resolveDocumentPath(filename) {
+  return path.join(documentsDir(), sanitizeFilename(filename));
 }
 
 export function deriveBackDocumentFilename(frontFilename) {
@@ -31,6 +100,8 @@ export function deriveBackDocumentFilename(frontFilename) {
 }
 
 export async function documentExists(filename) {
+  if (!filename) return false;
+  if (await headS3Document(filename)) return true;
   try {
     await fs.access(resolveDocumentPath(filename));
     return true;
@@ -40,8 +111,30 @@ export async function documentExists(filename) {
 }
 
 export async function getDocumentFileStats(filename) {
-  const stats = await fs.stat(resolveDocumentPath(filename));
-  return { size: stats.size, mtime: stats.mtime };
+  const s3Meta = await headS3Document(filename);
+  if (s3Meta) return s3Meta;
+
+  try {
+    const stats = await fs.stat(resolveDocumentPath(filename));
+    return { size: stats.size, mtime: stats.mtime };
+  } catch {
+    const error = new Error('Document not found.');
+    error.status = 404;
+    throw error;
+  }
+}
+
+export async function readDocumentBuffer(filename) {
+  const s3Buffer = await readS3DocumentBuffer(filename);
+  if (s3Buffer) return s3Buffer;
+
+  try {
+    return await fs.readFile(resolveDocumentPath(filename));
+  } catch {
+    const notFound = new Error('Document not found.');
+    notFound.status = 404;
+    throw notFound;
+  }
 }
 
 export function formatFileSize(bytes) {
@@ -100,10 +193,37 @@ export function validateDocumentUpload(file) {
   return null;
 }
 
+async function uploadDocumentToS3(buffer, filename, contentType) {
+  const bucket = process.env.AWS_BUCKET;
+  if (!bucket) {
+    const error = new Error('AWS bucket is not configured for KYC document upload.');
+    error.status = 500;
+    throw error;
+  }
+
+  const { PutObjectCommand } = await import('@aws-sdk/client-s3');
+  const client = await createS3Client();
+  await client.send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: buildDocumentS3Key(filename),
+      Body: buffer,
+      ContentType: contentType,
+    }),
+  );
+}
+
 export async function storeVerificationDocument(file, prefix) {
   const ext = path.extname(file.originalname || '').slice(1).toLowerCase();
   const safeExt = ALLOWED_EXTENSIONS.has(ext) ? ext : 'jpg';
   const filename = `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.${safeExt}`;
+  const contentType = guessDocumentMimeType(filename);
+
+  if (shouldUseS3Storage()) {
+    await uploadDocumentToS3(file.buffer, filename, contentType);
+    return filename;
+  }
+
   const dir = documentsDir();
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, filename), file.buffer);
@@ -116,6 +236,13 @@ export async function storePairedBackDocument(file, frontFilename) {
   const normalizedExt = ALLOWED_EXTENSIONS.has(safeExt) ? safeExt : 'jpg';
   const baseName = frontFilename.replace(/\.[^.]+$/, '');
   const filename = `${baseName}_back.${normalizedExt}`;
+  const contentType = guessDocumentMimeType(filename);
+
+  if (shouldUseS3Storage()) {
+    await uploadDocumentToS3(file.buffer, filename, contentType);
+    return filename;
+  }
+
   const dir = documentsDir();
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, filename), file.buffer);
