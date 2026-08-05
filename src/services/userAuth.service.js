@@ -94,6 +94,86 @@ async function cleanupOrphanCustomerUser(email) {
   }
 }
 
+function isRegistrationTestBypassEnabled() {
+  return process.env.REGISTRATION_TEST_BYPASS === 'true';
+}
+
+function getRegistrationTestEmail() {
+  return String(process.env.REGISTRATION_TEST_EMAIL || '').trim().toLowerCase();
+}
+
+function getRegistrationTestPhoneDigits() {
+  return (process.env.REGISTRATION_TEST_PHONE || '')
+    .split(',')
+    .map((phone) => phone.replace(/\D/g, ''))
+    .filter(Boolean);
+}
+
+function normalizePhoneDigits(mobileNumber) {
+  return String(mobileNumber || '').replace(/\D/g, '');
+}
+
+function mobileMatchesTestAllowlist(mobileNumber) {
+  const digits = normalizePhoneDigits(mobileNumber);
+  if (!digits) return false;
+  const allowed = getRegistrationTestPhoneDigits();
+  return allowed.some(
+    (allowedDigits) =>
+      digits === allowedDigits || digits.endsWith(allowedDigits) || allowedDigits.endsWith(digits),
+  );
+}
+
+function isRegistrationTestEmail(email) {
+  if (!isRegistrationTestBypassEnabled()) return false;
+  const allowedEmail = getRegistrationTestEmail();
+  if (!allowedEmail) return false;
+  return String(email || '').trim().toLowerCase() === allowedEmail;
+}
+
+function isRegistrationTestMobile(mobileNumber) {
+  if (!isRegistrationTestBypassEnabled()) return false;
+  return mobileMatchesTestAllowlist(mobileNumber);
+}
+
+function isRegistrationTestBypass(email, mobileNumber) {
+  return isRegistrationTestEmail(email) && isRegistrationTestMobile(mobileNumber);
+}
+
+async function deleteCustomerUserById(userId) {
+  const roles = await getUserRoles(userId);
+  if (!roles.includes(CUSTOMER_ROLE)) return;
+
+  const accountHolder = await findAccountHolderByUserId(userId);
+  if (accountHolder) {
+    await query('DELETE FROM partner_clients WHERE client_ah_id = ? OR partner_ah_id = ?', [
+      accountHolder.id,
+      accountHolder.id,
+    ]);
+    await query('DELETE FROM account_holders WHERE id = ?', [accountHolder.id]);
+  }
+
+  await query('DELETE FROM verification_codes WHERE user_id = ?', [userId]);
+  await query('DELETE FROM model_has_roles WHERE model_id = ? AND model_type = ?', [
+    userId,
+    LARAVEL_USER_MODEL,
+  ]);
+  await query('DELETE FROM users WHERE id = ?', [userId]);
+}
+
+async function prepareTestRegistration(email, mobileNumber) {
+  const user = await findUserByEmail(email);
+  if (user) {
+    await deleteCustomerUserById(user.id);
+  }
+
+  if (mobileNumber) {
+    const holder = await findAccountHolderByMobile(mobileNumber);
+    if (holder) {
+      await deleteCustomerUserById(holder.user_id);
+    }
+  }
+}
+
 export async function checkEmailAvailability(email) {
   const normalizedEmail = String(email || '').trim().toLowerCase();
   if (!normalizedEmail) {
@@ -101,6 +181,10 @@ export async function checkEmailAvailability(email) {
   }
 
   await cleanupOrphanCustomerUser(normalizedEmail);
+
+  if (isRegistrationTestEmail(normalizedEmail)) {
+    return { exists: false };
+  }
 
   const user = await findUserByEmail(normalizedEmail);
   return { exists: Boolean(user) };
@@ -110,6 +194,10 @@ export async function checkMobileAvailability(mobileNumber) {
   const mobile = String(mobileNumber || '').trim();
   if (!mobile) {
     throw validationError('Mobile number is required.');
+  }
+
+  if (isRegistrationTestMobile(mobile)) {
+    return { exists: false };
   }
 
   const accountHolder = await findAccountHolderByMobile(mobile);
@@ -184,18 +272,26 @@ export async function registerUser(payload, { remoteIp } = {}) {
     }
   }
 
-  if (mobileNumber) {
+  const registrationTestBypass = isRegistrationTestBypass(email, mobileNumber);
+  if (registrationTestBypass) {
+    console.warn('[register] test bypass active — removing prior test customer account(s)');
+    await prepareTestRegistration(email, mobileNumber);
+  }
+
+  if (mobileNumber && !registrationTestBypass) {
     const mobileDuplicate = await findAccountHolderByMobile(mobileNumber);
     if (mobileDuplicate) {
       throw validationError('This mobile number is already registered.');
     }
   }
 
-  await cleanupOrphanCustomerUser(email);
+  if (!registrationTestBypass) {
+    await cleanupOrphanCustomerUser(email);
 
-  const existing = await findUserByEmail(email);
-  if (existing) {
-    throw validationError('This email is already registered.');
+    const existing = await findUserByEmail(email);
+    if (existing) {
+      throw validationError('This email is already registered.');
+    }
   }
 
   const hashedPassword = await hashLaravelPassword(password);
