@@ -18,6 +18,17 @@ import {
   updatePointCollectionAmount,
 } from '../../services/adminLoyaltyManagement.service.js';
 import {
+  approveGiftClaim,
+  createGift,
+  deleteGift,
+  listGiftClaimsForAdmin,
+  listGiftsForAdmin,
+  markGiftClaimDelivered,
+  rejectGiftClaim,
+  updateGift,
+  updateGiftState,
+} from '../../services/adminLoyaltyGifts.service.js';
+import {
   checkVoucherDuplicatePlatformId,
   completeVoucherClaim,
   getVoucherDuplicatePlatformStats,
@@ -379,6 +390,129 @@ adminLoyaltyRouter.post(
       const data = await deleteLoyaltyLevel({
         loyaltyLevelId: body.loyalty_level_id ?? body.id,
       });
+      res.json(data);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminLoyaltyRouter.get(
+  '/gifts',
+  requirePermission('read_customer_loyalty_data'),
+  async (req, res, next) => {
+    try {
+      const data = await listGiftsForAdmin(req.query?.audience);
+      res.json({ ok: true, ...data });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminLoyaltyRouter.post(
+  '/gifts',
+  requirePermission('change_account_configs'),
+  async (req, res, next) => {
+    try {
+      const body = req.body ?? {};
+      const data = await createGift(req.auth.userId, {
+        title: body.title,
+        description: body.description,
+        audience_type: body.audience_type ?? body.audienceType ?? body.audience,
+        allowed_levels: body.allowed_levels ?? body.allowedLevels,
+      });
+      res.json(data);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminLoyaltyRouter.post(
+  '/gifts/update',
+  requirePermission('change_account_configs'),
+  async (req, res, next) => {
+    try {
+      const data = await updateGift(req.body ?? {});
+      res.json(data);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminLoyaltyRouter.post(
+  '/gifts/state',
+  requirePermission('change_account_configs'),
+  async (req, res, next) => {
+    try {
+      const data = await updateGiftState(req.body ?? {});
+      res.json(data);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminLoyaltyRouter.post(
+  '/gifts/delete',
+  requirePermission('change_account_configs'),
+  async (req, res, next) => {
+    try {
+      const data = await deleteGift(req.body ?? {});
+      res.json(data);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminLoyaltyRouter.get(
+  '/gift-claims',
+  requirePermission('read_customer_loyalty_data'),
+  async (req, res, next) => {
+    try {
+      const data = await listGiftClaimsForAdmin(req.query ?? {});
+      res.json({ ok: true, ...data });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminLoyaltyRouter.post(
+  '/gift-claims/approve',
+  requirePermission('change_customer_loyalty_status'),
+  async (req, res, next) => {
+    try {
+      const data = await approveGiftClaim(req.auth.userId, req.body ?? {});
+      res.json(data);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminLoyaltyRouter.post(
+  '/gift-claims/reject',
+  requirePermission('change_customer_loyalty_status'),
+  async (req, res, next) => {
+    try {
+      const data = await rejectGiftClaim(req.auth.userId, req.body ?? {});
+      res.json(data);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminLoyaltyRouter.post(
+  '/gift-claims/deliver',
+  requirePermission('change_customer_loyalty_status'),
+  async (req, res, next) => {
+    try {
+      const data = await markGiftClaimDelivered(req.auth.userId, req.body ?? {});
       res.json(data);
     } catch (error) {
       next(error);

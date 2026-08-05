@@ -11,6 +11,7 @@ import {
   logSystemUserAction,
   SYSTEM_USER_ACTIONS,
 } from './systemUserActionLog.service.js';
+import { refillWithdrawalPendingForExecutive } from './withdrawalAssignment.service.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -272,6 +273,15 @@ export async function updateWithdrawalStatus(
       rejectedReasonMessage,
     );
     await logSystemUserAction(adminId, SYSTEM_USER_ACTIONS.WITHDRAWAL_REJECT);
+  }
+
+  if (normalizedStatus === 'Completed' || normalizedStatus === 'Rejected') {
+    const refillUserId = withdrawal.assigned_to || adminId;
+    try {
+      await refillWithdrawalPendingForExecutive(refillUserId);
+    } catch (error) {
+      console.error('[withdrawal:refill-pending]', error.message);
+    }
   }
 
   return {

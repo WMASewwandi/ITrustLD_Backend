@@ -1,4 +1,5 @@
 import { query } from '../config/database.js';
+import { countPendingGiftClaims } from './adminLoyaltyGifts.service.js';
 import { countCustomerAccounts } from './customerAccount.service.js';
 import { countHelpTickets, countUnreadHelpTickets } from './helpTicket.service.js';
 
@@ -86,6 +87,7 @@ export async function getAdminNavCounts(roles = [], userId = null) {
     loyaltyOrdersPending,
     loyaltyBonusPending,
     loyaltyVouchersPending,
+    loyaltyGiftsPending,
     helpTicketsTotal,
     helpTicketsUnread,
   ] = await Promise.all([
@@ -97,6 +99,7 @@ export async function getAdminNavCounts(roles = [], userId = null) {
     countPendingLoyaltyOrders(),
     countPendingBonusClaims(),
     countPendingVoucherClaims(),
+    countPendingGiftClaims(),
     countHelpTickets(),
     countUnreadHelpTickets(),
   ]);
@@ -113,6 +116,7 @@ export async function getAdminNavCounts(roles = [], userId = null) {
       orders: loyaltyOrdersPending,
       bonus: loyaltyBonusPending,
       vouchers: loyaltyVouchersPending,
+      gifts: loyaltyGiftsPending,
     },
     help_tickets: { total: helpTicketsTotal, unread: helpTicketsUnread },
   };

@@ -1,6 +1,7 @@
 import { query } from '../config/database.js';
 import { buildDepositProofApiUrl } from './depositProofStorage.service.js';
 import { batchScammerCheck, isScammerMatch } from './scammer.service.js';
+import { getUserPendingShowCount } from './systemUser.service.js';
 import {
   formatTimestampSl,
   getBusinessDayStart,
@@ -240,11 +241,20 @@ async function listDepositsQuery({
   toDate,
   assignedToUserId,
   requirePaymentProof = true,
+  maxLoadRows = null,
 }) {
   const normalizedStatus = normalizeStatus(status);
   const pageNum = Math.max(1, Number(page) || 1);
-  const take = Math.min(100, Math.max(1, Number(perPage) || 10));
-  const skip = (pageNum - 1) * take;
+  const requestedTake = Math.min(100, Math.max(1, Number(perPage) || 10));
+  const skip = (pageNum - 1) * requestedTake;
+  let take = requestedTake;
+  if (maxLoadRows != null && maxLoadRows > 0) {
+    if (skip >= maxLoadRows) {
+      take = 0;
+    } else {
+      take = Math.min(take, maxLoadRows - skip);
+    }
+  }
 
   let effectiveFilter = filter || null;
   let dateWindow = parseDateWindow(effectiveFilter, fromDate, toDate);
@@ -354,18 +364,21 @@ async function listDepositsQuery({
     values,
   );
   const totalCount = Number(countRows[0]?.total) || 0;
-  const totalPages = take > 0 ? Math.ceil(totalCount / take) : 1;
+  const totalPages = requestedTake > 0 ? Math.ceil(totalCount / requestedTake) : 1;
 
-  const rows = await query(
-    `SELECT d.*, u.name AS user_name, tm.topup_method_name, po.payment_option_name,
+  const rows =
+    take <= 0
+      ? []
+      : await query(
+          `SELECT d.*, u.name AS user_name, tm.topup_method_name, po.payment_option_name,
             ah.account_number, ah.email AS customer_email, ah.mobile_number AS customer_mobile
      FROM deposits d
      ${joins}
      ${whereSql}
      ${orderSql}
      LIMIT ${take} OFFSET ${skip}`,
-    values,
-  );
+          values,
+        );
 
   const adminIds = rows.flatMap((row) => [
     row.pendings_by_admin,
@@ -386,7 +399,7 @@ async function listDepositsQuery({
       current_page: pageNum,
       total_pages: totalPages,
       total_count: totalCount,
-      per_page: take,
+      per_page: requestedTake,
       has_prev: pageNum > 1,
       has_next: pageNum < totalPages,
     },
@@ -425,7 +438,8 @@ async function getDepositTotals(status, assignedToUserId) {
 export async function listDepositsForAdmin(auth, params = {}) {
   const roles = auth?.roles || [];
   const userId = auth?.userId;
-  const assignedToUserId = isDepositExecutive(roles) && !isAdmin(roles) ? userId : null;
+  const isExec = isDepositExecutive(roles) && !isAdmin(roles);
+  const assignedToUserId = isExec ? userId : null;
 
   const statusForTotals = normalizeStatus(params.status);
   const sanitized = sanitizePendingSearchParams(statusForTotals, {
@@ -438,6 +452,9 @@ export async function listDepositsForAdmin(auth, params = {}) {
     fromDate: params.fromDate,
     toDate: params.toDate,
   });
+
+  const maxLoadRows =
+    statusForTotals === 'Pending' && isExec ? await getUserPendingShowCount(userId) : null;
 
   const result = await listDepositsQuery({
     status: params.status,
@@ -453,6 +470,7 @@ export async function listDepositsForAdmin(auth, params = {}) {
     toDate: sanitized.toDate,
     assignedToUserId,
     requirePaymentProof: sanitized.requirePaymentProof,
+    maxLoadRows,
   });
 
   const searchActive = isDepositSearchActive(statusForTotals, {

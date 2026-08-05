@@ -179,7 +179,7 @@ export async function sendVerificationEmail(userId, email) {
   const code = await createVerificationCode(userId);
 
   try {
-    const mailResult = await sendEmailAndSms({
+    await sendEmailAndSms({
       email: normalizedEmail,
       subject: 'OTP',
       html: verificationCodeEmailHtml(code),
@@ -189,10 +189,10 @@ export async function sendVerificationEmail(userId, email) {
       userId,
       smsType: 'VERIFICATION_CODE',
     });
+    // Temporary: do not return OTP to the UI for email verification (code is only in email/SMS).
     return {
       ok: true,
       message: 'Verification code sent.',
-      ...devDeliveryPayload(mailResult, code),
     };
   } catch (error) {
     console.error('[verify] email send failed:', error.message);

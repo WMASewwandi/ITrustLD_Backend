@@ -55,6 +55,8 @@ export const SYSTEM_ACTIVITIES = [
   { activity_identifier: 'customer_manage_activity', activity_name: 'Customer Manage Activity', category_id: 40, sort_order: 1 },
   { activity_identifier: 'system_user_manage_activity', activity_name: 'System User Manage Activity', category_id: 40, sort_order: 2 },
   { activity_identifier: 'role_manage_activity', activity_name: 'Role Manage Activity', category_id: 40, sort_order: 3 },
+  { activity_identifier: 'view_shift_schedule', activity_name: 'View Shift Schedule', category_id: 40, sort_order: 4 },
+  { activity_identifier: 'change_shift_schedule', activity_name: 'Update Shift Schedule', category_id: 40, sort_order: 5 },
 
   { activity_identifier: 'view_account_configs', activity_name: 'View Account Configurations', category_id: 41, sort_order: 1 },
   { activity_identifier: 'change_account_configs', activity_name: 'Update Account Configurations', category_id: 41, sort_order: 2 },
@@ -120,6 +122,8 @@ export const BUILTIN_ROLE_PERMISSIONS = {
     'view_currency_configs',
     'system_user_manage_activity',
     'role_manage_activity',
+    'view_shift_schedule',
+    'change_shift_schedule',
     'change_account_configs',
     'change_currency_configs',
     'manage_blog_posts',
