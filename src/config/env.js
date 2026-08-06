@@ -61,13 +61,26 @@ export const env = {
     staffAlertNumbers: ['94766850647', '94767676684', '94767676023', '94752256911', '94763383069'],
   },
   sms: {
-    username: process.env.DIALOG_SMS_USERNAME || process.env.SMS_DIALOG_USERNAME || '',
-    password: process.env.DIALOG_SMS_PASSWORD || process.env.SMS_DIALOG_PASSWORD || '',
+    // Prefer DIALOG_SMS_*; also accept Laravel SMS_API_* and legacy SMS_DIALOG_* aliases.
+    username:
+      process.env.DIALOG_SMS_USERNAME ||
+      process.env.SMS_API_USERNAME ||
+      process.env.SMS_DIALOG_USERNAME ||
+      '',
+    password:
+      process.env.DIALOG_SMS_PASSWORD ||
+      process.env.SMS_API_PASSWORD ||
+      process.env.SMS_DIALOG_PASSWORD ||
+      '',
     enabled:
       process.env.SMS_ENABLED !== 'false' &&
       Boolean(
-        (process.env.DIALOG_SMS_USERNAME || process.env.SMS_DIALOG_USERNAME) &&
-          (process.env.DIALOG_SMS_PASSWORD || process.env.SMS_DIALOG_PASSWORD),
+        (process.env.DIALOG_SMS_USERNAME ||
+          process.env.SMS_API_USERNAME ||
+          process.env.SMS_DIALOG_USERNAME) &&
+          (process.env.DIALOG_SMS_PASSWORD ||
+            process.env.SMS_API_PASSWORD ||
+            process.env.SMS_DIALOG_PASSWORD),
       ),
   },
   /** Sri Lanka wall-clock for shifts, business days, and display (mirrors Laravel app.shift_timezone). */

@@ -4,7 +4,6 @@ import {
   computeShiftForDate,
   getShiftDateString,
   normalizeShiftDateKey,
-  shiftDateMinusOneDay,
 } from '../utils/slTime.js';
 import {
   resolveShiftFromSchedule,
@@ -62,6 +61,11 @@ async function loadShiftHistoryUpTo(endDate) {
     .filter((row) => row.shiftDate && (row.activeShift === 'A' || row.activeShift === 'B'));
 }
 
+/**
+ * Drop future history rows that match the natural A/B chain from today.
+ * Keep intentional overrides (edits that break that chain) so admin schedule
+ * changes survive calendar reloads.
+ */
 async function repairFutureShiftHistory(todayShiftDate, anchorShift) {
   const rows = await query(
     `SELECT shift_date, active_shift FROM shift_history WHERE shift_date > ? ORDER BY shift_date ASC`,
@@ -73,13 +77,11 @@ async function repairFutureShiftHistory(todayShiftDate, anchorShift) {
     if (!date) continue;
 
     const fromToday = computeShiftForDate(date, todayShiftDate, anchorShift);
-    const previousDate = shiftDateMinusOneDay(date);
-    const previousShift = computeShiftForDate(previousDate, todayShiftDate, anchorShift);
-
     const matchesTodayChain = row.active_shift === fromToday;
-    const breaksAlternation = row.active_shift === previousShift;
 
-    if (matchesTodayChain || breaksAlternation) {
+    // Only remove redundant rows. An intentional flip always equals the previous
+    // day's shift under strict alternation — deleting those undoes admin edits.
+    if (matchesTodayChain) {
       await query(`DELETE FROM shift_history WHERE shift_date = ?`, [date]);
     }
   }
