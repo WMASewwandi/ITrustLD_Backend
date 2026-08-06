@@ -344,6 +344,14 @@ export function getVerificationStep(accountHolder) {
     return 'complete';
   }
 
+  // Rejected docs must re-open the upload form (dashboard stays gated until verified).
+  if (
+    accountHolder.identity_verification === 'REJECTED' ||
+    accountHolder.address_verification === 'REJECTED'
+  ) {
+    return 'documents';
+  }
+
   const bothDocsReceived =
     accountHolder.identity_document_status === 'RECEIVED' &&
     accountHolder.address_document_status === 'RECEIVED';
@@ -395,6 +403,8 @@ export async function saveVerificationDocuments(
            identity_document_name = ?,
            identity_document_status = 'RECEIVED',
            identity_verification = 'NOT_VERIFIED',
+           identity_verification_rejection_title = NULL,
+           identity_verification_rejection_message = NULL,
            updated_at = NOW()
        WHERE user_id = ?`,
       [identityType, identityDocumentName, userId],
@@ -416,6 +426,8 @@ export async function saveVerificationDocuments(
            address_document_name = ?,
            address_document_status = 'RECEIVED',
            address_verification = 'NOT_VERIFIED',
+           address_verification_rejection_title = NULL,
+           address_verification_rejection_message = NULL,
            updated_at = NOW()
        WHERE user_id = ?`,
       [addressType, addressDocumentName, userId],

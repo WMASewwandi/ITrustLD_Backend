@@ -16,6 +16,8 @@ export async function findAccountHolderByUserId(userId) {
             identity_verification, account_status, is_patner, affiliate_code,
             identity_document_type, identity_document_name, identity_document_status,
             address_document_type, address_document_name, address_document_status,
+            identity_verification_rejection_title, identity_verification_rejection_message,
+            address_verification_rejection_title, address_verification_rejection_message,
             created_at, updated_at
      FROM account_holders
      WHERE user_id = ?
@@ -102,6 +104,12 @@ export function toPublicAccountHolder(accountHolder) {
     address_document_type: accountHolder.address_document_type,
     address_document_name: accountHolder.address_document_name,
     address_document_status: accountHolder.address_document_status,
+    identity_verification_rejection_title: accountHolder.identity_verification_rejection_title,
+    identity_verification_rejection_message:
+      accountHolder.identity_verification_rejection_message,
+    address_verification_rejection_title: accountHolder.address_verification_rejection_title,
+    address_verification_rejection_message:
+      accountHolder.address_verification_rejection_message,
     account_status: accountHolder.account_status,
     is_patner: accountHolder.is_patner,
     affiliate_code: accountHolder.affiliate_code,
