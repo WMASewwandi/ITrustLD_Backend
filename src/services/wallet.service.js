@@ -267,6 +267,18 @@ async function ensureNavigateColumnsForTable(tableName) {
       );
     }
   }
+
+  const hasLabel = await tableHasColumn(tableName, 'navigate_button_label');
+  if (!hasLabel) {
+    if (getDbDriver() === 'sqlite') {
+      await query(`ALTER TABLE ${tableName} ADD COLUMN navigate_button_label TEXT NULL`);
+    } else {
+      await query(
+        `ALTER TABLE ${tableName}
+         ADD COLUMN navigate_button_label VARCHAR(80) NULL`,
+      );
+    }
+  }
 }
 
 export async function ensureWalletNavigateSchema() {
@@ -282,16 +294,28 @@ function parseNavigateSettings(payload = {}, existing = null) {
     existing?.allowNavigateButton ?? false,
   );
   const rawUrl = String(payload.navigateUrl ?? payload.navigate_url ?? '').trim();
+  const rawLabel = String(
+    payload.navigateButtonLabel ?? payload.navigate_button_label ?? '',
+  ).trim();
 
   if (!allowNavigateButton) {
     return {
       allowNavigateButton: false,
       navigateUrl: null,
+      navigateButtonLabel: null,
     };
   }
 
   if (!rawUrl) {
     throw validationError('Navigate URL is required when the navigate button is enabled.');
+  }
+
+  if (!rawLabel) {
+    throw validationError('Button name is required when the navigate button is enabled.');
+  }
+
+  if (rawLabel.length > 40) {
+    throw validationError('Button name must be 40 characters or fewer.');
   }
 
   let parsed;
@@ -308,6 +332,7 @@ function parseNavigateSettings(payload = {}, existing = null) {
   return {
     allowNavigateButton: true,
     navigateUrl: parsed.toString(),
+    navigateButtonLabel: rawLabel,
   };
 }
 
@@ -397,6 +422,33 @@ function validateWalletPayload({ name, currency, minLimit, maxLimit, platformTyp
   };
 }
 
+/** Unique wallet name within Top-up or Cash-out (visible / non-hidden rows only). */
+async function assertUniqueWalletName(kind, walletName, excludeId = null) {
+  const config = WALLET_CONFIG[kind];
+  if (!config) throw validationError('Invalid wallet type.');
+
+  const label = kind === 'cashout' ? 'Cash-out' : 'Top-up';
+  const params = [String(walletName || '').trim()];
+  let sql = `
+    SELECT id
+    FROM ${config.table}
+    WHERE UPPER(${config.nameColumn}) = UPPER(?)
+      AND (is_deleted = 0 OR is_deleted IS NULL)
+  `;
+  if (excludeId != null && excludeId !== '') {
+    sql += ' AND id <> ?';
+    params.push(Number(excludeId));
+  }
+  sql += ' LIMIT 1';
+
+  const rows = await query(sql, params);
+  if (rows.length) {
+    throw validationError(
+      `A ${label} wallet named "${String(walletName).trim()}" already exists. Use a different name.`,
+    );
+  }
+}
+
 async function getActivePaymentOptionsForWallet(walletId, walletType) {
   const rows = await query(
     `SELECT po.id, po.payment_option_name
@@ -420,6 +472,9 @@ async function mapWalletRow(row, kind) {
 
   const allowNavigateButton = Boolean(Number(row.allow_navigate_button));
   const navigateUrl = allowNavigateButton ? row.navigate_url || null : null;
+  const navigateButtonLabel = allowNavigateButton
+    ? String(row.navigate_button_label || '').trim() || null
+    : null;
 
   return {
     id: row.id,
@@ -438,28 +493,31 @@ async function mapWalletRow(row, kind) {
     allow_navigate_button: allowNavigateButton,
     navigateUrl,
     navigate_url: navigateUrl,
+    navigateButtonLabel,
+    navigate_button_label: navigateButtonLabel,
     logo,
     logoName: logo,
     logoUrl: resolveWalletLogoPublicUrl(logo),
     paymentMethodIds: paymentOptions.map((option) => option.id),
     paymentMethods: paymentOptions.map((option) => option.payment_option_name),
+    hidden: Number(row.is_deleted) === 1 || row.is_deleted === true,
+    isDeleted: Number(row.is_deleted) === 1 || row.is_deleted === true,
   };
 }
 
-async function findWalletById(kind, walletId) {
+async function findWalletById(kind, walletId, { includeHidden = true } = {}) {
   await ensureWalletNavigateSchema();
   if (kind === 'topup') {
     await ensureTopupWalletVoucherFlagSchema();
   }
   const config = WALLET_CONFIG[kind];
-  const rows = await query(
-    `SELECT *
-     FROM ${config.table}
-     WHERE id = ?
-       AND (is_deleted = 0 OR is_deleted IS NULL)
-     LIMIT 1`,
-    [walletId],
-  );
+  const params = [walletId];
+  let sql = `SELECT * FROM ${config.table} WHERE id = ?`;
+  if (!includeHidden) {
+    sql += ' AND (is_deleted = 0 OR is_deleted IS NULL)';
+  }
+  sql += ' LIMIT 1';
+  const rows = await query(sql, params);
   if (!rows[0]) return null;
   return mapWalletRow(rows[0], kind);
 }
@@ -552,10 +610,9 @@ export async function listTopupWallets() {
   const rows = await query(
     `SELECT *
      FROM ${config.table}
-     WHERE is_deleted = 0 OR is_deleted IS NULL
-     ORDER BY id DESC`,
+     ORDER BY CASE WHEN is_deleted = 1 THEN 1 ELSE 0 END ASC, id DESC`,
   );
-  await backfillWalletCatalogLinks('topup', rows);
+  await backfillWalletCatalogLinks('topup', rows.filter((row) => !(Number(row.is_deleted) === 1 || row.is_deleted === true)));
   return Promise.all(rows.map((row) => mapWalletRow(row, 'topup')));
 }
 
@@ -565,10 +622,9 @@ export async function listCashoutWallets() {
   const rows = await query(
     `SELECT *
      FROM ${config.table}
-     WHERE is_deleted = 0 OR is_deleted IS NULL
-     ORDER BY id DESC`,
+     ORDER BY CASE WHEN is_deleted = 1 THEN 1 ELSE 0 END ASC, id DESC`,
   );
-  await backfillWalletCatalogLinks('cashout', rows);
+  await backfillWalletCatalogLinks('cashout', rows.filter((row) => !(Number(row.is_deleted) === 1 || row.is_deleted === true)));
   return Promise.all(rows.map((row) => mapWalletRow(row, 'cashout')));
 }
 
@@ -576,6 +632,7 @@ export async function createTopupWallet(payload, logoFile) {
   await ensureWalletNavigateSchema();
   await ensureTopupWalletVoucherFlagSchema();
   const validated = validateWalletPayload(payload);
+  await assertUniqueWalletName('topup', validated.name);
   const paymentMethodIds = parsePaymentMethodIds(payload.paymentMethodIds);
   if (paymentMethodIds.length === 0) {
     throw validationError('At least one payment method is required.');
@@ -606,6 +663,7 @@ export async function createTopupWallet(payload, logoFile) {
     'allow_for_voucher',
     'allow_navigate_button',
     'navigate_url',
+    'navigate_button_label',
     config.logoColumn,
     'is_deleted',
     'created_at',
@@ -623,6 +681,7 @@ export async function createTopupWallet(payload, logoFile) {
     allowForVoucher ? 1 : 0,
     navigate.allowNavigateButton ? 1 : 0,
     navigate.navigateUrl,
+    navigate.navigateButtonLabel,
     logo,
     0,
   ];
@@ -650,6 +709,7 @@ export async function createTopupWallet(payload, logoFile) {
 export async function createCashoutWallet(payload, logoFile) {
   await ensureWalletNavigateSchema();
   const validated = validateWalletPayload(payload);
+  await assertUniqueWalletName('cashout', validated.name);
   const paymentMethodIds = parsePaymentMethodIds(payload.paymentMethodIds);
   if (paymentMethodIds.length === 0) {
     throw validationError('At least one payment method is required.');
@@ -675,6 +735,7 @@ export async function createCashoutWallet(payload, logoFile) {
     'availability',
     'allow_navigate_button',
     'navigate_url',
+    'navigate_button_label',
     config.logoColumn,
     'is_deleted',
     'created_at',
@@ -691,6 +752,7 @@ export async function createCashoutWallet(payload, logoFile) {
     'AVAILABLE',
     navigate.allowNavigateButton ? 1 : 0,
     navigate.navigateUrl,
+    navigate.navigateButtonLabel,
     logo,
     0,
   ];
@@ -718,8 +780,10 @@ export async function createCashoutWallet(payload, logoFile) {
 export async function updateTopupWallet(walletId, payload, logoFile) {
   const existing = await findWalletById('topup', walletId);
   if (!existing) throw validationError('Top-up wallet not found.', 404);
+  if (existing.hidden) throw validationError('Unhide this wallet before editing.');
 
   const validated = validateWalletPayload(payload);
+  await assertUniqueWalletName('topup', validated.name, walletId);
   const paymentMethodIds = parsePaymentMethodIds(payload.paymentMethodIds);
   if (paymentMethodIds.length === 0) {
     throw validationError('At least one payment method is required.');
@@ -745,6 +809,7 @@ export async function updateTopupWallet(walletId, payload, logoFile) {
          allow_for_voucher = ?,
          allow_navigate_button = ?,
          navigate_url = ?,
+         navigate_button_label = ?,
          ${config.logoColumn} = ?,
          updated_at = NOW()
      WHERE id = ?`,
@@ -759,6 +824,7 @@ export async function updateTopupWallet(walletId, payload, logoFile) {
       allowForVoucher ? 1 : 0,
       navigate.allowNavigateButton ? 1 : 0,
       navigate.navigateUrl,
+      navigate.navigateButtonLabel,
       logo,
       walletId,
     ],
@@ -774,8 +840,10 @@ export async function updateTopupWallet(walletId, payload, logoFile) {
 export async function updateCashoutWallet(walletId, payload, logoFile) {
   const existing = await findWalletById('cashout', walletId);
   if (!existing) throw validationError('Cash-out wallet not found.', 404);
+  if (existing.hidden) throw validationError('Unhide this wallet before editing.');
 
   const validated = validateWalletPayload(payload);
+  await assertUniqueWalletName('cashout', validated.name, walletId);
   const paymentMethodIds = parsePaymentMethodIds(payload.paymentMethodIds);
   if (paymentMethodIds.length === 0) {
     throw validationError('At least one payment method is required.');
@@ -796,6 +864,7 @@ export async function updateCashoutWallet(walletId, payload, logoFile) {
          tnc = ?,
          allow_navigate_button = ?,
          navigate_url = ?,
+         navigate_button_label = ?,
          ${config.logoColumn} = ?,
          updated_at = NOW()
      WHERE id = ?`,
@@ -809,6 +878,7 @@ export async function updateCashoutWallet(walletId, payload, logoFile) {
       validated.terms,
       navigate.allowNavigateButton ? 1 : 0,
       navigate.navigateUrl,
+      navigate.navigateButtonLabel,
       logo,
       walletId,
     ],
@@ -824,6 +894,7 @@ export async function updateCashoutWallet(walletId, payload, logoFile) {
 export async function deleteTopupWallet(walletId) {
   const existing = await findWalletById('topup', walletId);
   if (!existing) throw validationError('Top-up wallet not found.', 404);
+  if (existing.hidden) throw validationError('Top-up wallet is already hidden.');
 
   await query(
     `UPDATE ${WALLET_CONFIG.topup.table}
@@ -838,6 +909,7 @@ export async function deleteTopupWallet(walletId) {
 export async function deleteCashoutWallet(walletId) {
   const existing = await findWalletById('cashout', walletId);
   if (!existing) throw validationError('Cash-out wallet not found.', 404);
+  if (existing.hidden) throw validationError('Cash-out wallet is already hidden.');
 
   await query(
     `UPDATE ${WALLET_CONFIG.cashout.table}
@@ -849,9 +921,44 @@ export async function deleteCashoutWallet(walletId) {
   return { ok: true, id: walletId };
 }
 
+export async function unhideTopupWallet(walletId) {
+  const existing = await findWalletById('topup', walletId);
+  if (!existing) throw validationError('Top-up wallet not found.', 404);
+  if (!existing.hidden) throw validationError('Top-up wallet is not hidden.');
+
+  await assertUniqueWalletName('topup', existing.name, walletId);
+
+  await query(
+    `UPDATE ${WALLET_CONFIG.topup.table}
+     SET is_deleted = 0, updated_at = NOW()
+     WHERE id = ?`,
+    [walletId],
+  );
+
+  return findWalletById('topup', walletId);
+}
+
+export async function unhideCashoutWallet(walletId) {
+  const existing = await findWalletById('cashout', walletId);
+  if (!existing) throw validationError('Cash-out wallet not found.', 404);
+  if (!existing.hidden) throw validationError('Cash-out wallet is not hidden.');
+
+  await assertUniqueWalletName('cashout', existing.name, walletId);
+
+  await query(
+    `UPDATE ${WALLET_CONFIG.cashout.table}
+     SET is_deleted = 0, updated_at = NOW()
+     WHERE id = ?`,
+    [walletId],
+  );
+
+  return findWalletById('cashout', walletId);
+}
+
 export async function toggleTopupWalletStatus(walletId, active) {
   const existing = await findWalletById('topup', walletId);
   if (!existing) throw validationError('Top-up wallet not found.', 404);
+  if (existing.hidden) throw validationError('Unhide this wallet before changing availability.');
 
   const availability = active ? 'AVAILABLE' : 'NOT_AVAILABLE';
   await query(
@@ -867,6 +974,7 @@ export async function toggleTopupWalletStatus(walletId, active) {
 export async function toggleCashoutWalletStatus(walletId, active) {
   const existing = await findWalletById('cashout', walletId);
   if (!existing) throw validationError('Cash-out wallet not found.', 404);
+  if (existing.hidden) throw validationError('Unhide this wallet before changing availability.');
 
   const availability = active ? 'AVAILABLE' : 'NOT_AVAILABLE';
   await query(

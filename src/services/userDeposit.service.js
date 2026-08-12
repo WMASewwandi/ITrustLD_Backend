@@ -53,6 +53,9 @@ function mapTopupMethodRow(row) {
     .filter(Boolean);
   const allowNavigateButton = Boolean(Number(row.allow_navigate_button));
   const navigateUrl = allowNavigateButton ? String(row.navigate_url || '').trim() || null : null;
+  const navigateButtonLabel = allowNavigateButton
+    ? String(row.navigate_button_label || '').trim() || null
+    : null;
 
   return {
     id: row.id,
@@ -68,6 +71,8 @@ function mapTopupMethodRow(row) {
     allow_navigate_button: allowNavigateButton,
     navigateUrl,
     navigate_url: navigateUrl,
+    navigateButtonLabel,
+    navigate_button_label: navigateButtonLabel,
   };
 }
 

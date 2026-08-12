@@ -12,6 +12,8 @@ import {
   listTopupWallets,
   toggleCashoutWalletStatus,
   toggleTopupWalletStatus,
+  unhideCashoutWallet,
+  unhideTopupWallet,
   updateCashoutWallet,
   updateTopupWallet,
   getTopupWalletById,
@@ -178,6 +180,32 @@ adminWalletsRouter.post(
     try {
       const result = await deleteCashoutWallet(Number(req.params.walletId));
       res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminWalletsRouter.post(
+  '/topup/:walletId/unhide',
+  requirePermission('change_account_configs'),
+  async (req, res, next) => {
+    try {
+      const wallet = await unhideTopupWallet(Number(req.params.walletId));
+      res.json({ ok: true, wallet });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminWalletsRouter.post(
+  '/cashout/:walletId/unhide',
+  requirePermission('change_account_configs'),
+  async (req, res, next) => {
+    try {
+      const wallet = await unhideCashoutWallet(Number(req.params.walletId));
+      res.json({ ok: true, wallet });
     } catch (error) {
       next(error);
     }
