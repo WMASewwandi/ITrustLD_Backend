@@ -17,6 +17,46 @@ export { SL_TIMEZONE as SHIFT_TIMEZONE };
 
 const SHIFT_ROLES = ['sub-admin', 'deposit-executive', 'withdrawal-executive'];
 
+let lastAssignedAtColumnReady = false;
+
+async function columnExists(table, column) {
+  if (getDbDriver() === 'sqlite') {
+    const rows = await query(`PRAGMA table_info(${table})`);
+    return rows.some((row) => String(row.name).toLowerCase() === String(column).toLowerCase());
+  }
+  const rows = await query(`SHOW COLUMNS FROM ${table} LIKE ?`, [column]);
+  return rows.length > 0;
+}
+
+async function ensureLastAssignedAtColumn() {
+  if (lastAssignedAtColumnReady) return lastAssignedAtColumnReady;
+  try {
+    if (!(await columnExists('users', 'last_assigned_at'))) {
+      if (getDbDriver() === 'sqlite') {
+        await query(`ALTER TABLE users ADD COLUMN last_assigned_at TEXT NULL`);
+      } else {
+        try {
+          await query(
+            `ALTER TABLE users ADD COLUMN last_assigned_at TIMESTAMP NULL AFTER shift_end_time`,
+          );
+        } catch {
+          await query(`ALTER TABLE users ADD COLUMN last_assigned_at TIMESTAMP NULL`);
+        }
+      }
+    }
+    lastAssignedAtColumnReady = true;
+  } catch (error) {
+    console.warn('[shift] last_assigned_at column unavailable:', error.message);
+    lastAssignedAtColumnReady = false;
+  }
+  return lastAssignedAtColumnReady;
+}
+
+const USER_SELECT_WITH_LAST_ASSIGNED =
+  `SELECT DISTINCT u.id, u.name, u.email, u.is_online, u.shift, u.shift_start_time, u.shift_end_time, u.last_assigned_at`;
+const USER_SELECT_WITHOUT_LAST_ASSIGNED =
+  `SELECT DISTINCT u.id, u.name, u.email, u.is_online, u.shift, u.shift_start_time, u.shift_end_time`;
+
 function parseTimeToMinutes(value) {
   if (!value) return null;
   const text = String(value).trim();
@@ -280,8 +320,10 @@ export async function syncShiftHistoryForDates(shiftDates = []) {
 }
 
 async function getUsersByRole(roleName) {
+  const hasLastAssigned = await ensureLastAssignedAtColumn();
+  const select = hasLastAssigned ? USER_SELECT_WITH_LAST_ASSIGNED : USER_SELECT_WITHOUT_LAST_ASSIGNED;
   return query(
-    `SELECT DISTINCT u.id, u.name, u.email, u.is_online, u.shift, u.shift_start_time, u.shift_end_time, u.last_assigned_at
+    `${select}
      FROM users u
      INNER JOIN model_has_roles mhr ON mhr.model_id = u.id AND mhr.model_type = ?
      INNER JOIN roles r ON r.id = mhr.role_id
@@ -293,9 +335,11 @@ async function getUsersByRole(roleName) {
 
 async function getUsersByRoles(roleNames) {
   if (!roleNames.length) return [];
+  const hasLastAssigned = await ensureLastAssignedAtColumn();
+  const select = hasLastAssigned ? USER_SELECT_WITH_LAST_ASSIGNED : USER_SELECT_WITHOUT_LAST_ASSIGNED;
   const placeholders = roleNames.map(() => '?').join(', ');
   return query(
-    `SELECT DISTINCT u.id, u.name, u.email, u.is_online, u.shift, u.shift_start_time, u.shift_end_time, u.last_assigned_at
+    `${select}
      FROM users u
      INNER JOIN model_has_roles mhr ON mhr.model_id = u.id AND mhr.model_type = ?
      INNER JOIN roles r ON r.id = mhr.role_id
@@ -478,6 +522,8 @@ export async function buildExecutivesForAssignment(roleName) {
 
 export async function touchExecutiveLastAssigned(executiveId) {
   if (!executiveId) return;
+  const hasLastAssigned = await ensureLastAssignedAtColumn();
+  if (!hasLastAssigned) return;
   await query(`UPDATE users SET last_assigned_at = NOW(), updated_at = NOW() WHERE id = ?`, [
     executiveId,
   ]);

@@ -64,12 +64,14 @@ const FILTER_WHERE = {
     AND mobile_number_verification = 'VERIFIED'
     AND identity_document_status = 'RECEIVED'
     AND address_verification = 'VERIFIED'
+    AND identity_verification != 'VERIFIED'
   `,
   'only-nic': `
     email_verification = 'VERIFIED'
     AND mobile_number_verification = 'VERIFIED'
     AND identity_document_status = 'RECEIVED'
     AND identity_verification = 'VERIFIED'
+    AND address_verification != 'VERIFIED'
   `,
   banned: `account_status = 'BANNED'`,
   // Matches Laravel loadAllUsers — email + mobile verified customers.
@@ -145,18 +147,18 @@ function buildSearchClause(search = {}) {
   const values = [];
 
   if (search.email) {
-    conditions.push('LOWER(email) = ?');
-    values.push(String(search.email).trim().toLowerCase());
+    conditions.push('LOWER(email) LIKE ?');
+    values.push(`%${String(search.email).trim().toLowerCase()}%`);
   }
   if (search.account_id) {
     const raw = String(search.account_id).trim();
     const numeric = Number(raw);
     if (Number.isFinite(numeric) && numeric > ACCOUNT_HOLDER_ID_OFFSET) {
-      conditions.push('(account_number = ? OR id = ?)');
-      values.push(raw, numeric - ACCOUNT_HOLDER_ID_OFFSET);
+      conditions.push('(account_number LIKE ? OR id = ?)');
+      values.push(`%${raw}%`, numeric - ACCOUNT_HOLDER_ID_OFFSET);
     } else {
-      conditions.push('account_number = ?');
-      values.push(raw);
+      conditions.push('account_number LIKE ?');
+      values.push(`%${raw}%`);
     }
   }
   if (search.primary_id) {
@@ -164,12 +166,12 @@ function buildSearchClause(search = {}) {
     values.push(search.primary_id);
   }
   if (search.first_name) {
-    conditions.push('first_name = ?');
-    values.push(search.first_name);
+    conditions.push('LOWER(first_name) LIKE ?');
+    values.push(`%${String(search.first_name).trim().toLowerCase()}%`);
   }
   if (search.last_name) {
-    conditions.push('last_name = ?');
-    values.push(search.last_name);
+    conditions.push('LOWER(last_name) LIKE ?');
+    values.push(`%${String(search.last_name).trim().toLowerCase()}%`);
   }
 
   return { conditions, values };
