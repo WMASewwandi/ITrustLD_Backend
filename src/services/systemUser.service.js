@@ -173,6 +173,29 @@ async function findRoleIdByName(roleName) {
   return rows[0]?.id ?? null;
 }
 
+/** Email uniqueness is global on `users` (customers + system). System Users UI only lists non-customer roles. */
+async function buildEmailInUseError(existingUserId) {
+  const roles = await query(
+    `SELECT r.name
+     FROM roles r
+     INNER JOIN model_has_roles mhr ON mhr.role_id = r.id
+     WHERE mhr.model_id = ? AND mhr.model_type = ?
+     ORDER BY r.name ASC`,
+    [existingUserId, LARAVEL_USER_MODEL],
+  );
+  const roleNames = roles.map((row) => row.name);
+  const isCustomerOnly =
+    roleNames.length === 0 || (roleNames.length === 1 && roleNames[0] === 'customer');
+
+  const error = new Error(
+    isCustomerOnly
+      ? 'Email is already in use by a customer account. It will not appear under System Users — pick a different email, or use that customer email only for the user portal.'
+      : 'Email is already in use by another system user.',
+  );
+  error.status = 409;
+  return error;
+}
+
 export async function updateSystemUser(userId, payload) {
   const existing = await findSystemUserById(userId);
   if (!existing) {
@@ -219,9 +242,7 @@ export async function updateSystemUser(userId, payload) {
     [email, userId],
   );
   if (duplicateEmail[0]) {
-    const error = new Error('Email is already in use.');
-    error.status = 409;
-    throw error;
+    throw await buildEmailInUseError(duplicateEmail[0].id);
   }
 
   await ensurePendingShowCountColumn();
@@ -314,9 +335,7 @@ export async function createSystemUser(payload) {
     [email],
   );
   if (duplicateEmail[0]) {
-    const error = new Error('Email is already in use.');
-    error.status = 409;
-    throw error;
+    throw await buildEmailInUseError(duplicateEmail[0].id);
   }
 
   await ensurePendingShowCountColumn();

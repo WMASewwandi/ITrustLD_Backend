@@ -55,6 +55,159 @@ async function tableHasColumn(tableName, columnName) {
   return Boolean(rows[0]);
 }
 
+function mapPlatformTypeForWalletCatalog(platformTypes) {
+  const first = platformTypes?.[0] || 'INT';
+  const upper = String(first).trim().toUpperCase();
+  if (upper === 'EMAIL') return 'EMAIL';
+  if (upper === 'MOBILE') return 'MOBILE';
+  if (upper === 'TEXT') return 'TEXT';
+  if (upper === 'VACHAR' || upper === 'VARCHAR') return 'VARCHAR';
+  return 'INT';
+}
+
+async function resolveOrCreateWalletCatalogId(methodName, platformTypes) {
+  const name = String(methodName || '').trim();
+  if (!name) return null;
+
+  const identifier = name.toUpperCase();
+  const existing = await query(
+    `SELECT id
+     FROM wallets
+     WHERE UPPER(wallet_identifier) = ?
+        OR UPPER(wallet_name) = ?
+     LIMIT 1`,
+    [identifier, identifier],
+  );
+  if (existing[0]) return existing[0].id;
+
+  const platformType = mapPlatformTypeForWalletCatalog(platformTypes);
+  const result = await query(
+    `INSERT INTO wallets (wallet_identifier, wallet_name, platform_id_type, created_at, updated_at)
+     VALUES (?, ?, ?, NOW(), NOW())`,
+    [identifier, name, platformType],
+  );
+  return result.insertId;
+}
+
+async function methodHasExchangeRates(kind, methodId) {
+  const rateTable = kind === 'topup' ? 'deposit_rates' : 'withdrawal_rates';
+  const methodIdColumn = kind === 'topup' ? 'topup_method_id' : 'cashout_method_id';
+  const rows = await query(
+    `SELECT id
+     FROM ${rateTable}
+     WHERE ${methodIdColumn} = ?
+       AND (is_deleted = 0 OR is_deleted IS NULL)
+     LIMIT 1`,
+    [methodId],
+  );
+  return Boolean(rows[0]);
+}
+
+async function copyExchangeRatesFromPreviousMethod(kind, newMethodId, catalogWalletId, methodName) {
+  const config = WALLET_CONFIG[kind];
+  const rateTable = kind === 'topup' ? 'deposit_rates' : 'withdrawal_rates';
+  const methodIdColumn = kind === 'topup' ? 'topup_method_id' : 'cashout_method_id';
+
+  let previousMethodId = null;
+  if (catalogWalletId) {
+    const previousMethods = await query(
+      `SELECT id
+       FROM ${config.table}
+       WHERE wallet_id = ?
+         AND id != ?
+       ORDER BY id DESC`,
+      [catalogWalletId, newMethodId],
+    );
+    previousMethodId = previousMethods[0]?.id ?? null;
+  }
+
+  if (!previousMethodId && methodName) {
+    const byName = await query(
+      `SELECT id
+       FROM ${config.table}
+       WHERE UPPER(${config.nameColumn}) = UPPER(?)
+         AND id != ?
+       ORDER BY id DESC
+       LIMIT 1`,
+      [methodName, newMethodId],
+    );
+    previousMethodId = byName[0]?.id ?? null;
+  }
+
+  if (!previousMethodId) return;
+
+  const rateRows = await query(
+    `SELECT admin_id, payment_option_id, rate
+     FROM ${rateTable}
+     WHERE ${methodIdColumn} = ?
+       AND (is_deleted = 0 OR is_deleted IS NULL)
+     ORDER BY id DESC`,
+    [previousMethodId],
+  );
+
+  const seen = new Set();
+  for (const row of rateRows) {
+    const key = String(row.payment_option_id);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    await query(
+      `INSERT INTO ${rateTable}
+         (admin_id, ${methodIdColumn}, payment_option_id, rate, applicable_date, is_deleted, created_at, updated_at)
+       VALUES (?, ?, ?, ?, NOW(), 0, NOW(), NOW())`,
+      [row.admin_id ?? null, newMethodId, row.payment_option_id, row.rate],
+    );
+  }
+}
+
+async function ensureMethodWalletCatalogLink(
+  kind,
+  methodId,
+  methodName,
+  platformTypes,
+  { copyRates = false } = {},
+) {
+  const config = WALLET_CONFIG[kind];
+  const hasWalletId = await tableHasColumn(config.table, 'wallet_id');
+  if (!hasWalletId) return null;
+
+  const current = await query(`SELECT wallet_id FROM ${config.table} WHERE id = ? LIMIT 1`, [
+    methodId,
+  ]);
+  let catalogWalletId = current[0]?.wallet_id ?? null;
+
+  if (!catalogWalletId) {
+    catalogWalletId = await resolveOrCreateWalletCatalogId(methodName, platformTypes);
+    if (catalogWalletId) {
+      await query(`UPDATE ${config.table} SET wallet_id = ? WHERE id = ?`, [
+        catalogWalletId,
+        methodId,
+      ]);
+    }
+  }
+
+  if (copyRates && !(await methodHasExchangeRates(kind, methodId))) {
+    await copyExchangeRatesFromPreviousMethod(
+      kind,
+      methodId,
+      catalogWalletId,
+      methodName,
+    );
+  }
+
+  return catalogWalletId;
+}
+
+async function backfillWalletCatalogLinks(kind, rows) {
+  for (const row of rows) {
+    const config = WALLET_CONFIG[kind];
+    const platformTypes = parsePlatformTypes(row.platform_id_type || row[config.idTypeColumn] || '');
+    const methodName = row[config.nameColumn] || '';
+    await ensureMethodWalletCatalogLink(kind, row.id, methodName, platformTypes, {
+      copyRates: true,
+    });
+  }
+}
+
 async function hasAllowForVoucherColumn() {
   return tableHasColumn('topup_methods', 'allow_for_voucher');
 }
@@ -402,6 +555,7 @@ export async function listTopupWallets() {
      WHERE is_deleted = 0 OR is_deleted IS NULL
      ORDER BY id DESC`,
   );
+  await backfillWalletCatalogLinks('topup', rows);
   return Promise.all(rows.map((row) => mapWalletRow(row, 'topup')));
 }
 
@@ -414,6 +568,7 @@ export async function listCashoutWallets() {
      WHERE is_deleted = 0 OR is_deleted IS NULL
      ORDER BY id DESC`,
   );
+  await backfillWalletCatalogLinks('cashout', rows);
   return Promise.all(rows.map((row) => mapWalletRow(row, 'cashout')));
 }
 
@@ -433,31 +588,63 @@ export async function createTopupWallet(payload, logoFile) {
   const navigate = parseNavigateSettings(payload);
   const config = WALLET_CONFIG.topup;
   const logo = logoFile ? await storeWalletLogo(logoFile) : null;
+  const catalogWalletId = await resolveOrCreateWalletCatalogId(
+    validated.name,
+    validated.platformTypes,
+  );
+  const hasWalletIdColumn = await tableHasColumn(config.table, 'wallet_id');
 
+  const insertColumns = [
+    config.nameColumn,
+    config.currencyColumn,
+    'minimum_limit',
+    'maximum_limit',
+    'platform_id_type',
+    config.idTypeColumn,
+    'tnc',
+    'availability',
+    'allow_for_voucher',
+    'allow_navigate_button',
+    'navigate_url',
+    config.logoColumn,
+    'is_deleted',
+    'created_at',
+    'updated_at',
+  ];
+  const insertValues = [
+    validated.name,
+    validated.currency,
+    validated.minimumLimit,
+    validated.maximumLimit,
+    validated.platformType,
+    validated.platformType,
+    validated.terms,
+    'AVAILABLE',
+    allowForVoucher ? 1 : 0,
+    navigate.allowNavigateButton ? 1 : 0,
+    navigate.navigateUrl,
+    logo,
+    0,
+  ];
+
+  if (hasWalletIdColumn && catalogWalletId) {
+    insertColumns.push('wallet_id');
+    insertValues.push(catalogWalletId);
+  }
+
+  const placeholders = [...insertValues.map(() => '?'), 'NOW()', 'NOW()'].join(', ');
   const result = await query(
-    `INSERT INTO ${config.table}
-       (${config.nameColumn}, ${config.currencyColumn}, minimum_limit, maximum_limit,
-        platform_id_type, ${config.idTypeColumn}, tnc, availability, allow_for_voucher,
-        allow_navigate_button, navigate_url, ${config.logoColumn}, is_deleted, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'AVAILABLE', ?, ?, ?, ?, 0, NOW(), NOW())`,
-    [
-      validated.name,
-      validated.currency,
-      validated.minimumLimit,
-      validated.maximumLimit,
-      validated.platformType,
-      validated.platformType,
-      validated.terms,
-      allowForVoucher ? 1 : 0,
-      navigate.allowNavigateButton ? 1 : 0,
-      navigate.navigateUrl,
-      logo,
-    ],
+    `INSERT INTO ${config.table} (${insertColumns.join(', ')})
+     VALUES (${placeholders})`,
+    insertValues,
   );
 
-  const walletId = result.insertId;
-  await createWalletPaymentOptions(walletId, config.walletType, paymentMethodIds);
-  return findWalletById('topup', walletId);
+  const methodId = result.insertId;
+  await createWalletPaymentOptions(methodId, config.walletType, paymentMethodIds);
+  await ensureMethodWalletCatalogLink('topup', methodId, validated.name, validated.platformTypes, {
+    copyRates: true,
+  });
+  return findWalletById('topup', methodId);
 }
 
 export async function createCashoutWallet(payload, logoFile) {
@@ -471,31 +658,61 @@ export async function createCashoutWallet(payload, logoFile) {
   const navigate = parseNavigateSettings(payload);
   const config = WALLET_CONFIG.cashout;
   const logo = logoFile ? await storeWalletLogo(logoFile) : null;
+  const catalogWalletId = await resolveOrCreateWalletCatalogId(
+    validated.name,
+    validated.platformTypes,
+  );
+  const hasWalletIdColumn = await tableHasColumn(config.table, 'wallet_id');
 
+  const insertColumns = [
+    config.nameColumn,
+    config.currencyColumn,
+    'minimum_limit',
+    'maximum_limit',
+    'platform_id_type',
+    config.idTypeColumn,
+    'tnc',
+    'availability',
+    'allow_navigate_button',
+    'navigate_url',
+    config.logoColumn,
+    'is_deleted',
+    'created_at',
+    'updated_at',
+  ];
+  const insertValues = [
+    validated.name,
+    validated.currency,
+    validated.minimumLimit,
+    validated.maximumLimit,
+    validated.platformType,
+    validated.platformType,
+    validated.terms,
+    'AVAILABLE',
+    navigate.allowNavigateButton ? 1 : 0,
+    navigate.navigateUrl,
+    logo,
+    0,
+  ];
+
+  if (hasWalletIdColumn && catalogWalletId) {
+    insertColumns.push('wallet_id');
+    insertValues.push(catalogWalletId);
+  }
+
+  const placeholders = [...insertValues.map(() => '?'), 'NOW()', 'NOW()'].join(', ');
   const result = await query(
-    `INSERT INTO ${config.table}
-       (${config.nameColumn}, ${config.currencyColumn}, minimum_limit, maximum_limit,
-        platform_id_type, ${config.idTypeColumn}, tnc, availability,
-        allow_navigate_button, navigate_url, ${config.logoColumn},
-        is_deleted, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'AVAILABLE', ?, ?, ?, 0, NOW(), NOW())`,
-    [
-      validated.name,
-      validated.currency,
-      validated.minimumLimit,
-      validated.maximumLimit,
-      validated.platformType,
-      validated.platformType,
-      validated.terms,
-      navigate.allowNavigateButton ? 1 : 0,
-      navigate.navigateUrl,
-      logo,
-    ],
+    `INSERT INTO ${config.table} (${insertColumns.join(', ')})
+     VALUES (${placeholders})`,
+    insertValues,
   );
 
-  const walletId = result.insertId;
-  await createWalletPaymentOptions(walletId, config.walletType, paymentMethodIds);
-  return findWalletById('cashout', walletId);
+  const methodId = result.insertId;
+  await createWalletPaymentOptions(methodId, config.walletType, paymentMethodIds);
+  await ensureMethodWalletCatalogLink('cashout', methodId, validated.name, validated.platformTypes, {
+    copyRates: true,
+  });
+  return findWalletById('cashout', methodId);
 }
 
 export async function updateTopupWallet(walletId, payload, logoFile) {
@@ -548,6 +765,9 @@ export async function updateTopupWallet(walletId, payload, logoFile) {
   );
 
   await syncWalletPaymentOptions(walletId, config.walletType, paymentMethodIds);
+  await ensureMethodWalletCatalogLink('topup', walletId, validated.name, validated.platformTypes, {
+    copyRates: true,
+  });
   return findWalletById('topup', walletId);
 }
 
@@ -595,6 +815,9 @@ export async function updateCashoutWallet(walletId, payload, logoFile) {
   );
 
   await syncWalletPaymentOptions(walletId, config.walletType, paymentMethodIds);
+  await ensureMethodWalletCatalogLink('cashout', walletId, validated.name, validated.platformTypes, {
+    copyRates: true,
+  });
   return findWalletById('cashout', walletId);
 }
 
