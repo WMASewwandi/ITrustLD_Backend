@@ -65,7 +65,7 @@ adminDashboardRouter.get(
 
 adminDashboardRouter.get(
   '/filter-transactions',
-  requirePermission('read_deposit_data'),
+  requirePermission('view_admin_dashboard'),
   async (req, res, next) => {
     try {
       const data = await filterDashboardTransactions({
