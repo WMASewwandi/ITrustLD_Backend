@@ -96,8 +96,29 @@ export async function ensureSystemActivitiesCatalog() {
   }
 
   await ensureBuiltinRolePermissions();
+  await grantAuthorizePermissionToExistingAuthorizerRole();
 
   syncReady = true;
+}
+
+async function grantAuthorizePermissionToExistingAuthorizerRole() {
+  const roleRows = await query(
+    `SELECT id FROM roles WHERE name = 'withdrawal-authorizer' AND guard_name = ? LIMIT 1`,
+    [GUARD_NAME],
+  );
+  if (!roleRows[0]) return;
+
+  const currentRows = await query(
+    `SELECT p.name
+     FROM permissions p
+     INNER JOIN role_has_permissions rhp ON rhp.permission_id = p.id
+     WHERE rhp.role_id = ?`,
+    [roleRows[0].id],
+  );
+  const current = currentRows.map((row) => normalizeToActivityIdentifier(row.name));
+  if (current.includes('authorize_withdrawal_data')) return;
+
+  await syncRolePermissions('withdrawal-authorizer', [...current, 'authorize_withdrawal_data']);
 }
 
 async function ensureBuiltinRolePermissions() {

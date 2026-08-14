@@ -13,10 +13,14 @@ import {
 } from './mail.templates.js';
 import {
   getLevelDisplayName,
+  getLevelId,
+  getLevelLabel,
   getTierProgressPercentage,
   getUserPointLevel,
   updateUserPointLevel,
 } from './pointEarning.service.js';
+import { getMembershipTierThresholds } from './loyaltyMembershipTier.service.js';
+import { ensureBonusTierSchema } from './adminLoyaltyManagement.service.js';
 import { getClientBonusSummaryForUser } from './userVoucherClaims.service.js';
 import {
   logSystemUserAction,
@@ -163,8 +167,15 @@ async function getPointsBreakdownForYear(userId) {
   ];
 }
 
-async function getPartnerLevelOverviewRows(userId, level, earnedForYear) {
-  const tiers = PARTNER_TIER_THRESHOLDS;
+async function getConfiguredPartnerTiers() {
+  const thresholds = await getMembershipTierThresholds();
+  return PARTNER_TIER_THRESHOLDS.map((tier) => {
+    const match = thresholds.find((item) => item.slug === tier.id);
+    return match ? { ...tier, levelPoints: Number(match.points) || 0 } : tier;
+  });
+}
+
+async function getPartnerLevelOverviewRows(userId, level, earnedForYear, tiers = PARTNER_TIER_THRESHOLDS) {
   const currentTier = tiers[Math.max(0, Math.min(tiers.length - 1, level - 1))] || tiers[0];
   const nextTier = tiers[level] || null;
   const currentPts = Math.floor(Number(earnedForYear) || 0);
@@ -244,8 +255,7 @@ function getTrackPositionPct(points, tiers = PARTNER_TIER_THRESHOLDS) {
   return Math.min(100, ((segmentIndex + frac) / Math.max(tiers.length - 1, 1)) * 100);
 }
 
-function buildPartnerProgress(level, earnedForYear, levelOverviewRows) {
-  const tiers = PARTNER_TIER_THRESHOLDS;
+function buildPartnerProgress(level, earnedForYear, levelOverviewRows, tiers = PARTNER_TIER_THRESHOLDS) {
   const currentTier = tiers[Math.max(0, Math.min(tiers.length - 1, level - 1))] || tiers[0];
   const nextTier = tiers[level] || null;
   const currentPts = Number(earnedForYear) || 0;
@@ -448,17 +458,36 @@ export async function getUserLoyaltySummary(userId) {
   const partnerProgressPromise = isPartner
     ? Promise.all([
         getPointsBreakdownForYear(userId),
-        getPartnerLevelOverviewRows(userId, level, earnedForYear),
-      ]).then(([pointsBreakdown, levelOverviewRows]) => ({
-        ...buildPartnerProgress(level, earnedForYear, levelOverviewRows),
-        points_breakdown: pointsBreakdown,
-      }))
+        getConfiguredPartnerTiers(),
+      ]).then(async ([pointsBreakdown, tiers]) => {
+        const levelOverviewRows = await getPartnerLevelOverviewRows(
+          userId,
+          level,
+          earnedForYear,
+          tiers,
+        );
+        return {
+          ...buildPartnerProgress(level, earnedForYear, levelOverviewRows, tiers),
+          points_breakdown: pointsBreakdown,
+        };
+      })
     : Promise.resolve(null);
 
-  const [partnerProgress, bonusSummary, clientBonusSummary] = await Promise.all([
+  const directClientCountPromise = isPartner
+    ? query(
+        `SELECT COUNT(*) AS total
+         FROM partner_clients pc
+         INNER JOIN account_holders a ON pc.client_ah_id = a.id
+         WHERE pc.partner_ah_id = ? AND a.account_number IS NOT NULL`,
+        [accountHolder.id],
+      ).then((rows) => Number(rows[0]?.total || 0))
+    : Promise.resolve(0);
+
+  const [partnerProgress, bonusSummary, clientBonusSummary, directClientCount] = await Promise.all([
     partnerProgressPromise,
     getBonusSummaryForUser(userId, isPartner, totals.remaining),
     getClientBonusSummaryForUser(userId, isPartner),
+    directClientCountPromise,
   ]);
 
   return {
@@ -474,6 +503,7 @@ export async function getUserLoyaltySummary(userId) {
     is_partner: isPartner,
     affiliate_code: affiliateCode,
     has_affiliate_link: Boolean(affiliateCode),
+    direct_client_count: directClientCount,
     partner_tier: getLevelDisplayName(level),
     partner_progress: partnerProgress,
     bonus_summary: bonusSummary,
@@ -1159,18 +1189,47 @@ async function getLoyaltyManagementConfig(identifier) {
   return rows[0] || null;
 }
 
-async function getActiveLoyaltyBonus(isAffiliate) {
+async function getUserYearlyPoints(userId) {
   const rows = await query(
-    `SELECT id, bonus_amount, is_active
+    `SELECT COALESCE(SUM(point_earning_amount), 0) AS total
+     FROM point_earnings
+     WHERE user_id = ?
+       AND created_at > DATE_SUB(NOW(), INTERVAL 365 DAY)`,
+    [userId],
+  );
+  return Number(rows[0]?.total) || 0;
+}
+
+async function getActiveLoyaltyBonus(isAffiliate, userId) {
+  await ensureBonusTierSchema();
+  const yearlyPoints = await getUserYearlyPoints(userId);
+  const tier = getLevelLabel(await resolveLevelId(yearlyPoints));
+  const rows = await query(
+    `SELECT id, bonus_amount, is_active, membership_tier
      FROM loyalty_management_bonuses
      WHERE is_active = 1
        AND is_affiliate = ?
+       AND UPPER(membership_tier) = ?
        AND (is_deleted = 0 OR is_deleted IS NULL OR is_deleted = FALSE)
-     ORDER BY display_id DESC
+     ORDER BY id DESC
      LIMIT 1`,
-    [isAffiliate ? 1 : 0],
+    [isAffiliate ? 1 : 0, tier],
   );
-  return rows[0] || null;
+
+  if (rows[0]) {
+    const amount = Number(rows[0].bonus_amount);
+    return {
+      ...rows[0],
+      bonus_amount: Number.isFinite(amount) ? amount : 1,
+    };
+  }
+
+  return {
+    id: 0,
+    bonus_amount: 1,
+    is_active: 1,
+    membership_tier: tier,
+  };
 }
 
 async function isBonusCollectAvailable(userId, isPartner, pointsRemaining) {
@@ -1180,7 +1239,7 @@ async function isBonusCollectAvailable(userId, isPartner, pointsRemaining) {
     return { available: false, reason: 'Bonus program is not active.' };
   }
 
-  const activeBonus = await getActiveLoyaltyBonus(isPartner);
+  const activeBonus = await getActiveLoyaltyBonus(isPartner, userId);
   if (!activeBonus) {
     return { available: false, reason: 'No active bonus offer at the moment.' };
   }
@@ -1216,7 +1275,14 @@ async function isBonusCollectAvailable(userId, isPartner, pointsRemaining) {
 
 export async function getBonusSummaryForUser(userId, isPartner, pointsRemaining) {
   const eligibility = await isBonusCollectAvailable(userId, isPartner, pointsRemaining);
-  const amount = Number(eligibility.bonus?.bonus_amount || 0);
+  const rawAmount = Number(eligibility.bonus?.bonus_amount);
+  const amount = eligibility.available
+    ? Number.isFinite(rawAmount) && rawAmount > 0
+      ? rawAmount
+      : 1
+    : Number.isFinite(rawAmount)
+      ? rawAmount
+      : 0;
 
   return {
     available: Boolean(eligibility.available),
@@ -1294,8 +1360,9 @@ export async function createUserBonusClaim(userId, payload = {}) {
   }
 
   const rate = await getLatestPointWithdrawalRate(accountType);
-  const bonusAmount = Number(eligibility.bonus.bonus_amount) || 0;
-  const accountCurrencyAmount = bonusAmount * rate;
+  const bonusAmount = Number(eligibility.bonus.bonus_amount);
+  const resolvedBonusAmount = Number.isFinite(bonusAmount) && bonusAmount > 0 ? bonusAmount : 1;
+  const accountCurrencyAmount = resolvedBonusAmount * rate;
 
   const insert = await query(
     `INSERT INTO loyalty_bonus_collects
@@ -1303,8 +1370,8 @@ export async function createUserBonusClaim(userId, payload = {}) {
      VALUES (?, ?, ?, ?, ?, ?, 'Pending', NOW(), NOW())`,
     [
       userId,
-      eligibility.bonus.id,
-      bonusAmount,
+      eligibility.bonus.id || 0,
+      resolvedBonusAmount,
       accountCurrencyAmount,
       accountType,
       accountId,
@@ -1320,11 +1387,11 @@ export async function createUserBonusClaim(userId, payload = {}) {
     message: isPartner
       ? 'Successfully redeemed your affiliate bonus'
       : 'Successfully redeemed your bonus',
-    amount: bonusAmount,
+    amount: resolvedBonusAmount,
     transaction_id: displayBonusTransactionId(claimId),
     claim: mapUserBonusClaimRow({
       id: claimId,
-      amount: bonusAmount,
+      amount: resolvedBonusAmount,
       account_currency_amount: accountCurrencyAmount,
       payment_option: accountType,
       status: 'Pending',

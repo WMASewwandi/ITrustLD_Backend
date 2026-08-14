@@ -1,8 +1,15 @@
 import { getDbDriver, query } from '../config/database.js';
 import { LARAVEL_USER_MODEL } from '../constants/adminRoles.js';
 import { nowSqlDateTime } from '../utils/slTime.js';
-import { formatRoleDisplayName } from './role.service.js';
+import { formatRoleDisplayName, getRolePermissionsMap } from './role.service.js';
 import { hashLaravelPassword } from '../utils/laravelPassword.js';
+import {
+  DEPOSIT_UPDATE_STATUSES,
+  WITHDRAWAL_UPDATE_STATUSES,
+  ensureStatusUpdateScopeColumns,
+  parseAllowedStatuses,
+  serializeAllowedStatuses,
+} from './statusUpdateScope.service.js';
 
 const GUARD_NAME = 'web';
 const MAX_PENDING_SHOW_COUNT = 1000;
@@ -83,6 +90,14 @@ function mapSystemUser(user, roles) {
     is_online: Boolean(user.is_online),
     shift: formatShift(user.shift),
     pending_show_count: parsePendingShowCount(user.pending_show_count),
+    allowed_deposit_statuses: parseAllowedStatuses(
+      user.allowed_deposit_statuses,
+      DEPOSIT_UPDATE_STATUSES,
+    ),
+    allowed_withdrawal_statuses: parseAllowedStatuses(
+      user.allowed_withdrawal_statuses,
+      WITHDRAWAL_UPDATE_STATUSES,
+    ),
     created_at: user.created_at,
     roles,
     role: primaryRole,
@@ -112,20 +127,24 @@ async function getRolesByUserIds() {
 
 export async function getAssignableRoles() {
   const rows = await query(
-    `SELECT name FROM roles WHERE guard_name = ? AND name != ? ORDER BY name ASC`,
+    `SELECT id, name FROM roles WHERE guard_name = ? AND name != ? ORDER BY name ASC`,
     [GUARD_NAME, 'customer'],
   );
+  const permissionsByRole = await getRolePermissionsMap();
 
   return rows.map((row) => ({
     name: row.name,
     display_name: formatRoleDisplayName(row.name),
+    permissions: permissionsByRole.get(row.id) ?? [],
   }));
 }
 
 export async function getAllSystemUsers() {
   await ensurePendingShowCountColumn();
+  await ensureStatusUpdateScopeColumns();
   const users = await query(
-    `SELECT DISTINCT u.id, u.name, u.email, u.is_active, u.is_online, u.shift, u.pending_show_count, u.created_at
+    `SELECT DISTINCT u.id, u.name, u.email, u.is_active, u.is_online, u.shift, u.pending_show_count,
+            u.allowed_deposit_statuses, u.allowed_withdrawal_statuses, u.created_at
      FROM users u
      INNER JOIN model_has_roles mhr ON mhr.model_id = u.id AND mhr.model_type = ?
      INNER JOIN roles r ON r.id = mhr.role_id
@@ -141,8 +160,10 @@ export async function getAllSystemUsers() {
 
 export async function findSystemUserById(userId) {
   await ensurePendingShowCountColumn();
+  await ensureStatusUpdateScopeColumns();
   const rows = await query(
-    `SELECT u.id, u.name, u.email, u.is_active, u.is_online, u.shift, u.pending_show_count, u.created_at
+    `SELECT u.id, u.name, u.email, u.is_active, u.is_online, u.shift, u.pending_show_count,
+            u.allowed_deposit_statuses, u.allowed_withdrawal_statuses, u.created_at
      FROM users u
      WHERE u.id = ?
      LIMIT 1`,
@@ -196,6 +217,29 @@ async function buildEmailInUseError(existingUserId) {
   return error;
 }
 
+async function resolveStatusScopeForRole(roleName, payload = {}) {
+  const roles = await getAssignableRoles();
+  const role = roles.find((item) => item.name === roleName);
+  const permissions = role?.permissions || [];
+  const canUpdateDeposits = permissions.includes('status_update_deposit_data');
+  const canUpdateWithdrawals =
+    permissions.includes('status_update_withdrawal_data') ||
+    permissions.includes('authorize_withdrawal_data');
+
+  return {
+    allowedDepositStatuses: canUpdateDeposits
+      ? serializeAllowedStatuses(payload.allowed_deposit_statuses, DEPOSIT_UPDATE_STATUSES, {
+          required: Array.isArray(payload.allowed_deposit_statuses),
+        })
+      : null,
+    allowedWithdrawalStatuses: canUpdateWithdrawals
+      ? serializeAllowedStatuses(payload.allowed_withdrawal_statuses, WITHDRAWAL_UPDATE_STATUSES, {
+          required: Array.isArray(payload.allowed_withdrawal_statuses),
+        })
+      : null,
+  };
+}
+
 export async function updateSystemUser(userId, payload) {
   const existing = await findSystemUserById(userId);
   if (!existing) {
@@ -211,6 +255,7 @@ export async function updateSystemUser(userId, payload) {
   const isActive = payload.is_active !== false && payload.is_active !== 0 && payload.is_active !== '0';
   const shift = parseShiftToDb(payload.shift);
   const pendingShowCount = parsePendingShowCount(payload.pending_show_count);
+  const statusScope = await resolveStatusScopeForRole(role, payload);
 
   if (!name || !email || !role) {
     const error = new Error('Name, email, and role are required.');
@@ -246,6 +291,7 @@ export async function updateSystemUser(userId, payload) {
   }
 
   await ensurePendingShowCountColumn();
+  await ensureStatusUpdateScopeColumns();
   const shiftTimes = toShiftTimes(shift);
   const now = nowSqlDateTime();
 
@@ -257,6 +303,8 @@ export async function updateSystemUser(userId, payload) {
     'shift_start_time = ?',
     'shift_end_time = ?',
     'pending_show_count = ?',
+    'allowed_deposit_statuses = ?',
+    'allowed_withdrawal_statuses = ?',
     'updated_at = ?',
   ];
   const updateParams = [
@@ -267,6 +315,8 @@ export async function updateSystemUser(userId, payload) {
     shiftTimes.shift_start_time,
     shiftTimes.shift_end_time,
     pendingShowCount,
+    statusScope.allowedDepositStatuses,
+    statusScope.allowedWithdrawalStatuses,
     now,
   ];
 
@@ -304,6 +354,7 @@ export async function createSystemUser(payload) {
   const isActive = payload.is_active !== false && payload.is_active !== 0 && payload.is_active !== '0';
   const shift = parseShiftToDb(payload.shift);
   const pendingShowCount = parsePendingShowCount(payload.pending_show_count);
+  const statusScope = await resolveStatusScopeForRole(role, payload);
 
   if (!name || !email || !role || !password) {
     const error = new Error('Name, email, password, and role are required.');
@@ -339,13 +390,14 @@ export async function createSystemUser(payload) {
   }
 
   await ensurePendingShowCountColumn();
+  await ensureStatusUpdateScopeColumns();
   const shiftTimes = toShiftTimes(shift);
   const now = nowSqlDateTime();
   const hashedPassword = await hashLaravelPassword(password);
 
   const result = await query(
-    `INSERT INTO users (name, email, password, is_active, is_online, shift, shift_start_time, shift_end_time, pending_show_count, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO users (name, email, password, is_active, is_online, shift, shift_start_time, shift_end_time, pending_show_count, allowed_deposit_statuses, allowed_withdrawal_statuses, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       name,
       email,
@@ -355,6 +407,8 @@ export async function createSystemUser(payload) {
       shiftTimes.shift_start_time,
       shiftTimes.shift_end_time,
       pendingShowCount,
+      statusScope.allowedDepositStatuses,
+      statusScope.allowedWithdrawalStatuses,
       now,
       now,
     ],

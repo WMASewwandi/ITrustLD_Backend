@@ -17,16 +17,25 @@ import {
 } from './systemUserActionLog.service.js';
 import { findUserById } from './user.service.js';
 import { env } from '../config/env.js';
+import {
+  getLevelIdFromThresholds,
+  getMembershipTierThresholds,
+} from './loyaltyMembershipTier.service.js';
 
 export const ACCOUNT_HOLDER_ID_OFFSET = 126872;
 
 const SELECT_COLUMNS = `
-  id, user_id, first_name, last_name, email, mobile_number, account_number,
-  email_verification, mobile_number_verification, identity_verification, address_verification,
-  identity_document_status, address_document_status, account_status, is_patner, banned_reason,
-  identity_verification_rejection_message, address_verification_rejection_message,
-  identity_document_name, identity_document_type, address_document_name, address_document_type,
-  updated_at
+  account_holders.id, account_holders.user_id, account_holders.first_name, account_holders.last_name,
+  account_holders.email, account_holders.mobile_number, account_holders.account_number,
+  account_holders.email_verification, account_holders.mobile_number_verification,
+  account_holders.identity_verification, account_holders.address_verification,
+  account_holders.identity_document_status, account_holders.address_document_status,
+  account_holders.account_status, account_holders.is_patner, account_holders.banned_reason,
+  account_holders.identity_verification_rejection_message,
+  account_holders.address_verification_rejection_message,
+  account_holders.identity_document_name, account_holders.identity_document_type,
+  account_holders.address_document_name, account_holders.address_document_type,
+  account_holders.updated_at
 `;
 
 const FILTER_WHERE = {
@@ -132,6 +141,8 @@ export function toCustomerRow(row) {
     email: row.email,
     mobile: row.mobile_number || '',
     partner: mapPartner(row.is_patner),
+    userType: row.is_patner === 'YES' ? 'Affluent' : 'Normal',
+    loyaltyTier: 'Normal',
     nic: mapKycStatus(row.identity_verification, row.identity_document_status),
     address: mapKycStatus(row.address_verification, row.address_document_status),
     status: deriveStatus(row),
@@ -147,34 +158,119 @@ function buildSearchClause(search = {}) {
   const values = [];
 
   if (search.email) {
-    conditions.push('LOWER(email) LIKE ?');
+    conditions.push('LOWER(account_holders.email) LIKE ?');
     values.push(`%${String(search.email).trim().toLowerCase()}%`);
   }
   if (search.account_id) {
     const raw = String(search.account_id).trim();
     const numeric = Number(raw);
     if (Number.isFinite(numeric) && numeric > ACCOUNT_HOLDER_ID_OFFSET) {
-      conditions.push('(account_number LIKE ? OR id = ?)');
+      conditions.push('(account_holders.account_number LIKE ? OR account_holders.id = ?)');
       values.push(`%${raw}%`, numeric - ACCOUNT_HOLDER_ID_OFFSET);
     } else {
-      conditions.push('account_number LIKE ?');
+      conditions.push('account_holders.account_number LIKE ?');
       values.push(`%${raw}%`);
     }
   }
   if (search.primary_id) {
-    conditions.push('user_id = ?');
+    conditions.push('account_holders.user_id = ?');
     values.push(search.primary_id);
   }
   if (search.first_name) {
-    conditions.push('LOWER(first_name) LIKE ?');
+    conditions.push('LOWER(account_holders.first_name) LIKE ?');
     values.push(`%${String(search.first_name).trim().toLowerCase()}%`);
   }
   if (search.last_name) {
-    conditions.push('LOWER(last_name) LIKE ?');
+    conditions.push('LOWER(account_holders.last_name) LIKE ?');
     values.push(`%${String(search.last_name).trim().toLowerCase()}%`);
   }
 
+  const partnerFlag = resolvePartnerFlag(search);
+  if (partnerFlag === 'CONFLICT') {
+    return { conditions: ['1 = 0'], values: [] };
+  }
+  if (partnerFlag) {
+    conditions.push('account_holders.is_patner = ?');
+    values.push(partnerFlag);
+  }
+
   return { conditions, values };
+}
+
+function resolvePartnerFlag(search = {}) {
+  const partner = String(search.is_partner ?? search.isPartner ?? '')
+    .trim()
+    .toLowerCase();
+  const userType = String(search.user_type ?? search.userType ?? '')
+    .trim()
+    .toLowerCase();
+
+  let fromPartner = null;
+  if (partner === 'yes') fromPartner = 'YES';
+  if (partner === 'no') fromPartner = 'NO';
+
+  let fromType = null;
+  if (userType === 'affluent') fromType = 'YES';
+  if (userType === 'normal') fromType = 'NO';
+
+  if (fromPartner && fromType && fromPartner !== fromType) {
+    return 'CONFLICT';
+  }
+  return fromPartner || fromType;
+}
+
+function getYearlyTierRange(thresholds, slug) {
+  const normalized = String(slug || '')
+    .trim()
+    .toLowerCase();
+  if (!normalized || normalized === 'all') return null;
+  const sorted = [...thresholds].sort(
+    (a, b) => (Number(a.points) || 0) - (Number(b.points) || 0),
+  );
+  const index = sorted.findIndex(
+    (tier) =>
+      String(tier.slug || '').toLowerCase() === normalized ||
+      String(tier.name || '').toLowerCase() === normalized,
+  );
+  if (index < 0) return null;
+  const next = sorted[index + 1];
+  return {
+    min: Number(sorted[index].points) || 0,
+    maxExclusive: next ? Number(next.points) || 0 : null,
+  };
+}
+
+async function attachLoyaltyFields(customers = []) {
+  if (!customers.length) return customers;
+
+  const userIds = [...new Set(customers.map((row) => row.userId).filter(Boolean))];
+  if (!userIds.length) return customers;
+
+  const thresholds = await getMembershipTierThresholds();
+  const placeholders = userIds.map(() => '?').join(', ');
+  const rows = await query(
+    `SELECT user_id, COALESCE(SUM(point_earning_amount), 0) AS total
+     FROM point_earnings
+     WHERE user_id IN (${placeholders})
+       AND created_at > DATE_SUB(NOW(), INTERVAL 365 DAY)
+     GROUP BY user_id`,
+    userIds,
+  );
+  const pointsByUser = Object.fromEntries(
+    rows.map((row) => [row.user_id, Number(row.total) || 0]),
+  );
+
+  return customers.map((customer) => {
+    const yearlyPoints = pointsByUser[customer.userId] || 0;
+    const levelId = getLevelIdFromThresholds(yearlyPoints, thresholds);
+    const tier = thresholds.find((item) => item.levelId === levelId);
+    return {
+      ...customer,
+      userType: customer.partner === 'Yes' ? 'Affluent' : 'Normal',
+      loyaltyTier: tier?.name || 'Normal',
+      yearlyPoints,
+    };
+  });
 }
 
 export async function listCustomerAccounts(filter = 'pending', search = {}) {
@@ -183,18 +279,45 @@ export async function listCustomerAccounts(filter = 'pending', search = {}) {
     throw customerValidationError(`Unknown filter: ${filter}`);
   }
   const { conditions, values } = buildSearchClause(search);
-
   const whereParts = [`(${filterWhere})`, ...conditions];
+
+  const loyaltyTier = String(search.loyalty_tier ?? search.loyaltyTier ?? '')
+    .trim()
+    .toLowerCase();
+  let joinSql = '';
+  if (loyaltyTier && loyaltyTier !== 'all') {
+    const thresholds = await getMembershipTierThresholds();
+    const range = getYearlyTierRange(thresholds, loyaltyTier);
+    if (!range) {
+      return [];
+    }
+    joinSql = `
+      LEFT JOIN (
+        SELECT user_id, SUM(point_earning_amount) AS yearly_points
+        FROM point_earnings
+        WHERE created_at > DATE_SUB(NOW(), INTERVAL 365 DAY)
+        GROUP BY user_id
+      ) pe_year ON pe_year.user_id = account_holders.user_id
+    `;
+    whereParts.push('COALESCE(pe_year.yearly_points, 0) >= ?');
+    values.push(range.min);
+    if (range.maxExclusive != null) {
+      whereParts.push('COALESCE(pe_year.yearly_points, 0) < ?');
+      values.push(range.maxExclusive);
+    }
+  }
+
   const sql = `
     SELECT ${SELECT_COLUMNS}
     FROM account_holders
+    ${joinSql}
     WHERE ${whereParts.join(' AND ')}
-    ORDER BY id DESC
+    ORDER BY account_holders.id DESC
     LIMIT 1000
   `;
 
   const rows = await query(sql, values);
-  return rows.map(toCustomerRow);
+  return attachLoyaltyFields(rows.map(toCustomerRow));
 }
 
 export async function countCustomerAccounts(filter) {
@@ -222,7 +345,7 @@ export async function findCustomerAccountById(accountHolderId) {
      LIMIT 1`,
     [accountHolderId],
   );
-  return rows[0] ? toCustomerRow(rows[0]) : null;
+  return rows[0] ? (await attachLoyaltyFields([toCustomerRow(rows[0])]))[0] : null;
 }
 
 export async function updateCustomerEmail(accountHolderId, newEmail) {
@@ -280,15 +403,28 @@ function formatTimestamp(value) {
 }
 
 async function buildDocumentEntry(filename, kind, uploadedAt) {
-  const stats = await getDocumentFileStats(filename);
+  let stats = null;
+  try {
+    stats = await getDocumentFileStats(filename);
+  } catch {
+    stats = null;
+  }
   return {
     id: filename,
-    name: filename,
+    name: String(filename || '').replace(/\\/g, '/').split('/').pop() || filename,
     kind,
     filename,
-    size: formatFileSize(stats.size),
-    uploadedAt: formatTimestamp(uploadedAt || stats.mtime),
+    size: stats ? formatFileSize(stats.size) : 'Unavailable',
+    uploadedAt: formatTimestamp(uploadedAt || stats?.mtime),
+    missing: !stats,
   };
+}
+
+function identityDocumentKind(documentType) {
+  if (documentType === 'NIC') return 'NIC front';
+  if (documentType === 'DL') return 'Driver license';
+  if (documentType === 'PASSPORT') return 'Passport';
+  return formatEnumLabel(documentType) || 'NIC front';
 }
 
 export async function getCustomerKycDocuments(accountHolderId, field) {
@@ -316,13 +452,19 @@ export async function getCustomerKycDocuments(accountHolderId, field) {
     documents.push(
       await buildDocumentEntry(
         row.identity_document_name,
-        row.identity_document_type === 'NIC' ? 'NIC front' : formatEnumLabel(row.identity_document_type),
+        identityDocumentKind(row.identity_document_type),
         row.updated_at,
       ),
     );
 
     const backFilename = deriveBackDocumentFilename(row.identity_document_name);
-    if (backFilename && (await documentExists(backFilename))) {
+    let hasBack = false;
+    try {
+      hasBack = Boolean(backFilename && (await documentExists(backFilename)));
+    } catch {
+      hasBack = false;
+    }
+    if (hasBack) {
       documents.push(
         await buildDocumentEntry(backFilename, 'NIC back', row.updated_at),
       );
@@ -333,7 +475,7 @@ export async function getCustomerKycDocuments(accountHolderId, field) {
     documents.push(
       await buildDocumentEntry(
         row.address_document_name,
-        formatEnumLabel(row.address_document_type),
+        formatEnumLabel(row.address_document_type) || 'Proof of address',
         row.updated_at,
       ),
     );
@@ -538,6 +680,10 @@ export async function updateCustomerAccountStatus(
     throw customerValidationError('Invalid account status.');
   }
 
+  if (normalizedStatus === 'BANNED' && !String(bannedReason || '').trim()) {
+    throw customerValidationError('A reason for ban is required.');
+  }
+
   const holders = await query(
     `SELECT id, user_id, email, mobile_number, account_status
      FROM account_holders
@@ -571,7 +717,11 @@ export async function updateCustomerAccountStatus(
   return findCustomerAccountById(accountHolderId);
 }
 
-export async function updateMultipleCustomerAccountStatus(accountHolderIds, accountStatus) {
+export async function updateMultipleCustomerAccountStatus(
+  accountHolderIds,
+  accountStatus,
+  { bannedReason } = {},
+) {
   const ids = Array.isArray(accountHolderIds) ? accountHolderIds : [];
   if (!ids.length) {
     throw customerValidationError('No account holders selected.');
@@ -579,7 +729,9 @@ export async function updateMultipleCustomerAccountStatus(accountHolderIds, acco
 
   const results = [];
   for (const accountHolderId of ids) {
-    const customer = await updateCustomerAccountStatus(Number(accountHolderId), accountStatus);
+    const customer = await updateCustomerAccountStatus(Number(accountHolderId), accountStatus, {
+      bannedReason,
+    });
     if (customer) results.push(customer);
   }
 

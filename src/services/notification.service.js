@@ -1,5 +1,5 @@
 import { sendMail } from './mail.service.js';
-import { parseLkMobileNumber, sendDialogSms } from './sms.service.js';
+import { isInternationalSmsConfigured, parseLkMobileNumber, sendDialogSms, sendInternationalSms } from './sms.service.js';
 import { resolveEmailContent, resolveSmsContent } from './messageTemplateRuntime.service.js';
 
 const SMS_FOOTER = '\n\nFor more info, please contact us at +94 117 751 751';
@@ -114,18 +114,20 @@ export async function queueSmsMessage({ message, msisdn, userId, smsType }) {
 async function sendSms({ message, msisdn, userId, smsType }) {
   if (!msisdn) return;
 
-  if (!parseLkMobileNumber(msisdn)) {
-    console.info('[sms:skip] International SMS not configured for', msisdn);
-    return;
-  }
+  const isLk = Boolean(parseLkMobileNumber(msisdn));
 
   try {
-    await sendDialogSms({
-      message,
-      msisdn,
-      userId,
-      smsType,
-    });
+    if (isLk) {
+      await sendDialogSms({ message, msisdn, userId, smsType });
+      return;
+    }
+
+    if (isInternationalSmsConfigured()) {
+      await sendInternationalSms({ message, msisdn, userId, smsType });
+      return;
+    }
+
+    console.info('[sms:skip] International SMS not configured for', msisdn);
   } catch (error) {
     console.error('[sms:error]', error.message);
   }

@@ -7,7 +7,11 @@ import {
   getExecutivesForAssignment,
   updateDepositStatus,
 } from '../../services/deposit-actions.service.js';
-import { getDepositByTransactionId, listDepositsForAdmin } from '../../services/deposit.service.js';
+import {
+  getDepositByTransactionId,
+  listDepositsForAdmin,
+  listSimilarDepositsToday,
+} from '../../services/deposit.service.js';
 import {
   guessDepositProofMimeType,
   readDepositProofBuffer,
@@ -127,6 +131,22 @@ adminDepositsRouter.post(
           req.body?.rejected_reason_message || req.body?.rejectedReasonMessage,
       });
       res.json(data);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminDepositsRouter.get(
+  '/similar',
+  requirePermission('read_deposit_data'),
+  async (req, res, next) => {
+    try {
+      const data = await listSimilarDepositsToday(req.auth, {
+        depositId: req.query.deposit_id || req.query.depositId,
+        transactionId: req.query.transaction_id || req.query.transactionId,
+      });
+      res.json({ ok: true, ...data });
     } catch (error) {
       next(error);
     }

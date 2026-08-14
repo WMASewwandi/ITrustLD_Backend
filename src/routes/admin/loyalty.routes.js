@@ -168,7 +168,7 @@ adminLoyaltyRouter.get(
   requirePermission('view_account_configs'),
   async (req, res, next) => {
     try {
-      const data = await getLoyaltyManagementData(req.query?.audience);
+      const data = await getLoyaltyManagementData(req.query?.audience, req.query?.tier);
       res.json({ ok: true, ...data });
     } catch (error) {
       next(error);
@@ -202,6 +202,11 @@ adminLoyaltyRouter.post(
       const data = await createPointCollection(req.auth.userId, {
         calAmount: body.pointcollection_cal_amount ?? body.cal_amount ?? body.calAmount,
         isAffiliate: body.pointcollection_is_affiliate ?? body.is_affiliate ?? body.isAffiliate,
+        membershipTier:
+          body.pointcollection_membership_tier ??
+          body.membership_tier ??
+          body.membershipTier ??
+          body.tier,
       });
       res.json(data);
     } catch (error) {
@@ -219,6 +224,11 @@ adminLoyaltyRouter.post(
       const data = await updatePointCollectionAmount({
         pointCollectionId: body.pointcollection_id ?? body.point_collection_id ?? body.id,
         calAmount: body.pointcollection_cal_amount ?? body.cal_amount ?? body.calAmount,
+        membershipTier:
+          body.pointcollection_membership_tier ??
+          body.membership_tier ??
+          body.membershipTier ??
+          body.tier,
       });
       res.json(data);
     } catch (error) {
@@ -270,6 +280,11 @@ adminLoyaltyRouter.post(
       const data = await createBonus(req.auth.userId, {
         bonusAmount: body.bonus_amount ?? body.bonusAmount,
         isAffiliate: body.bonus_is_affiliate ?? body.is_affiliate ?? body.isAffiliate,
+        membershipTier:
+          body.bonus_membership_tier ??
+          body.membership_tier ??
+          body.membershipTier ??
+          body.tier,
       });
       res.json(data);
     } catch (error) {
@@ -287,6 +302,11 @@ adminLoyaltyRouter.post(
       const data = await updateBonusAmount({
         bonusId: body.bonus_id ?? body.id,
         bonusAmount: body.bonus_amount ?? body.bonusAmount,
+        membershipTier:
+          body.bonus_membership_tier ??
+          body.membership_tier ??
+          body.membershipTier ??
+          body.tier,
       });
       res.json(data);
     } catch (error) {

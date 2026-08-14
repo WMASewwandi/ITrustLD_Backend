@@ -28,6 +28,7 @@ export const SYSTEM_ACTIVITIES = [
   { activity_identifier: 'cusomer_withdrawal_activity', activity_name: 'Customer Withdrawal Activity', category_id: 2, sort_order: 1 },
   { activity_identifier: 'read_withdrawal_data', activity_name: 'Read Customer Withdrawal Information', category_id: 2, sort_order: 2 },
   { activity_identifier: 'status_update_withdrawal_data', activity_name: 'Status Update Customer Withdrawal Records', category_id: 2, sort_order: 3 },
+  { activity_identifier: 'authorize_withdrawal_data', activity_name: 'Authorize Customer Withdrawal Records', category_id: 2, sort_order: 4 },
 
   { activity_identifier: 'customer_profile_activity', activity_name: 'Customer Profile Activity', category_id: 3, sort_order: 1 },
   { activity_identifier: 'read_profile_data', activity_name: 'Read Customer Profile Data', category_id: 3, sort_order: 2 },

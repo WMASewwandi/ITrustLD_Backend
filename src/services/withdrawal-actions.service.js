@@ -12,6 +12,12 @@ import {
   SYSTEM_USER_ACTIONS,
 } from './systemUserActionLog.service.js';
 import { refillWithdrawalPendingForExecutive } from './withdrawalAssignment.service.js';
+import {
+  ensureWithdrawalAuthorizationSchema,
+  hasActiveWithdrawalAuthorizers,
+  canAuthorizeWithdrawals,
+} from './withdrawal.service.js';
+import { assertCanUpdateRecordStatus } from './statusUpdateScope.service.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -27,10 +33,58 @@ function isWithdrawalExecutiveOnly(roles = []) {
   return roles.includes('withdrawal-executive') && !isAdmin(roles);
 }
 
-function assertCanUpdateWithdrawal(auth, withdrawal) {
-  if (!isWithdrawalExecutiveOnly(auth?.roles || [])) return;
-  if (Number(withdrawal.assigned_to) !== Number(auth.userId)) {
-    throw validationError('This withdrawal is not assigned to you.', 403);
+function assertCanUpdateWithdrawal(auth, withdrawal, nextStatus, makerCheckerEnabled) {
+  const roles = auth?.roles || [];
+  const permissions = auth?.permissions || [];
+  if (isAdmin(roles)) return;
+
+  const canAuthorize = canAuthorizeWithdrawals(permissions);
+  const isExec = isWithdrawalExecutiveOnly(roles);
+  const isAuthorizerOnly = canAuthorize && !isExec;
+
+  if (isAuthorizerOnly) {
+    if (nextStatus === 'Pending Authorization') {
+      throw validationError('Authorizer cannot send withdrawals for authorization.', 403);
+    }
+    if (
+      withdrawal.transaction_status !== 'Pending Authorization' &&
+      nextStatus !== 'Rejected'
+    ) {
+      throw validationError('Authorizer can only action withdrawals pending authorization.', 403);
+    }
+    return;
+  }
+
+  if (isExec) {
+    if (Number(withdrawal.assigned_to) !== Number(auth.userId)) {
+      throw validationError('This withdrawal is not assigned to you.', 403);
+    }
+    if (
+      makerCheckerEnabled &&
+      nextStatus === 'Completed' &&
+      withdrawal.transaction_status !== 'Pending Authorization'
+    ) {
+      throw validationError(
+        'This withdrawal must be authorized before it can be completed.',
+        403,
+      );
+    }
+    if (nextStatus === 'Completed' && withdrawal.transaction_status === 'Pending Authorization') {
+      if (!canAuthorize) {
+        throw validationError('You do not have permission to authorize withdrawals.', 403);
+      }
+      return;
+    }
+    if (nextStatus === 'Pending Authorization' && withdrawal.transaction_status !== 'Pending') {
+      throw validationError('Only pending withdrawals can be sent for authorization.', 403);
+    }
+    return;
+  }
+
+  if (nextStatus === 'Completed' && withdrawal.transaction_status === 'Pending Authorization') {
+    if (!canAuthorize) {
+      throw validationError('You do not have permission to authorize withdrawals.', 403);
+    }
   }
 }
 
@@ -208,8 +262,9 @@ export async function updateWithdrawalStatus(
   auth,
   { withdrawalId, transactionId, status, rejectedReason, rejectedReasonMessage },
 ) {
+  await ensureWithdrawalAuthorizationSchema();
   const normalizedStatus = String(status || '').trim();
-  if (!['Pending', 'Completed', 'Rejected'].includes(normalizedStatus)) {
+  if (!['Pending', 'Pending Authorization', 'Completed', 'Rejected'].includes(normalizedStatus)) {
     throw validationError('Invalid withdrawal status.');
   }
 
@@ -218,7 +273,9 @@ export async function updateWithdrawalStatus(
     throw validationError('Withdrawal not found.', 404);
   }
 
-  assertCanUpdateWithdrawal(auth, withdrawal);
+  const makerCheckerEnabled = await hasActiveWithdrawalAuthorizers();
+  assertCanUpdateWithdrawal(auth, withdrawal, normalizedStatus, makerCheckerEnabled);
+  await assertCanUpdateRecordStatus(auth?.userId, 'withdrawal', withdrawal.transaction_status);
 
   const ctx = await loadWithdrawalContext(withdrawal);
   const adminId = auth?.userId;
@@ -236,6 +293,23 @@ export async function updateWithdrawalStatus(
       [adminId, withdrawal.id],
     );
     await logSystemUserAction(adminId, SYSTEM_USER_ACTIONS.WITHDRAWAL_PENDING);
+  } else if (normalizedStatus === 'Pending Authorization') {
+    await query(
+      `UPDATE withdrawals
+       SET transaction_status = 'Pending Authorization',
+           pending_date = NOW(),
+           pendings_by_admin = ?,
+           message = 'Your transaction is awaiting authorization',
+           updated_at = NOW()
+       WHERE id = ?`,
+      [adminId, withdrawal.id],
+    );
+    await logSystemUserAction(adminId, SYSTEM_USER_ACTIONS.WITHDRAWAL_PENDING);
+    try {
+      await refillWithdrawalPendingForExecutive(withdrawal.assigned_to || adminId);
+    } catch (error) {
+      console.error('[withdrawal:refill-pending]', error.message);
+    }
   } else if (normalizedStatus === 'Completed') {
     await query(
       `UPDATE withdrawals

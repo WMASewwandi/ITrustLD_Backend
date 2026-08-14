@@ -1,6 +1,10 @@
 import { query } from '../config/database.js';
 import { findAccountHolderByUserId } from './accountHolder.service.js';
 import { getLevelLabel, getUserPointLevel } from './pointEarning.service.js';
+import {
+  getLevelIdFromThresholds,
+  getMembershipTierThresholds,
+} from './loyaltyMembershipTier.service.js';
 import { ensureLoyaltyGiftSchema } from './loyaltyGiftSchema.service.js';
 import { formatTimestampSl } from '../utils/slTime.js';
 
@@ -18,15 +22,6 @@ function normalizeAudienceType(value) {
   if (['normal', 'affiliate', 'both'].includes(normalized)) return normalized;
   return 'normal';
 }
-
-const PARTNER_TIER_THRESHOLDS = [
-  { id: 'normal', name: 'Normal', levelPoints: 0 },
-  { id: 'silver', name: 'Silver', levelPoints: 10000 },
-  { id: 'gold', name: 'Gold', levelPoints: 50000 },
-  { id: 'diamond', name: 'Diamond', levelPoints: 100000 },
-  { id: 'vip', name: 'VIP', levelPoints: 500000 },
-  { id: 'vvip', name: 'VVIP', levelPoints: 1000000 },
-];
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -60,20 +55,28 @@ function formatYmdHis(value) {
   return formatted.slice(0, 16);
 }
 
+const GIFT_CLAIM_VALIDITY_DAYS = 30;
+
+function giftExpiresAt(createdAt) {
+  if (!createdAt) return null;
+  const created = createdAt instanceof Date ? createdAt : new Date(createdAt);
+  if (Number.isNaN(created.getTime())) return null;
+  return new Date(created.getTime() + GIFT_CLAIM_VALIDITY_DAYS * 24 * 60 * 60 * 1000);
+}
+
 async function getPartnerTierName(userId) {
   const rows = await query(
     `SELECT COALESCE(SUM(point_earning_amount), 0) AS earned_for_year
      FROM point_earnings
      WHERE user_id = ?
-       AND created_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)`,
+       AND created_at > DATE_SUB(NOW(), INTERVAL 365 DAY)`,
     [userId],
   );
   const earned = Number(rows[0]?.earned_for_year ?? 0);
-  let tier = PARTNER_TIER_THRESHOLDS[0];
-  for (const candidate of PARTNER_TIER_THRESHOLDS) {
-    if (earned >= candidate.levelPoints) tier = candidate;
-  }
-  return tier.name.toUpperCase();
+  const thresholds = await getMembershipTierThresholds();
+  const levelId = getLevelIdFromThresholds(earned, thresholds);
+  const tier = thresholds.find((item) => item.levelId === levelId);
+  return String(tier?.name || 'Normal').toUpperCase();
 }
 
 async function resolveUserLevelLabel(userId, isPartner) {
@@ -90,16 +93,22 @@ function mapGiftRow(row, userLevel, existingClaim) {
   const levelAllowed = allowedLevels.includes(userLevel);
   const alreadyClaimed = Boolean(existingClaim);
   const claimStatus = existingClaim?.status || null;
+  const createdAt = row.created_at || null;
+  const expiresAt = giftExpiresAt(createdAt);
+  const expired = Boolean(expiresAt && expiresAt.getTime() <= Date.now());
 
   return {
     id: row.id,
     title: row.title,
     description: row.description || '',
     allowed_levels: allowedLevels,
-    is_eligible: levelAllowed && !alreadyClaimed,
+    is_eligible: levelAllowed && !alreadyClaimed && !expired,
     already_claimed: alreadyClaimed,
     claim_status: claimStatus,
     claim_id: existingClaim?.id || null,
+    created_at: createdAt,
+    expires_at: expiresAt ? expiresAt.toISOString() : null,
+    is_expired: expired,
   };
 }
 
@@ -177,6 +186,11 @@ export async function createGiftClaim(userId, payload = {}) {
   const allowedLevels = parseAllowedLevels(gift.allowed_levels);
   if (!allowedLevels.includes(userLevel)) {
     throw validationError(`Your current level (${userLevel}) is not eligible for this gift.`);
+  }
+
+  const expiresAt = giftExpiresAt(gift.created_at);
+  if (expiresAt && expiresAt.getTime() <= Date.now()) {
+    throw validationError('This gift offer has expired.');
   }
 
   const existingRows = await query(
