@@ -1,5 +1,10 @@
-import { query } from '../config/database.js';
+import { getDbDriver, query } from '../config/database.js';
 import { formatTimestampSl } from '../utils/slTime.js';
+import {
+  DEFAULT_MEMBERSHIP_TIERS,
+  getTierByPointsFromList,
+  getMembershipTierThresholds,
+} from './loyaltyMembershipTier.service.js';
 
 const VALID_IDENTIFIERS = [
   'POINT-COLLECTION',
@@ -14,6 +19,18 @@ const VALID_IDENTIFIERS = [
 ];
 
 const VALID_LOYALTY_LEVELS = ['SILVER', 'GOLD', 'DIAMOND', 'VIP', 'VVIP'];
+export const POINT_COLLECTION_TIERS = ['NORMAL', 'SILVER', 'GOLD', 'DIAMOND', 'VIP', 'VVIP'];
+const POINT_COLLECTION_TIER_LABELS = {
+  NORMAL: 'Normal',
+  SILVER: 'Silver',
+  GOLD: 'Gold',
+  DIAMOND: 'Diamond',
+  VIP: 'VIP',
+  VVIP: 'VVIP',
+};
+
+let pointCollectionTierSchemaReady = false;
+let bonusTierSchemaReady = false;
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -33,23 +50,113 @@ function formatYmdHis(value) {
   return formatted;
 }
 
+function normalizePointCollectionTier(value) {
+  const raw = String(value || '').trim().toUpperCase();
+  if (!raw || raw === 'ALL') return '';
+  return POINT_COLLECTION_TIERS.includes(raw) ? raw : '';
+}
+
+function requirePointCollectionTier(value) {
+  const tier = normalizePointCollectionTier(value);
+  if (!tier) {
+    throw validationError('Select a membership tier.');
+  }
+  return tier;
+}
+
+async function tableHasColumn(tableName, columnName) {
+  if (getDbDriver() === 'sqlite') {
+    const rows = await query(`PRAGMA table_info(${tableName})`);
+    return rows.some((row) => String(row.name).toLowerCase() === String(columnName).toLowerCase());
+  }
+  const rows = await query(
+    `SELECT COLUMN_NAME AS name
+     FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = ?
+       AND COLUMN_NAME = ?
+     LIMIT 1`,
+    [tableName, columnName],
+  );
+  return Boolean(rows[0]);
+}
+
+export async function ensureBonusTierSchema() {
+  if (bonusTierSchemaReady) return;
+
+  const exists = await tableHasColumn('loyalty_management_bonuses', 'membership_tier');
+  if (!exists) {
+    if (getDbDriver() === 'sqlite') {
+      await query(`ALTER TABLE loyalty_management_bonuses ADD COLUMN membership_tier TEXT NULL`);
+    } else {
+      await query(
+        `ALTER TABLE loyalty_management_bonuses
+         ADD COLUMN membership_tier VARCHAR(32) NULL AFTER is_affiliate`,
+      );
+    }
+  }
+
+  bonusTierSchemaReady = true;
+}
+
+export async function ensurePointCollectionTierSchema() {
+  if (pointCollectionTierSchemaReady) return;
+
+  const exists = await tableHasColumn('loyalty_management_point_collections', 'membership_tier');
+  if (!exists) {
+    if (getDbDriver() === 'sqlite') {
+      await query(
+        `ALTER TABLE loyalty_management_point_collections ADD COLUMN membership_tier TEXT NULL`,
+      );
+    } else {
+      await query(
+        `ALTER TABLE loyalty_management_point_collections
+         ADD COLUMN membership_tier VARCHAR(32) NULL AFTER is_affiliate`,
+      );
+    }
+  }
+
+  pointCollectionTierSchemaReady = true;
+}
+
+function takeLatestPerGroup(rows, keyFn, limitPerGroup = 5) {
+  const counts = {};
+  const out = [];
+  for (const row of rows) {
+    const key = keyFn(row);
+    counts[key] = (counts[key] || 0) + 1;
+    if (counts[key] <= limitPerGroup) out.push(row);
+  }
+  return out;
+}
+
 function mapPointCollectionRow(row) {
+  const membershipTier = normalizePointCollectionTier(row.membership_tier);
   return {
     id: row.id,
     display_id: row.display_id,
     admin_id: row.admin_user_id,
     cal_amount: Number(row.cal_amount),
+    membership_tier: membershipTier || null,
+    membership_tier_label: membershipTier
+      ? POINT_COLLECTION_TIER_LABELS[membershipTier]
+      : 'All Tiers',
     is_active: Boolean(row.is_active),
     changed_date: formatYmdHis(row.updated_at),
   };
 }
 
 function mapBonusRow(row) {
+  const membershipTier = normalizePointCollectionTier(row.membership_tier);
   return {
     id: row.id,
     display_id: row.display_id,
     admin_id: row.admin_user_id,
     bonus_amount: Number(row.bonus_amount),
+    membership_tier: membershipTier || null,
+    membership_tier_label: membershipTier
+      ? POINT_COLLECTION_TIER_LABELS[membershipTier]
+      : 'All Tiers',
     is_active: Boolean(row.is_active),
     changed_date: formatYmdHis(row.updated_at),
   };
@@ -89,8 +196,59 @@ async function fetchMasterConfigs() {
   return map;
 }
 
-async function fetchTopPointEarners(isPartner) {
+function mapMembershipTierSummary(tier) {
+  return {
+    slug: tier.slug,
+    name: tier.name,
+    points: Number(tier.points) || 0,
+    color: tier.color || '#64969A',
+    ring: tier.ring || tier.color || '#64969A',
+  };
+}
+
+function getTierPointRange(tiers, slug) {
+  const normalized = String(slug || '').trim().toLowerCase();
+  if (!normalized || normalized === 'all') return null;
+  const sorted = [...tiers].sort((a, b) => (Number(a.points) || 0) - (Number(b.points) || 0));
+  const index = sorted.findIndex((tier) => String(tier.slug || '').toLowerCase() === normalized);
+  if (index < 0) return null;
+  const min = Number(sorted[index].points) || 0;
+  const next = sorted[index + 1];
+  return {
+    slug: sorted[index].slug,
+    min,
+    maxExclusive: next ? Number(next.points) || 0 : null,
+  };
+}
+
+function mapEarnerTier(totalPoints) {
+  const tier = getTierByPointsFromList(totalPoints, DEFAULT_MEMBERSHIP_TIERS);
+  if (!tier) return null;
+  return mapMembershipTierSummary(tier);
+}
+
+async function fetchTopPointEarners(isPartner, tierSlug) {
+  const thresholds = await getMembershipTierThresholds();
+  const membershipTiers = thresholds.map((tier) => ({
+    slug: tier.slug,
+    name: tier.name,
+    points: tier.points,
+  }));
   const partnerFlag = isPartner ? 'YES' : 'NO';
+  const range = getTierPointRange(membershipTiers, tierSlug);
+  const params = [partnerFlag];
+  const havingParts = [];
+
+  if (range) {
+    havingParts.push('SUM(pe.point_earning_amount) >= ?');
+    params.push(range.min);
+    if (range.maxExclusive != null) {
+      havingParts.push('SUM(pe.point_earning_amount) < ?');
+      params.push(range.maxExclusive);
+    }
+  }
+
+  const havingSql = havingParts.length ? `HAVING ${havingParts.join(' AND ')}` : '';
   const rows = await query(
     `SELECT
        ah.id AS account_holder_id,
@@ -105,51 +263,93 @@ async function fetchTopPointEarners(isPartner) {
        FROM point_earnings pe
        INNER JOIN account_holders ah2 ON pe.user_id = ah2.user_id
        WHERE ah2.is_patner = ?
+         AND pe.created_at > DATE_SUB(NOW(), INTERVAL 365 DAY)
        GROUP BY pe.user_id
+       ${havingSql}
        ORDER BY total_points DESC
        LIMIT 50
      ) ranked
      INNER JOIN account_holders ah ON ah.user_id = ranked.user_id
      ORDER BY ranked.total_points DESC`,
-    [partnerFlag],
+    params,
   );
 
-  return rows.map((row) => ({
-    account_holder_id: row.account_holder_id,
-    user_id: row.account_number,
-    name: [row.first_name, row.last_name].filter(Boolean).join(' ').trim() || '—',
-    email: row.email || '—',
-    mobile_number: row.mobile_number || '—',
-    total_points: Number(row.total_points) || 0,
-    total_points_display: Number(row.total_points || 0).toLocaleString('en-US'),
-  }));
+  return rows.map((row) => {
+    const totalPoints = Number(row.total_points) || 0;
+    const tier = getTierByPointsFromList(totalPoints, membershipTiers);
+    return {
+      account_holder_id: row.account_holder_id,
+      user_id: row.account_number,
+      name: [row.first_name, row.last_name].filter(Boolean).join(' ').trim() || '—',
+      email: row.email || '—',
+      mobile_number: row.mobile_number || '—',
+      total_points: totalPoints,
+      total_points_display: totalPoints.toLocaleString('en-US'),
+      tier: tier ? mapMembershipTierSummary(tier) : null,
+    };
+  });
 }
 
-export async function getLoyaltyManagementData(audience) {
+export async function getLoyaltyManagementData(audience, tier) {
   const normalizedAudience = normalizeAudience(audience);
   const isAffiliate = normalizedAudience === 'partner';
+  const thresholds = await getMembershipTierThresholds();
+  const membershipTiers = thresholds.map((item) =>
+    mapMembershipTierSummary({
+      slug: item.slug,
+      name: item.name,
+      points: item.points,
+    }),
+  );
+  const appliedTier = getTierPointRange(membershipTiers, tier);
+  await Promise.all([ensurePointCollectionTierSchema(), ensureBonusTierSchema()]);
 
-  const [masterConfigs, pointRows, bonusRows] = await Promise.all([
+  const [masterConfigs, pointRowsRaw, bonusRowsRaw] = await Promise.all([
     fetchMasterConfigs(),
     query(
-      `SELECT id, display_id, cal_amount, is_affiliate, is_active, is_deleted, admin_user_id, updated_at
+      `SELECT id, display_id, cal_amount, is_affiliate, membership_tier, is_active, is_deleted, admin_user_id, updated_at
        FROM loyalty_management_point_collections
        WHERE is_affiliate = ?
          AND (is_deleted = 0 OR is_deleted IS NULL OR is_deleted = FALSE)
-       ORDER BY display_id DESC
-       LIMIT 5`,
+       ORDER BY CASE UPPER(COALESCE(membership_tier, ''))
+         WHEN 'NORMAL' THEN 1
+         WHEN 'SILVER' THEN 2
+         WHEN 'GOLD' THEN 3
+         WHEN 'DIAMOND' THEN 4
+         WHEN 'VIP' THEN 5
+         WHEN 'VVIP' THEN 6
+         ELSE 99
+       END, display_id DESC`,
       [isAffiliate ? 1 : 0],
     ),
     query(
-      `SELECT id, display_id, bonus_amount, is_affiliate, is_active, is_deleted, admin_user_id, updated_at
+      `SELECT id, display_id, bonus_amount, is_affiliate, membership_tier, is_active, is_deleted, admin_user_id, updated_at
        FROM loyalty_management_bonuses
        WHERE is_affiliate = ?
          AND (is_deleted = 0 OR is_deleted IS NULL OR is_deleted = FALSE)
-       ORDER BY display_id DESC
-       LIMIT 5`,
+       ORDER BY CASE UPPER(COALESCE(membership_tier, ''))
+         WHEN 'NORMAL' THEN 1
+         WHEN 'SILVER' THEN 2
+         WHEN 'GOLD' THEN 3
+         WHEN 'DIAMOND' THEN 4
+         WHEN 'VIP' THEN 5
+         WHEN 'VVIP' THEN 6
+         ELSE 99
+       END, display_id DESC`,
       [isAffiliate ? 1 : 0],
     ),
   ]);
+
+  const pointRows = takeLatestPerGroup(
+    pointRowsRaw,
+    (row) => String(row.membership_tier || '').toUpperCase() || 'UNSET',
+    5,
+  );
+  const bonusRows = takeLatestPerGroup(
+    bonusRowsRaw,
+    (row) => String(row.membership_tier || '').toUpperCase() || 'UNSET',
+    5,
+  );
 
   let loyaltyLevels = null;
   if (isAffiliate) {
@@ -177,10 +377,12 @@ export async function getLoyaltyManagementData(audience) {
     }
   }
 
-  const topEarners = await fetchTopPointEarners(isAffiliate);
+  const topEarners = await fetchTopPointEarners(isAffiliate, appliedTier?.slug);
 
   return {
     audience: normalizedAudience,
+    membership_tiers: membershipTiers,
+    tier: appliedTier?.slug || 'all',
     configs: {
       point_collection: masterConfigs[isAffiliate ? 'POINT-COLLECTION-AFFILIATE' : 'POINT-COLLECTION'] || null,
       bonus: masterConfigs[isAffiliate ? 'BONUS-AFFILIATE' : 'BONUS'] || null,
@@ -194,6 +396,11 @@ export async function getLoyaltyManagementData(audience) {
     bonuses: bonusRows.map(mapBonusRow),
     loyalty_levels: loyaltyLevels,
     top_earners: topEarners,
+    ranking_criteria: {
+      evaluation_period_days: 365,
+      evaluation_period_label: 'Previous 12 months of Trust Points',
+      user_types: ['Normal', 'Affluent'],
+    },
   };
 }
 
@@ -237,6 +444,34 @@ export async function updateMasterConfigActivationState({ identifier, activation
   };
 }
 
+async function assertUniqueAudienceTier({
+  table,
+  isAffiliate,
+  membershipTier,
+  excludeId = null,
+  entityName = 'amount',
+}) {
+  const params = [isAffiliate ? 1 : 0, membershipTier];
+  let sql = `
+    SELECT id
+    FROM ${table}
+    WHERE is_affiliate = ?
+      AND UPPER(membership_tier) = ?
+      AND (is_deleted = 0 OR is_deleted IS NULL OR is_deleted = FALSE)
+  `;
+  if (excludeId) {
+    sql += ' AND id != ?';
+    params.push(excludeId);
+  }
+  sql += ' LIMIT 1';
+
+  const rows = await query(sql, params);
+  if (rows[0]) {
+    const label = POINT_COLLECTION_TIER_LABELS[membershipTier] || membershipTier;
+    throw validationError(`A ${entityName} already exists for the ${label} tier.`);
+  }
+}
+
 async function getNextDisplayId(table, extraWhere = '', params = []) {
   const rows = await query(
     `SELECT display_id
@@ -249,13 +484,21 @@ async function getNextDisplayId(table, extraWhere = '', params = []) {
   return rows[0] ? Number(rows[0].display_id) + 1 : 1;
 }
 
-export async function createPointCollection(adminUserId, { calAmount, isAffiliate }) {
+export async function createPointCollection(adminUserId, { calAmount, isAffiliate, membershipTier }) {
+  await ensurePointCollectionTierSchema();
   const amount = Number(calAmount);
   if (!Number.isInteger(amount) || amount < 0) {
     throw validationError('Cal amount must be a valid integer.');
   }
+  const tier = requirePointCollectionTier(membershipTier);
 
   const affiliate = Boolean(isAffiliate);
+  await assertUniqueAudienceTier({
+    table: 'loyalty_management_point_collections',
+    isAffiliate: affiliate,
+    membershipTier: tier,
+    entityName: 'cal amount',
+  });
   const displayId = await getNextDisplayId(
     'loyalty_management_point_collections',
     'WHERE is_affiliate = ?',
@@ -264,13 +507,13 @@ export async function createPointCollection(adminUserId, { calAmount, isAffiliat
 
   const result = await query(
     `INSERT INTO loyalty_management_point_collections
-       (display_id, cal_amount, is_affiliate, is_active, is_deleted, admin_user_id, created_at, updated_at)
-     VALUES (?, ?, ?, 1, 0, ?, NOW(), NOW())`,
-    [displayId, amount, affiliate ? 1 : 0, adminUserId],
+       (display_id, cal_amount, is_affiliate, membership_tier, is_active, is_deleted, admin_user_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 1, 0, ?, NOW(), NOW())`,
+    [displayId, amount, affiliate ? 1 : 0, tier, adminUserId],
   );
 
   const rows = await query(
-    `SELECT id, display_id, cal_amount, is_affiliate, is_active, is_deleted, admin_user_id, updated_at
+    `SELECT id, display_id, cal_amount, is_affiliate, membership_tier, is_active, is_deleted, admin_user_id, updated_at
      FROM loyalty_management_point_collections
      WHERE id = ?
      LIMIT 1`,
@@ -284,7 +527,8 @@ export async function createPointCollection(adminUserId, { calAmount, isAffiliat
   };
 }
 
-export async function updatePointCollectionAmount({ pointCollectionId, calAmount }) {
+export async function updatePointCollectionAmount({ pointCollectionId, calAmount, membershipTier }) {
+  await ensurePointCollectionTierSchema();
   const id = Number(pointCollectionId);
   const amount = Number(calAmount);
   if (!Number.isInteger(id) || id <= 0) {
@@ -293,20 +537,29 @@ export async function updatePointCollectionAmount({ pointCollectionId, calAmount
   if (!Number.isInteger(amount) || amount < 0) {
     throw validationError('Cal amount must be a valid integer.');
   }
+  const tier = requirePointCollectionTier(membershipTier);
 
   const rows = await query(
-    `SELECT id FROM loyalty_management_point_collections WHERE id = ? LIMIT 1`,
+    `SELECT id, is_affiliate FROM loyalty_management_point_collections WHERE id = ? LIMIT 1`,
     [id],
   );
   if (!rows[0]) {
     throw validationError('Invalid loyalty management point collection id.');
   }
 
+  await assertUniqueAudienceTier({
+    table: 'loyalty_management_point_collections',
+    isAffiliate: Boolean(rows[0].is_affiliate),
+    membershipTier: tier,
+    excludeId: id,
+    entityName: 'cal amount',
+  });
+
   await query(
     `UPDATE loyalty_management_point_collections
-     SET cal_amount = ?, updated_at = NOW()
+     SET cal_amount = ?, membership_tier = ?, updated_at = NOW()
      WHERE id = ?`,
-    [amount, id],
+    [amount, tier, id],
   );
 
   return {
@@ -375,13 +628,21 @@ export async function deletePointCollection({ pointCollectionId }) {
   };
 }
 
-export async function createBonus(adminUserId, { bonusAmount, isAffiliate }) {
+export async function createBonus(adminUserId, { bonusAmount, isAffiliate, membershipTier }) {
+  await ensureBonusTierSchema();
   const amount = Number(bonusAmount);
   if (!Number.isInteger(amount) || amount < 0) {
     throw validationError('Bonus amount must be a valid integer.');
   }
+  const tier = requirePointCollectionTier(membershipTier);
 
   const affiliate = Boolean(isAffiliate);
+  await assertUniqueAudienceTier({
+    table: 'loyalty_management_bonuses',
+    isAffiliate: affiliate,
+    membershipTier: tier,
+    entityName: 'bonus amount',
+  });
   const displayId = await getNextDisplayId(
     'loyalty_management_bonuses',
     'WHERE is_affiliate = ?',
@@ -390,13 +651,13 @@ export async function createBonus(adminUserId, { bonusAmount, isAffiliate }) {
 
   const result = await query(
     `INSERT INTO loyalty_management_bonuses
-       (display_id, bonus_amount, is_affiliate, is_active, is_deleted, admin_user_id, created_at, updated_at)
-     VALUES (?, ?, ?, 1, 0, ?, NOW(), NOW())`,
-    [displayId, amount, affiliate ? 1 : 0, adminUserId],
+       (display_id, bonus_amount, is_affiliate, membership_tier, is_active, is_deleted, admin_user_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 1, 0, ?, NOW(), NOW())`,
+    [displayId, amount, affiliate ? 1 : 0, tier, adminUserId],
   );
 
   const rows = await query(
-    `SELECT id, display_id, bonus_amount, is_affiliate, is_active, is_deleted, admin_user_id, updated_at
+    `SELECT id, display_id, bonus_amount, is_affiliate, membership_tier, is_active, is_deleted, admin_user_id, updated_at
      FROM loyalty_management_bonuses
      WHERE id = ?
      LIMIT 1`,
@@ -410,7 +671,8 @@ export async function createBonus(adminUserId, { bonusAmount, isAffiliate }) {
   };
 }
 
-export async function updateBonusAmount({ bonusId, bonusAmount }) {
+export async function updateBonusAmount({ bonusId, bonusAmount, membershipTier }) {
+  await ensureBonusTierSchema();
   const id = Number(bonusId);
   const amount = Number(bonusAmount);
   if (!Number.isInteger(id) || id <= 0) {
@@ -419,20 +681,29 @@ export async function updateBonusAmount({ bonusId, bonusAmount }) {
   if (!Number.isInteger(amount) || amount < 0) {
     throw validationError('Bonus amount must be a valid integer.');
   }
+  const tier = requirePointCollectionTier(membershipTier);
 
   const rows = await query(
-    `SELECT id FROM loyalty_management_bonuses WHERE id = ? LIMIT 1`,
+    `SELECT id, is_affiliate FROM loyalty_management_bonuses WHERE id = ? LIMIT 1`,
     [id],
   );
   if (!rows[0]) {
     throw validationError('Invalid loyalty management bonus id.');
   }
 
+  await assertUniqueAudienceTier({
+    table: 'loyalty_management_bonuses',
+    isAffiliate: Boolean(rows[0].is_affiliate),
+    membershipTier: tier,
+    excludeId: id,
+    entityName: 'bonus amount',
+  });
+
   await query(
     `UPDATE loyalty_management_bonuses
-     SET bonus_amount = ?, updated_at = NOW()
+     SET bonus_amount = ?, membership_tier = ?, updated_at = NOW()
      WHERE id = ?`,
-    [amount, id],
+    [amount, tier, id],
   );
 
   return {

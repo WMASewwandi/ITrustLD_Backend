@@ -2,6 +2,7 @@ import { query } from '../config/database.js';
 import { buildDepositProofApiUrl } from './depositProofStorage.service.js';
 import { batchScammerCheck, isScammerMatch } from './scammer.service.js';
 import { getUserPendingShowCount } from './systemUser.service.js';
+import { getUserStatusUpdateScope } from './statusUpdateScope.service.js';
 import {
   formatTimestampSl,
   getBusinessDayStart,
@@ -500,6 +501,7 @@ export async function listDepositsForAdmin(auth, params = {}) {
     statusForTotals === 'All' ? 'Pending' : statusForTotals,
   );
   const permissions = auth?.permissions || [];
+  const statusScope = await getUserStatusUpdateScope(auth?.userId);
 
   return {
     deposits: result.rows.map((row) => ({
@@ -513,6 +515,7 @@ export async function listDepositsForAdmin(auth, params = {}) {
     pagination: result.pagination,
     isAdmin: isAdmin(roles),
     canMutate: permissions.includes('status_update_deposit_data') || isAdmin(roles),
+    allowed_deposit_statuses: statusScope.allowed_deposit_statuses,
   };
 }
 
@@ -527,4 +530,83 @@ export async function getDepositByTransactionId(auth, transactionId) {
     perPage: 1,
   });
   return data.deposits[0] || null;
+}
+
+export async function listSimilarDepositsToday(auth, { depositId, transactionId } = {}) {
+  if (!depositId && !transactionId) {
+    throw validationError('Deposit id or transaction id is required.');
+  }
+
+  const lookupRows = await query(
+    depositId
+      ? `SELECT d.id, d.transaction_id, d.topup_method_id, d.topup_account_id, d.transaction_status
+         FROM deposits d WHERE d.id = ? LIMIT 1`
+      : `SELECT d.id, d.transaction_id, d.topup_method_id, d.topup_account_id, d.transaction_status
+         FROM deposits d WHERE d.transaction_id = ? LIMIT 1`,
+    [depositId || transactionId],
+  );
+  const source = lookupRows[0];
+  if (!source) {
+    throw validationError('Deposit not found.', 404);
+  }
+
+  if (!source.topup_method_id || !source.topup_account_id) {
+    return { deposits: [] };
+  }
+
+  const statusSql =
+    source.transaction_status === 'Completed'
+      ? `d.transaction_status = 'Completed'`
+      : `d.transaction_status != 'Rejected'`;
+  const dayStart = getBusinessDayStart();
+  const joins = `
+    INNER JOIN users u ON d.user_id = u.id
+    INNER JOIN topup_methods tm ON d.topup_method_id = tm.id
+    LEFT JOIN payment_options po ON d.payment_option_id = po.id
+    LEFT JOIN account_holders ah ON ah.user_id = u.id
+  `;
+
+  const rows = await query(
+    `SELECT d.*, u.name AS user_name, tm.topup_method_name, po.payment_option_name,
+            ah.account_number, ah.email AS customer_email, ah.mobile_number AS customer_mobile
+     FROM deposits d
+     ${joins}
+     WHERE d.payment_proof IS NOT NULL
+       AND d.created_at >= ?
+       AND d.topup_method_id = ?
+       AND d.topup_account_id = ?
+       AND ${statusSql}
+     ORDER BY d.created_at DESC`,
+    [dayStart, source.topup_method_id, source.topup_account_id],
+  );
+
+  const adminIds = rows.flatMap((row) => [
+    row.pendings_by_admin,
+    row.approved_by_admin,
+    row.rejected_by_admin,
+  ]);
+  const assignedIds = rows.map((row) => row.assigned_to).filter(Boolean);
+  const [adminUsers, assignedUsers, scammerFlags] = await Promise.all([
+    fetchAdminNames(adminIds),
+    fetchAdminNames(assignedIds),
+    batchScammerCheck({
+      platformIds: rows.map((row) => row.topup_account_id),
+      userIds: rows.map((row) => row.user_id),
+    }),
+  ]);
+
+  const count = rows.length;
+  const similarCounts = {
+    [`${source.topup_method_id}_${source.topup_account_id}`]: count,
+  };
+
+  return {
+    deposits: rows.map((row) => ({
+      ...mapDepositRow(row, adminUsers, assignedUsers, similarCounts),
+      isScammer: isScammerMatch(scammerFlags, {
+        platformId: row.topup_account_id,
+        userId: row.user_id,
+      }),
+    })),
+  };
 }

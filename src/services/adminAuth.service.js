@@ -9,6 +9,7 @@ import {
   isUserActive,
   setUserOnline,
 } from './user.service.js';
+import { getUserStatusUpdateScope } from './statusUpdateScope.service.js';
 import { verifyLaravelPassword } from '../utils/laravelPassword.js';
 
 /**
@@ -20,6 +21,13 @@ export function resolveAdminRedirect(roles, permissions = []) {
   }
   if (roles.includes('withdrawal-executive')) {
     return '/transactions?tab=withdrawals&status=Pending';
+  }
+  if (
+    permissions.includes('authorize_withdrawal_data') &&
+    !roles.includes('super-admin') &&
+    !roles.includes('sub-admin')
+  ) {
+    return '/transactions?tab=withdrawals&status=Pending%20Authorization';
   }
   if (roles.includes('sub-admin')) {
     return '/users?filter=pending';
@@ -53,7 +61,7 @@ export function userCanAccessAdminPortal(roles) {
   return roles.some((role) => role !== 'customer');
 }
 
-export function toPublicUser(user, roles, permissions = []) {
+export function toPublicUser(user, roles, permissions = [], statusScope = {}) {
   return {
     id: user.id,
     name: user.name,
@@ -62,6 +70,8 @@ export function toPublicUser(user, roles, permissions = []) {
     permissions,
     shift: user.shift ?? null,
     is_online: Boolean(user.is_online),
+    allowed_deposit_statuses: statusScope.allowed_deposit_statuses ?? null,
+    allowed_withdrawal_statuses: statusScope.allowed_withdrawal_statuses ?? null,
   };
 }
 
@@ -117,10 +127,11 @@ export async function loginAdmin({ email, password }) {
   }
 
   const permissions = await getUserPermissions(user.id);
+  const statusScope = await getUserStatusUpdateScope(user.id);
 
   await setUserOnline(user.id, true);
 
-  const publicUser = toPublicUser(user, roles, permissions);
+  const publicUser = toPublicUser(user, roles, permissions, statusScope);
   const token = signAccessToken(user, roles);
   const redirect_to = resolveAdminRedirect(roles, permissions);
 
@@ -162,6 +173,7 @@ export async function getAdminSession(userId) {
   }
 
   const permissions = await getUserPermissions(userId);
+  const statusScope = await getUserStatusUpdateScope(userId);
 
-  return toPublicUser(user, roles, permissions);
+  return toPublicUser(user, roles, permissions, statusScope);
 }

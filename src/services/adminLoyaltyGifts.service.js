@@ -6,7 +6,7 @@ import {
   SYSTEM_USER_ACTIONS,
 } from './systemUserActionLog.service.js';
 
-const VALID_LEVELS = ['SILVER', 'GOLD', 'DIAMOND', 'VIP', 'VVIP'];
+const VALID_LEVELS = ['NORMAL', 'SILVER', 'GOLD', 'DIAMOND', 'VIP', 'VVIP'];
 const VALID_AUDIENCE_TYPES = ['normal', 'affiliate', 'both'];
 
 function normalizeAudienceType(value) {

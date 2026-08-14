@@ -68,11 +68,7 @@ export const DEFAULT_MEMBERSHIP_TIERS = [
     color: '#C48A12',
     ring: '#F4B42E',
     filled: false,
-    benefits: [
-      '$200 Welcome Bonus',
-      'Earn $400 cashback for every 10 clients referred, with each client receiving a $25 voucher for iTrustLD.',
-      'Priority support and exclusive promotions',
-    ],
+    benefits: ['Fully sponsored international tour package (for one person)'],
   },
   {
     slug: 'vvip',
@@ -82,11 +78,7 @@ export const DEFAULT_MEMBERSHIP_TIERS = [
     color: '#0D9F1B',
     ring: '#0D9F1B',
     filled: true,
-    benefits: [
-      '$500 Welcome Bonus',
-      'Earn $600 cashback for every 10 clients referred, with each client receiving a $35 voucher for iTrustLD.',
-      'Dedicated account manager and VIP event invites',
-    ],
+    benefits: ['Fully sponsored international family tour package'],
   },
 ];
 
@@ -96,8 +88,38 @@ function validationError(message, status = 422) {
   return error;
 }
 
+const TOUR_PACKAGE_BENEFITS = {
+  vip: ['Fully sponsored international tour package (for one person)'],
+  vvip: ['Fully sponsored international family tour package'],
+};
+
+const LEGACY_TIER_BENEFITS = {
+  vip: [
+    '$200 Welcome Bonus',
+    'Earn $400 cashback for every 10 clients referred, with each client receiving a $25 voucher for iTrustLD.',
+    'Priority support and exclusive promotions',
+  ],
+  vvip: [
+    '$500 Welcome Bonus',
+    'Earn $600 cashback for every 10 clients referred, with each client receiving a $35 voucher for iTrustLD.',
+    'Dedicated account manager and VIP event invites',
+  ],
+};
+
+let thresholdCache = { at: 0, tiers: null };
+
+export function invalidateMembershipTierCache() {
+  thresholdCache = { at: 0, tiers: null };
+}
+
 function toBool(value) {
   return value === true || value === 1 || value === '1' || String(value).toLowerCase() === 'true';
+}
+
+function benefitsMatch(current = [], expected = []) {
+  return (
+    current.length === expected.length && current.every((item, index) => item === expected[index])
+  );
 }
 
 function parseBenefits(value) {
@@ -199,7 +221,7 @@ function mapMergedTier(def, index, dbRow) {
     slug: def.slug,
     levelId: index + 1,
     name: def.name,
-    points: def.points,
+    points: dbRow?.points != null ? Number(dbRow.points) || 0 : def.points,
     icon: def.icon,
     color: def.color,
     ring: def.ring,
@@ -221,30 +243,28 @@ async function ensureMockTierSeeded() {
     const def = DEFAULT_MEMBERSHIP_TIERS[index];
     const existing = bySlug.get(def.slug);
     if (existing) {
-      // Keep benefits in DB; sync mock name/points/styling onto the row.
-      // If benefits still match the old auto-seeded mock copy, clear them —
-      // user-facing benefits must come from admin saves only.
       const currentBenefits = parseBenefits(existing.benefits_json);
-      const isLegacyDefault =
-        currentBenefits.length === def.benefits.length &&
-        currentBenefits.every((item, i) => item === def.benefits[i]);
-      const benefitsJson = isLegacyDefault
-        ? JSON.stringify([])
-        : existing.benefits_json == null
+      const tourBenefits = TOUR_PACKAGE_BENEFITS[def.slug];
+      const legacyBenefits = LEGACY_TIER_BENEFITS[def.slug];
+      let benefitsJson =
+        existing.benefits_json == null
           ? JSON.stringify([])
           : typeof existing.benefits_json === 'string'
             ? existing.benefits_json
-            : JSON.stringify(parseBenefits(existing.benefits_json));
+            : JSON.stringify(currentBenefits);
+
+      if (tourBenefits && (!currentBenefits.length || benefitsMatch(currentBenefits, legacyBenefits || []))) {
+        benefitsJson = JSON.stringify(tourBenefits);
+      }
 
       await query(
         `UPDATE loyalty_membership_tiers
-         SET level_id = ?, name = ?, points = ?, icon = ?, color = ?, ring = ?, filled = ?,
+         SET level_id = ?, name = ?, icon = ?, color = ?, ring = ?, filled = ?,
              benefits_json = ?, sort_order = ?, updated_at = CURRENT_TIMESTAMP
          WHERE slug = ?`,
         [
           index + 1,
           def.name,
-          def.points,
           def.icon,
           def.color,
           def.ring,
@@ -257,6 +277,7 @@ async function ensureMockTierSeeded() {
       continue;
     }
 
+    const seedBenefits = TOUR_PACKAGE_BENEFITS[def.slug] || [];
     await query(
       `INSERT INTO loyalty_membership_tiers
         (slug, level_id, name, points, icon, color, ring, filled, benefits_json, is_active, sort_order, created_at, updated_at)
@@ -270,7 +291,7 @@ async function ensureMockTierSeeded() {
         def.color,
         def.ring,
         def.filled ? 1 : 0,
-        JSON.stringify([]),
+        JSON.stringify(seedBenefits),
         index + 1,
       ],
     );
@@ -319,17 +340,24 @@ export async function saveLoyaltyMembershipTiers(tiersPayload = []) {
   for (let index = 0; index < DEFAULT_MEMBERSHIP_TIERS.length; index += 1) {
     const def = DEFAULT_MEMBERSHIP_TIERS[index];
     const incoming = byIncoming.get(def.slug);
-    // Only persist benefits that were explicitly sent; never write mock defaults.
+    const existingRows = await query(
+      `SELECT id, points FROM loyalty_membership_tiers WHERE slug = ? LIMIT 1`,
+      [def.slug],
+    );
+    const existing = existingRows[0];
     const benefits = incoming ? parseBenefits(incoming.benefits) : [];
     const isActive = incoming
       ? toBool(incoming.active ?? incoming.isActive ?? true)
       : true;
+    const incomingPoints = incoming?.points ?? incoming?.levelPoints;
+    const points =
+      incomingPoints != null && incomingPoints !== ''
+        ? Math.max(0, Number(incomingPoints) || 0)
+        : existing?.points != null
+          ? Number(existing.points) || def.points
+          : def.points;
 
-    const rows = await query(`SELECT id FROM loyalty_membership_tiers WHERE slug = ? LIMIT 1`, [
-      def.slug,
-    ]);
-
-    if (rows[0]) {
+    if (existing) {
       await query(
         `UPDATE loyalty_membership_tiers
          SET level_id = ?, name = ?, points = ?, icon = ?, color = ?, ring = ?, filled = ?,
@@ -338,7 +366,7 @@ export async function saveLoyaltyMembershipTiers(tiersPayload = []) {
         [
           index + 1,
           def.name,
-          def.points,
+          points,
           def.icon,
           def.color,
           def.ring,
@@ -358,7 +386,7 @@ export async function saveLoyaltyMembershipTiers(tiersPayload = []) {
           def.slug,
           index + 1,
           def.name,
-          def.points,
+          points,
           def.icon,
           def.color,
           def.ring,
@@ -371,7 +399,56 @@ export async function saveLoyaltyMembershipTiers(tiersPayload = []) {
     }
   }
 
+  invalidateMembershipTierCache();
   return listLoyaltyMembershipTiersAdmin();
+}
+
+export function getLevelIdFromThresholds(pointCount, thresholds = []) {
+  const points = Number(pointCount) || 0;
+  const list = (thresholds || []).length
+    ? [...thresholds].sort((a, b) => (Number(a.points) || 0) - (Number(b.points) || 0))
+    : DEFAULT_MEMBERSHIP_TIERS.map((tier, index) => ({
+        slug: tier.slug,
+        name: tier.name,
+        levelId: index + 1,
+        points: tier.points,
+      }));
+
+  let current = list[0];
+  for (const tier of list) {
+    if (points >= (Number(tier.points) || 0)) current = tier;
+  }
+  return Number(current?.levelId) || 1;
+}
+
+export async function getMembershipTierThresholds() {
+  if (thresholdCache.tiers && Date.now() - thresholdCache.at < 15000) {
+    return thresholdCache.tiers;
+  }
+
+  try {
+    const { tiers } = await listLoyaltyMembershipTiersAdmin();
+    const mapped = tiers.map((tier, index) => ({
+      slug: tier.slug,
+      name: tier.name,
+      levelId: index + 1,
+      points: Number(tier.points) || 0,
+    }));
+    thresholdCache = { at: Date.now(), tiers: mapped };
+    return mapped;
+  } catch {
+    return DEFAULT_MEMBERSHIP_TIERS.map((tier, index) => ({
+      slug: tier.slug,
+      name: tier.name,
+      levelId: index + 1,
+      points: tier.points,
+    }));
+  }
+}
+
+export async function resolveLevelId(pointCount) {
+  const thresholds = await getMembershipTierThresholds();
+  return getLevelIdFromThresholds(pointCount, thresholds);
 }
 
 export function getTierByPointsFromList(points, tiers = []) {

@@ -66,6 +66,7 @@ const ROLE_DISPLAY_NAMES = {
   'super-admin': 'Super Admin',
   'deposit-executive': 'Deposit Executive',
   'withdrawal-executive': 'Withdrawal Executive',
+  'withdrawal-authorizer': 'Withdrawal Authorizer',
 };
 
 export function formatRoleDisplayName(roleName) {
@@ -104,7 +105,7 @@ export async function getAllRoles() {
   );
 }
 
-async function getRolePermissionsMap() {
+export async function getRolePermissionsMap() {
   const rows = await query(
     `SELECT rhp.role_id, p.name AS permission_name
      FROM role_has_permissions rhp
@@ -210,7 +211,7 @@ export async function createRole({ name }) {
     .replace(/\s+/g, '-');
 
   if (!slug || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
-    const error = new Error('Role name must be a lowercase slug (e.g. withdrawal-authorizer).');
+    const error = new Error('Role name must be a lowercase slug (e.g. finance-manager).');
     error.status = 422;
     throw error;
   }

@@ -1,7 +1,10 @@
 import { query } from '../config/database.js';
+import { getDbDriver } from '../config/database.js';
+import { AUTHORIZE_WITHDRAWAL_PERMISSION, LARAVEL_USER_MODEL } from '../constants/adminRoles.js';
 import { buildWithdrawalProofApiUrl } from './withdrawalProofStorage.service.js';
 import { batchScammerCheck, isScammerMatch } from './scammer.service.js';
 import { getUserPendingShowCount } from './systemUser.service.js';
+import { getUserStatusUpdateScope } from './statusUpdateScope.service.js';
 import {
   formatTimestampSl,
   getBusinessDayStart,
@@ -24,8 +27,43 @@ function isWithdrawalExecutive(roles = []) {
   );
 }
 
+export function canAuthorizeWithdrawals(permissions = []) {
+  return permissions.includes(AUTHORIZE_WITHDRAWAL_PERMISSION);
+}
+
 function isAdmin(roles = []) {
   return roles.includes('super-admin') || roles.includes('sub-admin');
+}
+
+let statusEnumReady = false;
+
+export async function ensureWithdrawalAuthorizationSchema() {
+  if (statusEnumReady || getDbDriver() === 'sqlite') {
+    statusEnumReady = true;
+    return;
+  }
+  try {
+    await query(
+      `ALTER TABLE withdrawals
+       MODIFY transaction_status ENUM('Pending', 'Pending Authorization', 'Completed', 'Rejected') NULL`,
+    );
+  } catch (error) {
+    console.warn('[withdrawals:status-enum]', error.message);
+  }
+  statusEnumReady = true;
+}
+
+export async function hasActiveWithdrawalAuthorizers() {
+  const rows = await query(
+    `SELECT COUNT(*) AS cnt
+     FROM model_has_roles mhr
+     INNER JOIN role_has_permissions rhp ON rhp.role_id = mhr.role_id
+     INNER JOIN permissions p ON p.id = rhp.permission_id
+     WHERE p.name = ?
+       AND mhr.model_type = ?`,
+    [AUTHORIZE_WITHDRAWAL_PERMISSION, LARAVEL_USER_MODEL],
+  );
+  return Number(rows[0]?.cnt) > 0;
 }
 
 function escapeLike(value) {
@@ -73,7 +111,9 @@ function formatWithdrawalAccount(row) {
 
 function normalizeStatus(status) {
   const value = String(status || 'Pending').trim();
-  if (['Pending', 'Completed', 'Rejected', 'All'].includes(value)) return value;
+  if (['Pending', 'Pending Authorization', 'Completed', 'Rejected', 'All'].includes(value)) {
+    return value;
+  }
   return 'Pending';
 }
 
@@ -208,7 +248,7 @@ function mapWithdrawalRow(row, adminUsers, assignedUsers, similarCounts) {
 }
 
 function sanitizePendingSearchParams(status, params) {
-  if (normalizeStatus(status) !== 'Pending') {
+  if (normalizeStatus(status) !== 'Pending' && normalizeStatus(status) !== 'Pending Authorization') {
     return { ...params, requirePaymentProof: true };
   }
 
@@ -231,6 +271,7 @@ function isWithdrawalSearchActive(status, params) {
   const normalizedStatus = normalizeStatus(status);
   if (params.keyword?.trim()) return true;
   if (normalizedStatus === 'Pending') return false;
+  if (normalizedStatus === 'Pending Authorization') return false;
 
   return Boolean(
     params.transactionId ||
@@ -381,7 +422,9 @@ async function listWithdrawalsQuery({
 
   const whereSql = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const orderSql =
-    normalizedStatus === 'Pending' ? 'ORDER BY w.updated_at ASC' : 'ORDER BY w.updated_at DESC';
+    normalizedStatus === 'Pending' || normalizedStatus === 'Pending Authorization'
+      ? 'ORDER BY w.updated_at ASC'
+      : 'ORDER BY w.updated_at DESC';
 
   const countRows = await query(
     `SELECT COUNT(*) AS total
@@ -463,10 +506,14 @@ async function getWithdrawalTotals(status, assignedToUserId) {
 }
 
 export async function listWithdrawalsForAdmin(auth, params = {}) {
+  await ensureWithdrawalAuthorizationSchema();
   const roles = auth?.roles || [];
   const permissions = auth?.permissions || [];
   const userId = auth?.userId;
   const isExec = isWithdrawalExecutive(roles) && !isAdmin(roles);
+  const canAuthorize = canAuthorizeWithdrawals(permissions);
+  const isAuthorizer = canAuthorize && !isAdmin(roles) && !isExec;
+  const makerCheckerEnabled = await hasActiveWithdrawalAuthorizers();
 
   const statusForTotals = normalizeStatus(params.status);
   const assignedToUserId =
@@ -520,12 +567,13 @@ export async function listWithdrawalsForAdmin(auth, params = {}) {
         assignedToUserId,
       );
 
-  const [scammerFlags, similarCounts] = await Promise.all([
+  const [scammerFlags, similarCounts, statusScope] = await Promise.all([
     batchScammerCheck({
       platformIds: result.rows.map((row) => row.cashout_account_id),
       userIds: result.rows.map((row) => row.user_id),
     }),
     batchSimilarWithdrawals(result.rows, statusForTotals === 'All' ? 'Pending' : statusForTotals),
+    getUserStatusUpdateScope(userId),
   ]);
 
   return {
@@ -539,7 +587,15 @@ export async function listWithdrawalsForAdmin(auth, params = {}) {
     totals,
     pagination: result.pagination,
     isAdmin: isAdmin(roles),
-    canMutate: permissions.includes('status_update_withdrawal_data') || isAdmin(roles),
+    canMutate:
+      permissions.includes('status_update_withdrawal_data') ||
+      canAuthorize ||
+      isAdmin(roles),
+    makerCheckerEnabled,
+    isWithdrawalAuthorizer: isAuthorizer,
+    canAuthorizeWithdrawals: canAuthorize,
+    isWithdrawalExecutive: isExec,
+    allowed_withdrawal_statuses: statusScope.allowed_withdrawal_statuses,
   };
 }
 

@@ -6,4 +6,6 @@ export const ADMIN_PORTAL_ROLES = [
   'withdrawal-executive',
 ];
 
+export const AUTHORIZE_WITHDRAWAL_PERMISSION = 'authorize_withdrawal_data';
+
 export const LARAVEL_USER_MODEL = 'App\\Models\\User';

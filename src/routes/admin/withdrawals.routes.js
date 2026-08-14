@@ -119,7 +119,7 @@ adminWithdrawalsRouter.post(
 
 adminWithdrawalsRouter.post(
   '/status',
-  requirePermission('status_update_withdrawal_data'),
+  requirePermission('status_update_withdrawal_data', 'authorize_withdrawal_data'),
   async (req, res, next) => {
     try {
       const data = await updateWithdrawalStatus(req.auth, {

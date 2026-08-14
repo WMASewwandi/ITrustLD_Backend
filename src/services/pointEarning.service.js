@@ -2,6 +2,8 @@ import { query } from '../config/database.js';
 import { env } from '../config/env.js';
 import { sendEmailAndSms } from './notification.service.js';
 import { loyaltyLevelUpgradeEmailHtml } from './mail.templates.js';
+import { ensurePointCollectionTierSchema } from './adminLoyaltyManagement.service.js';
+import { resolveLevelId } from './loyaltyMembershipTier.service.js';
 
 const LEVEL_LABELS = {
   1: 'NORMAL',
@@ -60,18 +62,47 @@ export function getTierProgressPercentage(levelId, earnedForYear) {
   return Math.min(100, Math.max(0, ((earned - tierStart) / tierSpan) * 100));
 }
 
-async function getLatestActivePointMultiplier(isAffiliate) {
+async function getUserYearlyPoints(userId) {
   const rows = await query(
-    `SELECT cal_amount
-     FROM loyalty_management_point_collections
-     WHERE is_active = 1
-       AND is_affiliate = ?
-       AND (is_deleted = 0 OR is_deleted IS NULL OR is_deleted = FALSE)
-     ORDER BY id DESC
-     LIMIT 1`,
-    [isAffiliate ? 1 : 0],
+    `SELECT COALESCE(SUM(point_earning_amount), 0) AS total
+     FROM point_earnings
+     WHERE user_id = ?
+       AND created_at > DATE_SUB(NOW(), INTERVAL 365 DAY)`,
+    [userId],
   );
-  return Number(rows[0]?.cal_amount) || 0;
+  return Number(rows[0]?.total) || 0;
+}
+
+async function getLatestActivePointMultiplier(isAffiliate, membershipTier) {
+  await ensurePointCollectionTierSchema();
+  const affiliateFlag = isAffiliate ? 1 : 0;
+  const tier = String(membershipTier || '').trim().toUpperCase();
+
+  if (tier) {
+    const tierRows = await query(
+      `SELECT cal_amount
+       FROM loyalty_management_point_collections
+       WHERE is_active = 1
+         AND is_affiliate = ?
+         AND UPPER(membership_tier) = ?
+         AND (is_deleted = 0 OR is_deleted IS NULL OR is_deleted = FALSE)
+       ORDER BY id DESC
+       LIMIT 1`,
+      [affiliateFlag, tier],
+    );
+    if (tierRows[0]) {
+      const amount = Number(tierRows[0].cal_amount);
+      return Number.isFinite(amount) ? amount : 1;
+    }
+  }
+
+  return 1;
+}
+
+async function getPointMultiplierForUser(userId, isAffiliate) {
+  const yearlyPoints = await getUserYearlyPoints(userId);
+  const tier = getLevelLabel(await resolveLevelId(yearlyPoints));
+  return getLatestActivePointMultiplier(isAffiliate, tier);
 }
 
 async function hasPointEarning(depositId, category) {
@@ -191,7 +222,7 @@ export async function updateUserPointLevel(userId) {
 
   const pointLevelLast = lastLevelRows[0] || null;
   const pointCollectionDuringYear = Number(earnedRows[0]?.total || 0);
-  const pointLevelIdNew = getLevelId(pointCollectionDuringYear);
+  const pointLevelIdNew = await resolveLevelId(pointCollectionDuringYear);
 
   const insertLevelRecord = async (eventType) => {
     await query(
@@ -248,7 +279,7 @@ export async function awardDepositPoints(deposit, accountHolder = null) {
     const depositAmount = Number(deposit.deposit_amount) || 0;
     const depositId = deposit.id;
 
-    const depositorMultiplier = await getLatestActivePointMultiplier(false);
+    const depositorMultiplier = await getPointMultiplierForUser(holder.user_id, false);
     if (depositorMultiplier > 0) {
       const depositorExists = await hasPointEarning(depositId, 'Deposit');
       if (!depositorExists) {
@@ -269,7 +300,7 @@ export async function awardDepositPoints(deposit, accountHolder = null) {
 
     if (partner) {
       directPartnerAccountHolderId = partner.account_holder_id;
-      const affiliateMultiplier = await getLatestActivePointMultiplier(true);
+      const affiliateMultiplier = await getPointMultiplierForUser(partner.user_id, true);
 
       if (affiliateMultiplier > 0) {
         const referralExists = await hasPointEarning(depositId, 'Referral');
@@ -296,7 +327,7 @@ export async function awardDepositPoints(deposit, accountHolder = null) {
     if (directPartnerAccountHolderId) {
       const superPartner = await findPartnerForClient(directPartnerAccountHolderId);
       if (superPartner) {
-        const affiliateMultiplier = await getLatestActivePointMultiplier(true);
+        const affiliateMultiplier = await getPointMultiplierForUser(superPartner.user_id, true);
         if (affiliateMultiplier > 0) {
           const affiliatePoints = depositAmount * affiliateMultiplier;
           await insertPointEarning({

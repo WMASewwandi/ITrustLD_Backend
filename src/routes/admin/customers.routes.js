@@ -41,10 +41,31 @@ adminCustomersRouter.get(
         primary_id: req.query.primary_id?.trim() || undefined,
         first_name: req.query.first_name?.trim() || undefined,
         last_name: req.query.last_name?.trim() || undefined,
+        is_partner: req.query.is_partner || req.query.isPartner || undefined,
+        user_type: req.query.user_type || req.query.userType || undefined,
+        loyalty_tier: req.query.loyalty_tier || req.query.loyaltyTier || undefined,
       };
 
       const customers = await listCustomerAccounts(filter, search);
       res.json({ ok: true, customers, filter });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminCustomersRouter.get(
+  '/documents',
+  requirePermission('read_customer_accounts_data'),
+  async (req, res, next) => {
+    try {
+      const filename = String(req.query.filename || '').trim();
+      if (!filename) {
+        return res.status(400).json({ message: 'Document filename is required.' });
+      }
+      const buffer = await readDocumentBuffer(filename);
+      res.type(guessDocumentMimeType(filename));
+      res.send(buffer);
     } catch (error) {
       next(error);
     }
@@ -73,7 +94,13 @@ adminCustomersRouter.post(
       const accountHolderIds = Array.isArray(req.body?.account_holder_ids)
         ? req.body.account_holder_ids
         : [];
-      const customers = await updateMultipleCustomerAccountStatus(accountHolderIds, 'BANNED');
+      const reason = String(req.body?.reason || '').trim();
+      if (!reason) {
+        return res.status(422).json({ message: 'A reason for ban is required.' });
+      }
+      const customers = await updateMultipleCustomerAccountStatus(accountHolderIds, 'BANNED', {
+        bannedReason: reason,
+      });
       res.json({
         ok: true,
         customers,
@@ -244,6 +271,9 @@ adminCustomersRouter.post(
       }
 
       const reason = String(req.body?.reason || '').trim();
+      if (!reason) {
+        return res.status(422).json({ message: 'A reason for ban is required.' });
+      }
       const customer = await updateCustomerAccountStatus(accountHolderId, 'BANNED', {
         bannedReason: reason,
       });

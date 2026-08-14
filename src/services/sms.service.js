@@ -147,3 +147,83 @@ export async function sendDialogSms({
     return { error: error.message, id: smsTransactionId };
   }
 }
+
+export function isInternationalSmsConfigured() {
+  return Boolean(env.sms.twilioAccountSid && env.sms.twilioAuthToken && env.sms.twilioFrom);
+}
+
+export function toE164(msisdn) {
+  const raw = String(msisdn || '').trim();
+  if (!raw) return null;
+  const digits = raw.replace(/\D/g, '');
+  if (!digits) return null;
+
+  const lkLocal = parseLkMobileNumber(raw);
+  if (lkLocal) return `+94${lkLocal}`;
+
+  if (raw.startsWith('+') && digits.length >= 10 && digits.length <= 15) {
+    return `+${digits}`;
+  }
+  if (digits.startsWith('00') && digits.length >= 12 && digits.length <= 17) {
+    return `+${digits.slice(2)}`;
+  }
+  if (digits.length >= 10 && digits.length <= 15) {
+    return `+${digits}`;
+  }
+  return null;
+}
+
+export async function sendInternationalSms({
+  message,
+  msisdn,
+  userId = null,
+  smsType = 'GENERAL',
+}) {
+  const e164 = toE164(msisdn);
+  if (!e164) return null;
+  if (!isInternationalSmsConfigured()) return null;
+
+  const insertResult = await query(
+    `INSERT INTO sms_transactions (user_id, message, sms_type, created_at, updated_at)
+     VALUES (?, ?, ?, NOW(), NOW())`,
+    [userId, message, smsType],
+  );
+  const smsTransactionId = insertResult.insertId;
+
+  if (env.sms.enabled === false) {
+    console.info('[sms:twilio-log-only]', { userId, smsType, to: e164 });
+    return { logged: true, id: smsTransactionId };
+  }
+
+  try {
+    const auth = Buffer.from(`${env.sms.twilioAccountSid}:${env.sms.twilioAuthToken}`).toString(
+      'base64',
+    );
+    const body = new URLSearchParams({
+      To: e164,
+      From: env.sms.twilioFrom,
+      Body: message,
+    });
+    const response = await fetch(
+      `https://api.twilio.com/2010-04-01/Accounts/${env.sms.twilioAccountSid}/Messages.json`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Basic ${auth}`,
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body,
+      },
+    );
+    const responseData = await response.json().catch(() => ({}));
+    await persistSmsResponse(smsTransactionId, responseData);
+    if (!response.ok) {
+      return { error: responseData?.message || 'Twilio SMS failed.', id: smsTransactionId };
+    }
+    return responseData;
+  } catch (error) {
+    console.error('[sms:twilio-error]', error.message);
+    await persistSmsResponse(smsTransactionId, { error: error.message });
+    return { error: error.message, id: smsTransactionId };
+  }
+}

@@ -9,14 +9,71 @@ function documentsDir() {
   return path.resolve(env.projectRoot, '../ITrustLD_Existing/storage/app/documents');
 }
 
+function existingAppRoot() {
+  return path.resolve(env.projectRoot, '../ITrustLD_Existing');
+}
+
+function localSearchRoots() {
+  const root = existingAppRoot();
+  return [
+    documentsDir(),
+    path.join(root, 'storage/app/documents'),
+    path.join(root, 'storage/app/public/documents'),
+    path.join(root, 'storage/app'),
+    path.join(root, 'storage/app/public'),
+    path.join(root, 'public'),
+    path.join(root, 'public/documents'),
+    path.join(root, 'public/uploads'),
+    path.join(root, 'public/upload'),
+  ];
+}
+
+function normalizedFilename(filename) {
+  return String(filename || '')
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\/+/, '');
+}
+
+function isPathInside(parent, child) {
+  const resolvedParent = path.resolve(parent);
+  const resolvedChild = path.resolve(child);
+  return resolvedChild === resolvedParent || resolvedChild.startsWith(`${resolvedParent}${path.sep}`);
+}
+
+function candidateLocalPaths(filename) {
+  const raw = normalizedFilename(filename);
+  if (!raw) return [];
+  const base = path.basename(raw);
+  const paths = new Set();
+
+  for (const root of localSearchRoots()) {
+    paths.add(path.join(root, base));
+    if (raw !== base) {
+      const nested = path.resolve(root, raw);
+      if (isPathInside(root, nested)) paths.add(nested);
+    }
+  }
+
+  return [...paths];
+}
+
+function candidateS3Keys(filename) {
+  const raw = normalizedFilename(filename);
+  if (!raw) return [];
+  const base = path.basename(raw);
+  return [...new Set([`documents/${base}`, raw, raw.startsWith('documents/') ? raw : `documents/${raw}`])];
+}
+
 function shouldUseS3Storage() {
   const disk = String(process.env.FILESYSTEM_DISK || '').trim().toLowerCase();
   return disk === 's3' || Boolean(process.env.AWS_BUCKET);
 }
 
 function sanitizeFilename(filename) {
-  const safeName = path.basename(String(filename || ''));
-  if (!safeName || safeName !== filename) {
+  const raw = normalizedFilename(filename);
+  const safeName = path.basename(raw);
+  if (!safeName) {
     const error = new Error('Invalid document filename.');
     error.status = 400;
     throw error;
@@ -25,7 +82,7 @@ function sanitizeFilename(filename) {
 }
 
 function buildDocumentS3Key(filename) {
-  return `documents/${sanitizeFilename(filename)}`;
+  return candidateS3Keys(filename)[0];
 }
 
 async function createS3Client() {
@@ -49,16 +106,23 @@ async function headS3Document(filename) {
   try {
     const { HeadObjectCommand } = await import('@aws-sdk/client-s3');
     const client = await createS3Client();
-    const response = await client.send(
-      new HeadObjectCommand({
-        Bucket: bucket,
-        Key: buildDocumentS3Key(filename),
-      }),
-    );
-    return {
-      size: response.ContentLength ?? 0,
-      mtime: response.LastModified ?? new Date(),
-    };
+    for (const Key of candidateS3Keys(filename)) {
+      try {
+        const response = await client.send(
+          new HeadObjectCommand({
+            Bucket: bucket,
+            Key,
+          }),
+        );
+        return {
+          size: response.ContentLength ?? 0,
+          mtime: response.LastModified ?? new Date(),
+        };
+      } catch {
+        // try next key
+      }
+    }
+    return null;
   } catch {
     return null;
   }
@@ -71,17 +135,38 @@ async function readS3DocumentBuffer(filename) {
   try {
     const { GetObjectCommand } = await import('@aws-sdk/client-s3');
     const client = await createS3Client();
-    const response = await client.send(
-      new GetObjectCommand({
-        Bucket: bucket,
-        Key: buildDocumentS3Key(filename),
-      }),
-    );
-    const bytes = await response.Body.transformToByteArray();
-    return Buffer.from(bytes);
+    for (const Key of candidateS3Keys(filename)) {
+      try {
+        const response = await client.send(
+          new GetObjectCommand({
+            Bucket: bucket,
+            Key,
+          }),
+        );
+        const bytes = await response.Body.transformToByteArray();
+        return Buffer.from(bytes);
+      } catch {
+        // try next key
+      }
+    }
+    return null;
   } catch {
     return null;
   }
+}
+
+async function statLocalDocument(filename) {
+  for (const filePath of candidateLocalPaths(filename)) {
+    try {
+      const stats = await fs.stat(filePath);
+      if (stats.isFile()) {
+        return { size: stats.size, mtime: stats.mtime, filePath };
+      }
+    } catch {
+      // try next location
+    }
+  }
+  return null;
 }
 
 export function getDocumentsDirectory() {
@@ -93,8 +178,9 @@ export function resolveDocumentPath(filename) {
 }
 
 export function deriveBackDocumentFilename(frontFilename) {
-  const ext = path.extname(frontFilename);
-  const base = frontFilename.slice(0, -ext.length);
+  const raw = normalizedFilename(frontFilename);
+  const ext = path.extname(raw);
+  const base = raw.slice(0, -ext.length);
   if (!base || base.endsWith('_back')) return null;
   return `${base}_back${ext}`;
 }
@@ -102,39 +188,29 @@ export function deriveBackDocumentFilename(frontFilename) {
 export async function documentExists(filename) {
   if (!filename) return false;
   if (await headS3Document(filename)) return true;
-  try {
-    await fs.access(resolveDocumentPath(filename));
-    return true;
-  } catch {
-    return false;
-  }
+  return Boolean(await statLocalDocument(filename));
 }
 
 export async function getDocumentFileStats(filename) {
   const s3Meta = await headS3Document(filename);
   if (s3Meta) return s3Meta;
 
-  try {
-    const stats = await fs.stat(resolveDocumentPath(filename));
-    return { size: stats.size, mtime: stats.mtime };
-  } catch {
-    const error = new Error('Document not found.');
-    error.status = 404;
-    throw error;
-  }
+  const local = await statLocalDocument(filename);
+  if (local) return { size: local.size, mtime: local.mtime };
+
+  return null;
 }
 
 export async function readDocumentBuffer(filename) {
   const s3Buffer = await readS3DocumentBuffer(filename);
   if (s3Buffer) return s3Buffer;
 
-  try {
-    return await fs.readFile(resolveDocumentPath(filename));
-  } catch {
-    const notFound = new Error('Document not found.');
-    notFound.status = 404;
-    throw notFound;
-  }
+  const local = await statLocalDocument(filename);
+  if (local) return fs.readFile(local.filePath);
+
+  const notFound = new Error('Document file is not available on this server.');
+  notFound.status = 404;
+  throw notFound;
 }
 
 export function formatFileSize(bytes) {

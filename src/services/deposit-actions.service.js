@@ -13,6 +13,7 @@ import {
   SYSTEM_USER_ACTIONS,
 } from './systemUserActionLog.service.js';
 import { refillDepositPendingForExecutive } from './depositAssignment.service.js';
+import { assertCanUpdateRecordStatus } from './statusUpdateScope.service.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -214,6 +215,7 @@ export async function updateDepositStatus(
   }
 
   assertCanUpdateDeposit(auth, deposit);
+  await assertCanUpdateRecordStatus(auth?.userId, 'deposit', deposit.transaction_status);
 
   const ctx = await loadDepositContext(deposit);
   const adminId = auth?.userId;

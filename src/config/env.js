@@ -24,7 +24,7 @@ export const env = {
     connection: (process.env.DB_CONNECTION || 'mysql').toLowerCase(),
     host: process.env.DB_HOST || '127.0.0.1',
     port: Number(process.env.DB_PORT) || 3306,
-    database: process.env.DB_DATABASE || 'itrustld',
+    database: process.env.DB_DATABASE || 'itrustld_live',
     username: process.env.DB_USERNAME || 'root',
     password: process.env.DB_PASSWORD || '',
   },
@@ -82,6 +82,9 @@ export const env = {
             process.env.SMS_API_PASSWORD ||
             process.env.SMS_DIALOG_PASSWORD),
       ),
+    twilioAccountSid: process.env.TWILIO_ACCOUNT_SID || '',
+    twilioAuthToken: process.env.TWILIO_AUTH_TOKEN || '',
+    twilioFrom: process.env.TWILIO_FROM_NUMBER || process.env.TWILIO_FROM || '',
   },
   /** Sri Lanka wall-clock for shifts, business days, and display (mirrors Laravel app.shift_timezone). */
   shiftTimezone:
