@@ -1,10 +1,11 @@
 import { getDbDriver, query } from '../config/database.js';
-import { formatTimestampSl } from '../utils/slTime.js';
+import { addColomboDays, formatTimestampSl, parseDbDateTime } from '../utils/slTime.js';
 import {
   DEFAULT_MEMBERSHIP_TIERS,
   getTierByPointsFromList,
   getMembershipTierThresholds,
 } from './loyaltyMembershipTier.service.js';
+import { scheduleBonusNotify, scheduleVoucherLevelNotify } from './loyaltyNotify.service.js';
 
 const VALID_IDENTIFIERS = [
   'POINT-COLLECTION',
@@ -19,6 +20,8 @@ const VALID_IDENTIFIERS = [
 ];
 
 const VALID_LOYALTY_LEVELS = ['SILVER', 'GOLD', 'DIAMOND', 'VIP', 'VVIP'];
+/** Level client-bonus configs expire this many days after creation. */
+export const LEVEL_BONUS_VALIDITY_DAYS = 30;
 export const POINT_COLLECTION_TIERS = ['NORMAL', 'SILVER', 'GOLD', 'DIAMOND', 'VIP', 'VVIP'];
 const POINT_COLLECTION_TIER_LABELS = {
   NORMAL: 'Normal',
@@ -163,6 +166,11 @@ function mapBonusRow(row) {
 }
 
 function mapLevelRow(row) {
+  const createdAtRaw = row.created_at || row.updated_at;
+  const createdAt = parseDbDateTime(createdAtRaw);
+  const expiresAt = createdAt ? addColomboDays(createdAt, LEVEL_BONUS_VALIDITY_DAYS) : null;
+  const isExpired = Boolean(expiresAt && expiresAt.getTime() <= Date.now());
+
   return {
     id: row.id,
     display_id: row.display_id,
@@ -172,7 +180,30 @@ function mapLevelRow(row) {
     loyalty_level: row.loyalty_level,
     is_active: Boolean(row.is_active),
     changed_date: formatYmdHis(row.updated_at),
+    created_at: createdAt ? createdAt.toISOString() : null,
+    expires_at: expiresAt ? expiresAt.toISOString() : null,
+    expires_at_label: expiresAt ? formatYmdHis(expiresAt) : null,
+    is_expired: isExpired,
+    validity_days: LEVEL_BONUS_VALIDITY_DAYS,
   };
+}
+
+async function assertLevelBonusMutable(loyaltyLevelId, { allowExpired = false } = {}) {
+  const rows = await query(
+    `SELECT id, created_at, updated_at
+     FROM loyalty_management_levels
+     WHERE id = ?
+     LIMIT 1`,
+    [loyaltyLevelId],
+  );
+  const row = rows[0];
+  if (!row) {
+    throw validationError('Invalid loyalty management level reference.');
+  }
+  if (!allowExpired && mapLevelRow(row).is_expired) {
+    throw validationError('This level bonus has expired and can no longer be changed.');
+  }
+  return row;
 }
 
 function mapConfigRow(row) {
@@ -354,7 +385,7 @@ export async function getLoyaltyManagementData(audience, tier) {
   let loyaltyLevels = null;
   if (isAffiliate) {
     const levelRows = await query(
-      `SELECT id, display_id, client_bonus_amount, client_count, is_active, loyalty_level, is_deleted, admin_user_id, updated_at
+      `SELECT id, display_id, client_bonus_amount, client_count, is_active, loyalty_level, is_deleted, admin_user_id, created_at, updated_at
        FROM loyalty_management_levels
        WHERE loyalty_level IN ('SILVER', 'GOLD', 'DIAMOND', 'VIP', 'VVIP')
          AND (is_deleted = 0 OR is_deleted IS NULL OR is_deleted = FALSE)
@@ -628,7 +659,7 @@ export async function deletePointCollection({ pointCollectionId }) {
   };
 }
 
-export async function createBonus(adminUserId, { bonusAmount, isAffiliate, membershipTier }) {
+export async function createBonus(adminUserId, { bonusAmount, isAffiliate, membershipTier, notifyUsersByEmail }) {
   await ensureBonusTierSchema();
   const amount = Number(bonusAmount);
   if (!Number.isInteger(amount) || amount < 0) {
@@ -664,6 +695,14 @@ export async function createBonus(adminUserId, { bonusAmount, isAffiliate, membe
     [result.insertId],
   );
 
+  scheduleBonusNotify({
+    notifyUsersByEmail,
+    bonusAmount: amount,
+    isAffiliate: affiliate,
+    membershipTier: tier,
+    isUpdate: false,
+  });
+
   return {
     ok: true,
     error: false,
@@ -671,7 +710,7 @@ export async function createBonus(adminUserId, { bonusAmount, isAffiliate, membe
   };
 }
 
-export async function updateBonusAmount({ bonusId, bonusAmount, membershipTier }) {
+export async function updateBonusAmount({ bonusId, bonusAmount, membershipTier, notifyUsersByEmail }) {
   await ensureBonusTierSchema();
   const id = Number(bonusId);
   const amount = Number(bonusAmount);
@@ -691,9 +730,11 @@ export async function updateBonusAmount({ bonusId, bonusAmount, membershipTier }
     throw validationError('Invalid loyalty management bonus id.');
   }
 
+  const affiliate = Boolean(rows[0].is_affiliate);
+
   await assertUniqueAudienceTier({
     table: 'loyalty_management_bonuses',
-    isAffiliate: Boolean(rows[0].is_affiliate),
+    isAffiliate: affiliate,
     membershipTier: tier,
     excludeId: id,
     entityName: 'bonus amount',
@@ -705,6 +746,14 @@ export async function updateBonusAmount({ bonusId, bonusAmount, membershipTier }
      WHERE id = ?`,
     [amount, tier, id],
   );
+
+  scheduleBonusNotify({
+    notifyUsersByEmail,
+    bonusAmount: amount,
+    isAffiliate: affiliate,
+    membershipTier: tier,
+    isUpdate: true,
+  });
 
   return {
     ok: true,
@@ -772,7 +821,7 @@ export async function deleteBonus({ bonusId }) {
   };
 }
 
-export async function createLoyaltyLevel(adminUserId, { clientBonusAmount, clientCount, loyaltyLevel }) {
+export async function createLoyaltyLevel(adminUserId, { clientBonusAmount, clientCount, loyaltyLevel, notifyUsersByEmail }) {
   const bonusAmount = Number(clientBonusAmount);
   const count = Number(clientCount);
   const level = String(loyaltyLevel || '').trim().toUpperCase();
@@ -801,12 +850,20 @@ export async function createLoyaltyLevel(adminUserId, { clientBonusAmount, clien
   );
 
   const rows = await query(
-    `SELECT id, display_id, client_bonus_amount, client_count, is_active, loyalty_level, is_deleted, admin_user_id, updated_at
+    `SELECT id, display_id, client_bonus_amount, client_count, is_active, loyalty_level, is_deleted, admin_user_id, created_at, updated_at
      FROM loyalty_management_levels
      WHERE id = ?
      LIMIT 1`,
     [result.insertId],
   );
+
+  scheduleVoucherLevelNotify({
+    notifyUsersByEmail,
+    loyaltyLevel: level,
+    clientBonusAmount: bonusAmount,
+    clientCount: count,
+    isUpdate: false,
+  });
 
   return {
     ok: true,
@@ -815,7 +872,7 @@ export async function createLoyaltyLevel(adminUserId, { clientBonusAmount, clien
   };
 }
 
-export async function updateLoyaltyLevel({ loyaltyLevelId, clientBonusAmount, clientCount }) {
+export async function updateLoyaltyLevel({ loyaltyLevelId, clientBonusAmount, clientCount, notifyUsersByEmail }) {
   const id = Number(loyaltyLevelId);
   const bonusAmount = Number(clientBonusAmount);
   const count = Number(clientCount);
@@ -830,11 +887,13 @@ export async function updateLoyaltyLevel({ loyaltyLevelId, clientBonusAmount, cl
     throw validationError('Client count must be a valid integer.');
   }
 
-  const rows = await query(
-    `SELECT id FROM loyalty_management_levels WHERE id = ? LIMIT 1`,
+  await assertLevelBonusMutable(id);
+
+  const existing = await query(
+    `SELECT id, loyalty_level FROM loyalty_management_levels WHERE id = ? LIMIT 1`,
     [id],
   );
-  if (!rows[0]) {
+  if (!existing[0]) {
     throw validationError('Invalid loyalty management level reference.');
   }
 
@@ -844,6 +903,14 @@ export async function updateLoyaltyLevel({ loyaltyLevelId, clientBonusAmount, cl
      WHERE id = ?`,
     [bonusAmount, count, id],
   );
+
+  scheduleVoucherLevelNotify({
+    notifyUsersByEmail,
+    loyaltyLevel: existing[0].loyalty_level,
+    clientBonusAmount: bonusAmount,
+    clientCount: count,
+    isUpdate: true,
+  });
 
   return {
     ok: true,
@@ -858,13 +925,7 @@ export async function updateLoyaltyLevelActivationState({ loyaltyLevelId, activa
     throw validationError('Invalid loyalty management level reference.');
   }
 
-  const rows = await query(
-    `SELECT id FROM loyalty_management_levels WHERE id = ? LIMIT 1`,
-    [id],
-  );
-  if (!rows[0]) {
-    throw validationError('Invalid loyalty management level reference.');
-  }
+  await assertLevelBonusMutable(id);
 
   const active = Boolean(activationState);
   await query(
@@ -889,12 +950,9 @@ export async function deleteLoyaltyLevel({ loyaltyLevelId }) {
     throw validationError('Invalid loyalty management level id.');
   }
 
-  const rows = await query(
-    `SELECT id FROM loyalty_management_levels WHERE id = ? LIMIT 1`,
-    [id],
-  );
-  if (!rows[0]) {
-    throw validationError('Invalid loyalty management level id.');
+  const row = await assertLevelBonusMutable(id, { allowExpired: true });
+  if (!mapLevelRow(row).is_expired) {
+    throw validationError('Only expired level bonuses can be deleted.');
   }
 
   await query(

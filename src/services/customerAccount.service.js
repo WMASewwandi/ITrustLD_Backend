@@ -670,6 +670,41 @@ async function notifyPartnerAccountCreated(accountHolder) {
   }
 }
 
+/**
+ * Promote a normal account holder to affiliate/partner and allocate an affiliate code.
+ * No-op if already a partner. Returns true when status changed.
+ */
+export async function promoteUserToPartnerByUserId(userId, { notify = true } = {}) {
+  const holders = await query(
+    `SELECT id, user_id, email, mobile_number, affiliate_code, is_patner
+     FROM account_holders
+     WHERE user_id = ?
+     LIMIT 1`,
+    [userId],
+  );
+  const holder = holders[0];
+  if (!holder) return false;
+  if (String(holder.is_patner || '').toUpperCase() === 'YES') return false;
+
+  let affiliateCode = holder.affiliate_code;
+  if (!affiliateCode) {
+    affiliateCode = await generateUniqueAffiliateCode();
+  }
+
+  await query(
+    `UPDATE account_holders
+     SET is_patner = 'YES', affiliate_code = ?, updated_at = NOW()
+     WHERE id = ?`,
+    [affiliateCode, holder.id],
+  );
+
+  if (notify) {
+    await notifyPartnerAccountCreated({ ...holder, affiliate_code: affiliateCode });
+  }
+
+  return true;
+}
+
 export async function updateCustomerAccountStatus(
   accountHolderId,
   accountStatus,
@@ -752,19 +787,7 @@ export async function updateCustomerPartnerStatus(accountHolderId, isPartner) {
   }
 
   if (isPartner) {
-    let affiliateCode = holder.affiliate_code;
-    if (!affiliateCode) {
-      affiliateCode = await generateUniqueAffiliateCode();
-    }
-
-    await query(
-      `UPDATE account_holders
-       SET is_patner = 'YES', affiliate_code = ?, updated_at = NOW()
-       WHERE id = ?`,
-      [affiliateCode, accountHolderId],
-    );
-
-    await notifyPartnerAccountCreated(holder);
+    await promoteUserToPartnerByUserId(holder.user_id, { notify: true });
   } else {
     await query(
       `UPDATE account_holders SET is_patner = 'NO', updated_at = NOW() WHERE id = ?`,

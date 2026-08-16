@@ -1,4 +1,7 @@
 import { query } from '../config/database.js';
+import { env } from '../config/env.js';
+import { sendEmailAndSms } from './notification.service.js';
+import { rateChangeEmailHtml } from './mail.templates.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -167,6 +170,135 @@ async function assertWalletForRates(walletId) {
   return { wallet, topupMethod, cashoutMethod };
 }
 
+function parseNotifyFlag(value) {
+  return value === true || value === 1 || value === '1' || String(value).toLowerCase() === 'true';
+}
+
+function formatRateForEmail(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return parsed.toFixed(2);
+}
+
+async function resolvePaymentOptionById(paymentOptionId) {
+  const rows = await query(
+    `SELECT id, payment_option_name, payment_option_currency
+     FROM payment_options
+     WHERE id = ?
+       AND (is_deleted = 0 OR is_deleted IS NULL)
+     LIMIT 1`,
+    [paymentOptionId],
+  );
+  return rows[0] ?? null;
+}
+
+async function listRateNotifyRecipients() {
+  return query(
+    `SELECT user_id, email, mobile_number, first_name
+     FROM account_holders
+     WHERE COALESCE(account_status, 'ACTIVE') != 'BANNED'
+       AND email IS NOT NULL
+       AND TRIM(email) != ''
+       AND email_verification = 'VERIFIED'`,
+  );
+}
+
+function buildRateChangeSmsMessage(details) {
+  const method = details.paymentOptionName || 'payment';
+  const wallet = details.walletName || 'selected method';
+  const unit = details.currency || 'USD';
+  const parts = [];
+
+  if (details.depositRate != null && details.depositRate !== '') {
+    parts.push(`Deposit ${details.depositRate} ${unit}`);
+  }
+  if (details.withdrawalRate != null && details.withdrawalRate !== '') {
+    parts.push(`Withdrawal ${details.withdrawalRate} ${unit}`);
+  }
+
+  const ratesText = parts.length ? ` ${parts.join(', ')}.` : '';
+  if (details.isUpdate) {
+    return `iTrustLD: ${method} rates for ${wallet} updated.${ratesText}`;
+  }
+  return `iTrustLD: New ${method} rates for ${wallet} available.${ratesText}`;
+}
+
+async function sendRateChangeNotifications(details) {
+  const recipients = await listRateNotifyRecipients();
+  if (!recipients.length) {
+    console.info('[rate-notify] no verified recipients');
+    return;
+  }
+
+  const dashboardUrl = `${env.userAppUrl}/dashboard`;
+  const subject = details.isUpdate
+    ? `iTrustLD ${details.paymentOptionName} rates updated`
+    : `iTrustLD new ${details.paymentOptionName} rates available`;
+  const smsMessage = buildRateChangeSmsMessage(details);
+  const text = `${subject}. Deposit: ${details.depositRate ?? '—'}, Withdrawal: ${details.withdrawalRate ?? '—'}.`;
+
+  let successCount = 0;
+  let failureCount = 0;
+
+  for (const recipient of recipients) {
+    try {
+      const html = rateChangeEmailHtml({
+        firstName: recipient.first_name,
+        paymentOptionName: details.paymentOptionName,
+        walletName: details.walletName,
+        currency: details.currency,
+        depositRate: details.depositRate,
+        withdrawalRate: details.withdrawalRate,
+        isUpdate: details.isUpdate,
+        dashboardUrl,
+      });
+      await sendEmailAndSms({
+        email: recipient.email,
+        subject,
+        html,
+        text,
+        smsMessage,
+        msisdn: recipient.mobile_number || null,
+        userId: recipient.user_id || null,
+        smsType: 'RATE_CHANGE',
+      });
+      successCount += 1;
+    } catch (error) {
+      failureCount += 1;
+      console.error('[rate-notify] failed for', recipient.email, error.message);
+    }
+  }
+
+  console.info('[rate-notify] complete', { successCount, failureCount, total: recipients.length });
+}
+
+function scheduleRateChangeNotifications(details) {
+  void sendRateChangeNotifications(details).catch((error) => {
+    console.error('[rate-notify]', error.message);
+  });
+}
+
+async function maybeNotifyRateChange({
+  notifyUsersByEmail,
+  paymentOptionId,
+  wallet,
+  depositRate,
+  withdrawalRate,
+  isUpdate,
+}) {
+  if (!parseNotifyFlag(notifyUsersByEmail)) return;
+
+  const paymentOption = await resolvePaymentOptionById(paymentOptionId);
+  scheduleRateChangeNotifications({
+    paymentOptionName: paymentOption?.payment_option_name || 'payment',
+    currency: paymentOption?.payment_option_currency || 'USD',
+    walletName: wallet?.wallet_name || 'selected method',
+    depositRate: depositRate == null ? null : formatRateForEmail(depositRate),
+    withdrawalRate: withdrawalRate == null ? null : formatRateForEmail(withdrawalRate),
+    isUpdate: Boolean(isUpdate),
+  });
+}
+
 function mapDepositRateRow(row) {
   return {
     id: row.id,
@@ -257,7 +389,10 @@ export async function createRates(adminId, payload) {
   const depositRate = parseRate(payload.depositRate, 'Deposit rate');
   const withdrawalRate = parseRate(payload.withdrawalRate, 'Withdrawal rate');
 
-  const { topupMethod, cashoutMethod } = await assertWalletForRates(walletId);
+  const { wallet, topupMethod, cashoutMethod } = await assertWalletForRates(walletId);
+
+  let savedDeposit = null;
+  let savedWithdrawal = null;
 
   if (topupMethod && depositRate) {
     await query(
@@ -266,6 +401,7 @@ export async function createRates(adminId, payload) {
        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
       [adminId, topupMethod.id, paymentOptionId, depositRate],
     );
+    savedDeposit = depositRate;
   }
 
   if (cashoutMethod && withdrawalRate) {
@@ -275,7 +411,17 @@ export async function createRates(adminId, payload) {
        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
       [adminId, cashoutMethod.id, paymentOptionId, withdrawalRate],
     );
+    savedWithdrawal = withdrawalRate;
   }
+
+  await maybeNotifyRateChange({
+    notifyUsersByEmail: payload.notifyUsersByEmail,
+    paymentOptionId,
+    wallet,
+    depositRate: savedDeposit,
+    withdrawalRate: savedWithdrawal,
+    isUpdate: false,
+  });
 
   return { ok: true };
 }
@@ -284,10 +430,10 @@ export async function updateDepositRate(adminId, payload) {
   const depositRateId = parsePositiveInt(payload.depositRateId, 'Deposit rate id');
   const walletId = parsePositiveInt(payload.walletId, 'Wallet');
   const topupMethodId = parsePositiveInt(payload.topupMethodId, 'Topup method id');
-  parsePositiveInt(payload.paymentOptionId, 'Payment option id');
+  const paymentOptionId = parsePositiveInt(payload.paymentOptionId, 'Payment option id');
   const rate = parseRate(payload.rate, 'Deposit rate');
 
-  await assertWalletForRates(walletId);
+  const { wallet } = await assertWalletForRates(walletId);
 
   const rows = await query(
     `SELECT id
@@ -310,6 +456,15 @@ export async function updateDepositRate(adminId, payload) {
     [rate, adminId, depositRateId],
   );
 
+  await maybeNotifyRateChange({
+    notifyUsersByEmail: payload.notifyUsersByEmail,
+    paymentOptionId,
+    wallet,
+    depositRate: rate,
+    withdrawalRate: null,
+    isUpdate: true,
+  });
+
   return { ok: true };
 }
 
@@ -317,10 +472,10 @@ export async function updateWithdrawalRate(adminId, payload) {
   const withdrawalRateId = parsePositiveInt(payload.withdrawalRateId, 'Withdrawal rate id');
   const walletId = parsePositiveInt(payload.walletId, 'Wallet');
   const cashoutMethodId = parsePositiveInt(payload.cashoutMethodId, 'Cashout method id');
-  parsePositiveInt(payload.paymentOptionId, 'Payment option id');
+  const paymentOptionId = parsePositiveInt(payload.paymentOptionId, 'Payment option id');
   const rate = parseRate(payload.rate, 'Withdrawal rate');
 
-  await assertWalletForRates(walletId);
+  const { wallet } = await assertWalletForRates(walletId);
 
   const rows = await query(
     `SELECT id
@@ -342,6 +497,15 @@ export async function updateWithdrawalRate(adminId, payload) {
      WHERE id = ?`,
     [rate, adminId, withdrawalRateId],
   );
+
+  await maybeNotifyRateChange({
+    notifyUsersByEmail: payload.notifyUsersByEmail,
+    paymentOptionId,
+    wallet,
+    depositRate: null,
+    withdrawalRate: rate,
+    isUpdate: true,
+  });
 
   return { ok: true };
 }

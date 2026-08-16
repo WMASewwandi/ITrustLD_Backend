@@ -120,8 +120,7 @@ sudo systemctl enable --now itrustld-api itrustld-admin itrustld-user
 ## Shared database notes
 
 - Admin login uses existing `users` table and Spatie roles (same as Laravel).
-- On startup, the API may upsert system activities and create some tables with `CREATE TABLE IF NOT EXISTS`.
-- Do not run conflicting Laravel migrations without coordinating both stacks.
+- **Schema (new system):** Same shared DB as Laravel. Backend `migrations/` mirrors Laravel migration ids (no wipe/recreate). Existing DBs: `npm run migrate:baseline` once (records only). New DDL = new additive JS migrations only. Do **not** add new feature migrations under Laravel `ITrustLD_Existing`.
 
 ## File index
 

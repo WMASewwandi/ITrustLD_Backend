@@ -20,6 +20,8 @@ function parseCorsOrigins(value) {
 export const env = {
   nodeEnv: process.env.NODE_ENV || 'development',
   port: Number(process.env.PORT) || 4000,
+  /** Run pending Backend migrations on boot (default true). */
+  autoMigrate: process.env.AUTO_MIGRATE !== 'false',
   db: {
     connection: (process.env.DB_CONNECTION || 'mysql').toLowerCase(),
     host: process.env.DB_HOST || '127.0.0.1',
@@ -47,7 +49,10 @@ export const env = {
   projectRoot,
   turnstile: {
     secret: process.env.TURNSTILE_SECRET_KEY || process.env.TURNSTILE_SECRET || '',
-    siteKey: process.env.TURNSTILE_SITE_KEY || process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || '',
+    siteKey:
+      process.env.TURNSTILE_SITE_KEY ||
+      process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ||
+      '0x4AAAAAABgpWO1byq2Cgv3v',
   },
   loyalty: {
     starterWithdrawalTransactionId:

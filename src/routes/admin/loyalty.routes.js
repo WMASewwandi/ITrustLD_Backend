@@ -285,6 +285,8 @@ adminLoyaltyRouter.post(
           body.membership_tier ??
           body.membershipTier ??
           body.tier,
+        notifyUsersByEmail:
+          body.notifyUsersByEmail ?? body.notify_users ?? body.notifyUsers,
       });
       res.json(data);
     } catch (error) {
@@ -307,6 +309,8 @@ adminLoyaltyRouter.post(
           body.membership_tier ??
           body.membershipTier ??
           body.tier,
+        notifyUsersByEmail:
+          body.notifyUsersByEmail ?? body.notify_users ?? body.notifyUsers,
       });
       res.json(data);
     } catch (error) {
@@ -358,6 +362,8 @@ adminLoyaltyRouter.post(
         clientBonusAmount: body.client_bonus_amount ?? body.clientBonusAmount,
         clientCount: body.client_count ?? body.clientCount,
         loyaltyLevel: body.loyalty_level ?? body.loyaltyLevel,
+        notifyUsersByEmail:
+          body.notifyUsersByEmail ?? body.notify_users ?? body.notifyUsers,
       });
       res.json(data);
     } catch (error) {
@@ -376,6 +382,8 @@ adminLoyaltyRouter.post(
         loyaltyLevelId: body.loyalty_level_id ?? body.id,
         clientBonusAmount: body.client_bonus_amount ?? body.clientBonusAmount,
         clientCount: body.client_count ?? body.clientCount,
+        notifyUsersByEmail:
+          body.notifyUsersByEmail ?? body.notify_users ?? body.notifyUsers,
       });
       res.json(data);
     } catch (error) {
@@ -441,6 +449,9 @@ adminLoyaltyRouter.post(
         description: body.description,
         audience_type: body.audience_type ?? body.audienceType ?? body.audience,
         allowed_levels: body.allowed_levels ?? body.allowedLevels,
+        expires_at: body.expires_at ?? body.expiresAt ?? body.expiry_date,
+        notifyUsersByEmail:
+          body.notifyUsersByEmail ?? body.notify_users ?? body.notifyUsers,
       });
       res.json(data);
     } catch (error) {

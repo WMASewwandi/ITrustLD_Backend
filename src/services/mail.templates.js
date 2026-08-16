@@ -391,3 +391,85 @@ export function loyaltyRedemptionPendingEmailHtml({ firstName, balanceUrl }) {
       </a>
     </div>`);
 }
+
+export function rateChangeEmailHtml({
+  firstName,
+  paymentOptionName,
+  walletName,
+  currency,
+  depositRate,
+  withdrawalRate,
+  isUpdate,
+  dashboardUrl,
+}) {
+  const name = String(firstName || 'Customer').split(' ')[0];
+  const method = paymentOptionName || 'payment';
+  const wallet = walletName || 'selected method';
+  const unit = currency || 'USD';
+  const title = isUpdate ? 'Rates updated' : 'New rates available';
+  const intro = isUpdate
+    ? `Hi ${name}, our ${method} rates for ${wallet} have been updated.`
+    : `Hi ${name}, new ${method} rates for ${wallet} are now available.`;
+
+  const rateRows = [];
+  if (depositRate != null && depositRate !== '') {
+    rateRows.push(
+      `<p style="font-size:16px;line-height:25px;color:#0E1726;margin:0 0 8px;">Deposit rate: <strong>${depositRate} ${unit}</strong></p>`,
+    );
+  }
+  if (withdrawalRate != null && withdrawalRate !== '') {
+    rateRows.push(
+      `<p style="font-size:16px;line-height:25px;color:#0E1726;margin:0 0 8px;">Withdrawal rate: <strong>${withdrawalRate} ${unit}</strong></p>`,
+    );
+  }
+
+  return wrap(`
+    <div style="padding:40px 30px;text-align:center;">
+      <h1 style="font-size:24px;color:#0E1726;margin:0 0 24px;">${title}</h1>
+      <p style="font-size:16px;line-height:25px;color:#0E1726;margin:0 0 16px;">
+        ${intro}
+      </p>
+      ${rateRows.join('')}
+      <p style="font-size:16px;line-height:25px;color:#0E1726;margin:16px 0 32px;">
+        Log in to your account to view the latest rates before your next top-up or cash-out.
+      </p>
+      <a href="${dashboardUrl}" style="display:inline-block;background:#0f766e;color:#fff;text-decoration:none;padding:12px 24px;border-radius:9999px;font-size:16px;font-weight:500;">
+        Go to dashboard
+      </a>
+    </div>`);
+}
+
+export function loyaltyCatalogNotifyEmailHtml({
+  firstName,
+  headline,
+  intro,
+  detailLines = [],
+  dashboardUrl,
+}) {
+  const name = String(firstName || 'Customer').split(' ')[0];
+  const details = (detailLines || [])
+    .filter(Boolean)
+    .map(
+      (line) =>
+        `<p style="font-size:16px;line-height:25px;color:#0E1726;margin:0 0 8px;">${line}</p>`,
+    )
+    .join('');
+
+  return wrap(`
+    <div style="padding:40px 30px;text-align:center;">
+      <h1 style="font-size:24px;color:#0E1726;margin:0 0 24px;">${headline || 'Loyalty update'}</h1>
+      <p style="font-size:16px;line-height:25px;color:#0E1726;margin:0 0 12px;">
+        Hi ${name},
+      </p>
+      <p style="font-size:16px;line-height:25px;color:#0E1726;margin:0 0 16px;">
+        ${intro || 'Your loyalty benefits have been updated.'}
+      </p>
+      ${details}
+      <p style="font-size:16px;line-height:25px;color:#0E1726;margin:16px 0 32px;">
+        Log in to Loyalty to view the details.
+      </p>
+      <a href="${dashboardUrl}" style="display:inline-block;background:#0f766e;color:#fff;text-decoration:none;padding:12px 24px;border-radius:9999px;font-size:16px;font-weight:500;">
+        View loyalty
+      </a>
+    </div>`);
+}

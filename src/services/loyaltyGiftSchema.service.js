@@ -37,6 +37,7 @@ export async function ensureLoyaltyGiftSchema() {
           audience_type TEXT NOT NULL DEFAULT 'normal',
           is_affiliate INTEGER NOT NULL DEFAULT 0,
           allowed_levels TEXT NOT NULL,
+          expires_at TEXT,
           is_active INTEGER NOT NULL DEFAULT 1,
           is_deleted INTEGER NOT NULL DEFAULT 0,
           created_by INTEGER,
@@ -53,6 +54,7 @@ export async function ensureLoyaltyGiftSchema() {
           audience_type VARCHAR(20) NOT NULL DEFAULT 'normal',
           is_affiliate TINYINT(1) NOT NULL DEFAULT 0,
           allowed_levels JSON NOT NULL,
+          expires_at DATETIME NULL,
           is_active TINYINT(1) NOT NULL DEFAULT 1,
           is_deleted TINYINT(1) NOT NULL DEFAULT 0,
           created_by BIGINT UNSIGNED NULL,
@@ -74,6 +76,14 @@ export async function ensureLoyaltyGiftSchema() {
       await query(
         `UPDATE loyalty_gifts SET audience_type = CASE WHEN is_affiliate = 1 THEN 'affiliate' ELSE 'normal' END`,
       );
+    }
+  }
+
+  if (!(await columnExists('loyalty_gifts', 'expires_at'))) {
+    if (getDbDriver() === 'sqlite') {
+      await query(`ALTER TABLE loyalty_gifts ADD COLUMN expires_at TEXT`);
+    } else {
+      await query(`ALTER TABLE loyalty_gifts ADD COLUMN expires_at DATETIME NULL AFTER allowed_levels`);
     }
   }
 

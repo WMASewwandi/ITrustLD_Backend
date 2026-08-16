@@ -44,23 +44,55 @@ export async function getPendingWithdrawalsCount(userId) {
   return Number(rows[0]?.count || 0);
 }
 
+export async function getPendingDepositIds(userId) {
+  const rows = await query(
+    `SELECT COALESCE(transaction_id, CAST(id AS CHAR)) AS transaction_id
+     FROM deposits
+     WHERE user_id = ?
+       AND transaction_status = 'Pending'
+       AND payment_proof IS NOT NULL
+     ORDER BY created_at DESC`,
+    [userId],
+  );
+  return rows.map((row) => String(row.transaction_id));
+}
+
+export async function getPendingWithdrawalIds(userId) {
+  const rows = await query(
+    `SELECT COALESCE(transaction_id, CAST(id AS CHAR)) AS transaction_id
+     FROM withdrawals
+     WHERE user_id = ?
+       AND transaction_status = 'Pending'
+       AND cashout_payment_proof IS NOT NULL
+     ORDER BY created_at DESC`,
+    [userId],
+  );
+  return rows.map((row) => String(row.transaction_id));
+}
+
 export function resolveUserType(accountHolder) {
   return accountHolder?.is_patner === 'YES' ? 'partner' : 'normal';
 }
 
 export async function getUserAccountSummary(userId) {
-  const [trustPoints, savedBanksCount, pendingDepositsCount, pendingWithdrawalsCount] =
-    await Promise.all([
-      getTrustPoints(userId),
-      getSavedBanksCount(userId),
-      getPendingDepositsCount(userId),
-      getPendingWithdrawalsCount(userId),
-    ]);
+  const [
+    trustPoints,
+    savedBanksCount,
+    pendingDepositIds,
+    pendingWithdrawalIds,
+  ] = await Promise.all([
+    getTrustPoints(userId),
+    getSavedBanksCount(userId),
+    getPendingDepositIds(userId),
+    getPendingWithdrawalIds(userId),
+  ]);
 
   return {
     trust_points: trustPoints,
     saved_banks_count: savedBanksCount,
-    pending_deposits_count: pendingDepositsCount,
-    pending_withdrawals_count: pendingWithdrawalsCount,
+    pending_deposits_count: pendingDepositIds.length,
+    pending_withdrawals_count: pendingWithdrawalIds.length,
+    pending_deposit_ids: pendingDepositIds,
+    pending_withdrawal_ids: pendingWithdrawalIds,
   };
 }
