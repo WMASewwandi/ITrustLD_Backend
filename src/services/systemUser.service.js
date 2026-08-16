@@ -15,6 +15,7 @@ const GUARD_NAME = 'web';
 const MAX_PENDING_SHOW_COUNT = 1000;
 
 let pendingShowCountColumnReady = false;
+let mobileNumberColumnReady = false;
 
 async function columnExists(table, column) {
   if (getDbDriver() === 'sqlite') {
@@ -43,11 +44,34 @@ export async function ensurePendingShowCountColumn() {
   pendingShowCountColumnReady = true;
 }
 
+export async function ensureMobileNumberColumn() {
+  if (mobileNumberColumnReady) return;
+  if (!(await columnExists('users', 'mobile_number'))) {
+    if (getDbDriver() === 'sqlite') {
+      await query(`ALTER TABLE users ADD COLUMN mobile_number TEXT NULL`);
+    } else {
+      try {
+        await query(
+          `ALTER TABLE users ADD COLUMN mobile_number VARCHAR(32) NULL AFTER email`,
+        );
+      } catch {
+        await query(`ALTER TABLE users ADD COLUMN mobile_number VARCHAR(32) NULL`);
+      }
+    }
+  }
+  mobileNumberColumnReady = true;
+}
+
 export function parsePendingShowCount(value) {
   if (value === null || value === undefined || value === '') return null;
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return null;
   return Math.min(MAX_PENDING_SHOW_COUNT, Math.floor(n));
+}
+
+export function parseOptionalMobileNumber(value) {
+  const mobile = String(value ?? '').trim();
+  return mobile || null;
 }
 
 /** Positive pending load cap for executives, or null = load all (normal pagination). */
@@ -86,6 +110,7 @@ function mapSystemUser(user, roles) {
     id: user.id,
     name: user.name,
     email: user.email,
+    mobile_number: user.mobile_number || null,
     is_active: user.is_active === undefined ? true : Boolean(user.is_active),
     is_online: Boolean(user.is_online),
     shift: formatShift(user.shift),
@@ -141,9 +166,10 @@ export async function getAssignableRoles() {
 
 export async function getAllSystemUsers() {
   await ensurePendingShowCountColumn();
+  await ensureMobileNumberColumn();
   await ensureStatusUpdateScopeColumns();
   const users = await query(
-    `SELECT DISTINCT u.id, u.name, u.email, u.is_active, u.is_online, u.shift, u.pending_show_count,
+    `SELECT DISTINCT u.id, u.name, u.email, u.mobile_number, u.is_active, u.is_online, u.shift, u.pending_show_count,
             u.allowed_deposit_statuses, u.allowed_withdrawal_statuses, u.created_at
      FROM users u
      INNER JOIN model_has_roles mhr ON mhr.model_id = u.id AND mhr.model_type = ?
@@ -160,9 +186,10 @@ export async function getAllSystemUsers() {
 
 export async function findSystemUserById(userId) {
   await ensurePendingShowCountColumn();
+  await ensureMobileNumberColumn();
   await ensureStatusUpdateScopeColumns();
   const rows = await query(
-    `SELECT u.id, u.name, u.email, u.is_active, u.is_online, u.shift, u.pending_show_count,
+    `SELECT u.id, u.name, u.email, u.mobile_number, u.is_active, u.is_online, u.shift, u.pending_show_count,
             u.allowed_deposit_statuses, u.allowed_withdrawal_statuses, u.created_at
      FROM users u
      WHERE u.id = ?
@@ -250,6 +277,9 @@ export async function updateSystemUser(userId, payload) {
 
   const name = String(payload.name || '').trim();
   const email = String(payload.email || '').trim().toLowerCase();
+  const mobileNumber = parseOptionalMobileNumber(
+    payload.mobile_number ?? payload.mobileNumber ?? payload.mobile,
+  );
   const role = String(payload.role || '').trim();
   const password = payload.password ? String(payload.password) : '';
   const isActive = payload.is_active !== false && payload.is_active !== 0 && payload.is_active !== '0';
@@ -291,6 +321,7 @@ export async function updateSystemUser(userId, payload) {
   }
 
   await ensurePendingShowCountColumn();
+  await ensureMobileNumberColumn();
   await ensureStatusUpdateScopeColumns();
   const shiftTimes = toShiftTimes(shift);
   const now = nowSqlDateTime();
@@ -298,6 +329,7 @@ export async function updateSystemUser(userId, payload) {
   const updateFields = [
     'name = ?',
     'email = ?',
+    'mobile_number = ?',
     'is_active = ?',
     'shift = ?',
     'shift_start_time = ?',
@@ -310,6 +342,7 @@ export async function updateSystemUser(userId, payload) {
   const updateParams = [
     name,
     email,
+    mobileNumber,
     isActive ? 1 : 0,
     shift,
     shiftTimes.shift_start_time,
@@ -349,6 +382,9 @@ export async function updateSystemUser(userId, payload) {
 export async function createSystemUser(payload) {
   const name = String(payload.name || '').trim();
   const email = String(payload.email || '').trim().toLowerCase();
+  const mobileNumber = parseOptionalMobileNumber(
+    payload.mobile_number ?? payload.mobileNumber ?? payload.mobile,
+  );
   const role = String(payload.role || '').trim();
   const password = String(payload.password || '');
   const isActive = payload.is_active !== false && payload.is_active !== 0 && payload.is_active !== '0';
@@ -390,17 +426,19 @@ export async function createSystemUser(payload) {
   }
 
   await ensurePendingShowCountColumn();
+  await ensureMobileNumberColumn();
   await ensureStatusUpdateScopeColumns();
   const shiftTimes = toShiftTimes(shift);
   const now = nowSqlDateTime();
   const hashedPassword = await hashLaravelPassword(password);
 
   const result = await query(
-    `INSERT INTO users (name, email, password, is_active, is_online, shift, shift_start_time, shift_end_time, pending_show_count, allowed_deposit_statuses, allowed_withdrawal_statuses, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO users (name, email, mobile_number, password, is_active, is_online, shift, shift_start_time, shift_end_time, pending_show_count, allowed_deposit_statuses, allowed_withdrawal_statuses, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       name,
       email,
+      mobileNumber,
       hashedPassword,
       isActive ? 1 : 0,
       shift,

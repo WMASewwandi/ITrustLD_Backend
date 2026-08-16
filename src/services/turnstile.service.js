@@ -34,5 +34,6 @@ export async function verifyTurnstileToken(token, remoteIp = null) {
 }
 
 export function isTurnstileRequired() {
-  return Boolean(getTurnstileSecret()) && env.nodeEnv === 'production';
+  // Match Laravel: when a secret is configured, registration must pass Turnstile.
+  return Boolean(getTurnstileSecret());
 }

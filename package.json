@@ -3,11 +3,15 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Express API for iTrustLD (shared Laravel database)",
+  "description": "Express API for iTrustLD (owns schema via Backend migrations)",
   "main": "src/index.js",
   "scripts": {
     "dev": "node --watch src/index.js",
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "migrate": "node src/db/migrate.js up",
+    "migrate:status": "node src/db/migrate.js status",
+    "migrate:baseline": "node src/db/migrate.js baseline",
+    "migrate:sync-laravel": "node scripts/sync-laravel-migrations.mjs"
   },
   "engines": {
     "node": ">=20"

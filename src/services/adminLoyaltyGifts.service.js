@@ -1,6 +1,7 @@
 import { query } from '../config/database.js';
 import { formatTimestampSl, formatYmdColombo, parseDbDateTime } from '../utils/slTime.js';
 import { ensureLoyaltyGiftSchema } from './loyaltyGiftSchema.service.js';
+import { scheduleGiftNotify } from './loyaltyNotify.service.js';
 import {
   logSystemUserAction,
   SYSTEM_USER_ACTIONS,
@@ -73,9 +74,30 @@ function serializeAllowedLevels(levels) {
   return JSON.stringify(normalized);
 }
 
+function parseExpiresAtInput(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    return parseDbDateTime(`${raw} 23:59:59`);
+  }
+
+  return parseDbDateTime(raw);
+}
+
+function toExpiresAtSql(value) {
+  const date = parseExpiresAtInput(value);
+  if (!date) return null;
+  return formatTimestampSl(date) || null;
+}
+
 function mapGiftRow(row) {
   const levels = parseAllowedLevels(row.allowed_levels);
   const audienceType = normalizeAudienceType(row.audience_type ?? (row.is_affiliate ? 'affiliate' : 'normal'));
+  const expiresAt = parseDbDateTime(row.expires_at);
+  const createdAt = parseDbDateTime(row.created_at);
+  const isExpired = Boolean(expiresAt && expiresAt.getTime() <= Date.now());
+
   return {
     id: row.id,
     title: row.title,
@@ -86,8 +108,13 @@ function mapGiftRow(row) {
     is_affiliate: audienceType === 'affiliate',
     allowed_levels: levels,
     is_active: Boolean(row.is_active),
-    created_at: formatYmdHis(row.created_at),
+    created_at: createdAt ? createdAt.toISOString() : null,
+    created_at_label: formatYmdHis(row.created_at),
     updated_at: formatYmdHis(row.updated_at),
+    expires_at: expiresAt ? expiresAt.toISOString() : null,
+    expires_at_date: expiresAt ? formatYmd(expiresAt) : '',
+    expires_at_label: expiresAt ? formatYmdHis(expiresAt) : null,
+    is_expired: isExpired,
   };
 }
 
@@ -198,18 +225,35 @@ export async function createGift(adminUserId, payload = {}) {
   }
 
   const description = String(payload.description || '').trim();
+  const expiresAtSql = toExpiresAtSql(payload.expires_at ?? payload.expiresAt ?? payload.expiry_date);
+  if (!expiresAtSql) {
+    throw validationError('Expiration date is required.');
+  }
+  if (parseDbDateTime(expiresAtSql).getTime() <= Date.now()) {
+    throw validationError('Expiration date must be in the future.');
+  }
+
   const result = await query(
-    `INSERT INTO loyalty_gifts (title, description, audience_type, is_affiliate, allowed_levels, is_active, is_deleted, created_by, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, 1, 0, ?, NOW(), NOW())`,
+    `INSERT INTO loyalty_gifts (title, description, audience_type, is_affiliate, allowed_levels, expires_at, is_active, is_deleted, created_by, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, NOW(), NOW())`,
     [
       title,
       description || null,
       audienceType,
       legacyIsAffiliate(audienceType),
       serializeAllowedLevels(validLevels),
+      expiresAtSql,
       adminUserId,
     ],
   );
+
+  scheduleGiftNotify({
+    notifyUsersByEmail: payload.notifyUsersByEmail ?? payload.notify_users ?? payload.notifyUsers,
+    title,
+    audienceType,
+    allowedLevels: validLevels,
+    isUpdate: false,
+  });
 
   return { ok: true, id: result.insertId };
 }
@@ -233,9 +277,20 @@ export async function updateGift(payload = {}) {
   const audienceType = normalizeAudienceType(
     payload.audience_type ?? payload.audienceType ?? payload.audience,
   );
+  const expiresAtSql = toExpiresAtSql(payload.expires_at ?? payload.expiresAt ?? payload.expiry_date);
+  if (!expiresAtSql) {
+    throw validationError('Expiration date is required.');
+  }
+
+  const existing = await query(
+    `SELECT id FROM loyalty_gifts WHERE id = ? AND is_deleted = 0 LIMIT 1`,
+    [giftId],
+  );
+  if (!existing[0]) throw validationError('Gift not found.', 404);
+
   await query(
     `UPDATE loyalty_gifts
-     SET title = ?, description = ?, audience_type = ?, is_affiliate = ?, allowed_levels = ?, updated_at = NOW()
+     SET title = ?, description = ?, audience_type = ?, is_affiliate = ?, allowed_levels = ?, expires_at = ?, updated_at = NOW()
      WHERE id = ? AND is_deleted = 0`,
     [
       title,
@@ -243,9 +298,18 @@ export async function updateGift(payload = {}) {
       audienceType,
       legacyIsAffiliate(audienceType),
       serializeAllowedLevels(validLevels),
+      expiresAtSql,
       giftId,
     ],
   );
+
+  scheduleGiftNotify({
+    notifyUsersByEmail: payload.notifyUsersByEmail ?? payload.notify_users ?? payload.notifyUsers,
+    title,
+    audienceType,
+    allowedLevels: validLevels,
+    isUpdate: true,
+  });
 
   return { ok: true };
 }
@@ -255,6 +319,12 @@ export async function updateGiftState(payload = {}) {
 
   const giftId = Number(payload.gift_id ?? payload.id);
   if (!giftId) throw validationError('Gift id is required.');
+
+  const existing = await query(
+    `SELECT id FROM loyalty_gifts WHERE id = ? AND is_deleted = 0 LIMIT 1`,
+    [giftId],
+  );
+  if (!existing[0]) throw validationError('Gift not found.', 404);
 
   const isActive = Boolean(payload.is_active ?? payload.isActive ?? payload.activation_state ?? payload.activationState);
   await query(

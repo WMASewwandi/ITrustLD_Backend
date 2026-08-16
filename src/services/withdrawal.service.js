@@ -92,12 +92,16 @@ function formatWithdrawalAccount(row) {
   const details = parseAccountDetailsLog(row.account_details_log);
   if (!details) return '—';
 
-  const accountType = row.selected_account_type || details.account_type || '';
+  const accountType = String(row.selected_account_type || details.account_type || '')
+    .trim()
+    .toLowerCase();
   const accountId = details.account_id || details.account_number || '';
 
+  if (accountType.includes('bank')) {
+    return [details.bank_name, accountId, details.account_name].filter(Boolean).join(' · ') || accountId || '—';
+  }
+
   switch (accountType) {
-    case 'bank':
-      return [details.bank_name, accountId, details.account_name].filter(Boolean).join(' · ') || accountId || '—';
     case 'skrill':
     case 'neteller':
     case 'xm':
@@ -207,6 +211,9 @@ function mapWithdrawalRow(row, adminUsers, assignedUsers, similarCounts) {
     : '—';
   const simKey = `${row.cashout_method_id}_${row.cashout_account_id}`;
   const todayTxCount = similarCounts[simKey] || 0;
+  const accountDetails = parseAccountDetailsLog(row.account_details_log);
+  const selectedAccountType =
+    row.selected_account_type || accountDetails?.account_type || '';
 
   return {
     id: row.transaction_id,
@@ -226,6 +233,11 @@ function mapWithdrawalRow(row, adminUsers, assignedUsers, similarCounts) {
     platform: row.cashout_method_name || '—',
     status: row.transaction_status,
     account: formatWithdrawalAccount(row),
+    selectedAccountType,
+    bankName: accountDetails?.bank_name || null,
+    accountName: accountDetails?.account_name || null,
+    bankAccountNo:
+      accountDetails?.account_id || accountDetails?.account_number || null,
     assigned: assignedName,
     assignedToId: row.assigned_to,
     admin: adminName,

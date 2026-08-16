@@ -4,6 +4,10 @@ import { sendEmailAndSms } from './notification.service.js';
 import { loyaltyLevelUpgradeEmailHtml } from './mail.templates.js';
 import { ensurePointCollectionTierSchema } from './adminLoyaltyManagement.service.js';
 import { resolveLevelId } from './loyaltyMembershipTier.service.js';
+import { promoteUserToPartnerByUserId } from './customerAccount.service.js';
+
+/** Silver and above — normal users are auto-converted to affiliates. */
+const AFFILIATE_UNLOCK_LEVEL_ID = 2;
 
 const LEVEL_LABELS = {
   1: 'NORMAL',
@@ -250,6 +254,17 @@ export async function updateUserPointLevel(userId) {
     }
   } else if (pointLevelIdNew > 1) {
     await insertLevelRecord('PROMOTED');
+    await notifyLevelUpgrade(userId, pointLevelIdNew, pointCollectionDuringYear);
+  }
+
+  // Silver+ unlocks affiliate/partner status for normal users.
+  const alreadyPartner = String(partnerRows[0]?.is_patner || '').toUpperCase() === 'YES';
+  if (pointLevelIdNew >= AFFILIATE_UNLOCK_LEVEL_ID && !alreadyPartner) {
+    try {
+      await promoteUserToPartnerByUserId(userId, { notify: true });
+    } catch (error) {
+      console.error('[auto-affiliate-convert]', error.message);
+    }
   }
 
   return pointLevelIdNew;

@@ -6,7 +6,7 @@ import {
   getMembershipTierThresholds,
 } from './loyaltyMembershipTier.service.js';
 import { ensureLoyaltyGiftSchema } from './loyaltyGiftSchema.service.js';
-import { formatTimestampSl } from '../utils/slTime.js';
+import { formatTimestampSl, parseDbDateTime } from '../utils/slTime.js';
 
 function giftMatchesUserAudience(audienceType, isPartner) {
   const type = normalizeAudienceType(audienceType);
@@ -57,10 +57,17 @@ function formatYmdHis(value) {
 
 const GIFT_CLAIM_VALIDITY_DAYS = 30;
 
-function giftExpiresAt(createdAt) {
-  if (!createdAt) return null;
-  const created = createdAt instanceof Date ? createdAt : new Date(createdAt);
-  if (Number.isNaN(created.getTime())) return null;
+function giftExpiresAt(giftOrCreatedAt) {
+  if (giftOrCreatedAt && typeof giftOrCreatedAt === 'object' && !(giftOrCreatedAt instanceof Date)) {
+    const explicit = parseDbDateTime(giftOrCreatedAt.expires_at);
+    if (explicit) return explicit;
+    giftOrCreatedAt = giftOrCreatedAt.created_at;
+  }
+
+  if (!giftOrCreatedAt) return null;
+  const created =
+    giftOrCreatedAt instanceof Date ? giftOrCreatedAt : parseDbDateTime(giftOrCreatedAt);
+  if (!created || Number.isNaN(created.getTime())) return null;
   return new Date(created.getTime() + GIFT_CLAIM_VALIDITY_DAYS * 24 * 60 * 60 * 1000);
 }
 
@@ -94,7 +101,7 @@ function mapGiftRow(row, userLevel, existingClaim) {
   const alreadyClaimed = Boolean(existingClaim);
   const claimStatus = existingClaim?.status || null;
   const createdAt = row.created_at || null;
-  const expiresAt = giftExpiresAt(createdAt);
+  const expiresAt = giftExpiresAt(row);
   const expired = Boolean(expiresAt && expiresAt.getTime() <= Date.now());
 
   return {
@@ -188,7 +195,7 @@ export async function createGiftClaim(userId, payload = {}) {
     throw validationError(`Your current level (${userLevel}) is not eligible for this gift.`);
   }
 
-  const expiresAt = giftExpiresAt(gift.created_at);
+  const expiresAt = giftExpiresAt(gift);
   if (expiresAt && expiresAt.getTime() <= Date.now()) {
     throw validationError('This gift offer has expired.');
   }

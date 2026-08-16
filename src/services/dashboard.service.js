@@ -77,7 +77,24 @@ function buildNotifications({ accountHolder, summary, documents }) {
   const items = [];
   let id = 1;
 
-  if (summary.pending_deposits_count > 0) {
+  const pendingDepositIds = Array.isArray(summary.pending_deposit_ids)
+    ? summary.pending_deposit_ids
+    : [];
+  const pendingWithdrawalIds = Array.isArray(summary.pending_withdrawal_ids)
+    ? summary.pending_withdrawal_ids
+    : [];
+
+  if (pendingDepositIds.length > 0) {
+    for (const transactionId of pendingDepositIds) {
+      items.push({
+        id: id++,
+        title: 'Top-up pending',
+        body: `Your top-up request #${transactionId} is being reviewed.`,
+        time: 'Recently',
+        transaction_id: transactionId,
+      });
+    }
+  } else if (summary.pending_deposits_count > 0) {
     items.push({
       id: id++,
       title: 'Top-up pending',
@@ -89,7 +106,17 @@ function buildNotifications({ accountHolder, summary, documents }) {
     });
   }
 
-  if (summary.pending_withdrawals_count > 0) {
+  if (pendingWithdrawalIds.length > 0) {
+    for (const transactionId of pendingWithdrawalIds) {
+      items.push({
+        id: id++,
+        title: 'Cash-out pending',
+        body: `Your cash-out request #${transactionId} is being reviewed.`,
+        time: 'Recently',
+        transaction_id: transactionId,
+      });
+    }
+  } else if (summary.pending_withdrawals_count > 0) {
     items.push({
       id: id++,
       title: 'Cash-out pending',
@@ -154,6 +181,10 @@ export async function getUserDashboard(userId) {
     saved_banks_count: user.saved_banks_count ?? 0,
     pending_deposits_count: user.pending_deposits_count ?? 0,
     pending_withdrawals_count: user.pending_withdrawals_count ?? 0,
+    pending_deposit_ids: Array.isArray(user.pending_deposit_ids) ? user.pending_deposit_ids : [],
+    pending_withdrawal_ids: Array.isArray(user.pending_withdrawal_ids)
+      ? user.pending_withdrawal_ids
+      : [],
   };
   const userType = resolveUserType(accountHolder);
   const promotionalContent = await getDashboardPromotionalContent(userType);

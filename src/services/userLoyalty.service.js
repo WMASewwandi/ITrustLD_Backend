@@ -22,6 +22,7 @@ import {
 import { getMembershipTierThresholds } from './loyaltyMembershipTier.service.js';
 import { ensureBonusTierSchema } from './adminLoyaltyManagement.service.js';
 import { getClientBonusSummaryForUser } from './userVoucherClaims.service.js';
+import { listAvailableGiftsForUser } from './userLoyaltyGifts.service.js';
 import {
   logSystemUserAction,
   SYSTEM_USER_ACTIONS,
@@ -483,12 +484,19 @@ export async function getUserLoyaltySummary(userId) {
       ).then((rows) => Number(rows[0]?.total || 0))
     : Promise.resolve(0);
 
-  const [partnerProgress, bonusSummary, clientBonusSummary, directClientCount] = await Promise.all([
-    partnerProgressPromise,
-    getBonusSummaryForUser(userId, isPartner, totals.remaining),
-    getClientBonusSummaryForUser(userId, isPartner),
-    directClientCountPromise,
-  ]);
+  const [partnerProgress, bonusSummary, clientBonusSummary, directClientCount, giftsData] =
+    await Promise.all([
+      partnerProgressPromise,
+      getBonusSummaryForUser(userId, isPartner, totals.remaining),
+      getClientBonusSummaryForUser(userId, isPartner),
+      directClientCountPromise,
+      listAvailableGiftsForUser(userId).catch((error) => {
+        console.error('[loyalty-summary-gifts]', error.message);
+        return { gifts: [] };
+      }),
+    ]);
+
+  const eligibleGiftCount = (giftsData.gifts || []).filter((gift) => gift.is_eligible).length;
 
   return {
     point_summary: {
@@ -508,6 +516,7 @@ export async function getUserLoyaltySummary(userId) {
     partner_progress: partnerProgress,
     bonus_summary: bonusSummary,
     client_bonus_summary: clientBonusSummary,
+    eligible_gift_count: eligibleGiftCount,
     rate_label: buildRateLabel(isPartner),
     usd_value_of_earned: Number(((totals.earned / POINT_DIVIDER) * usdPerBlock).toFixed(2)),
     minimum_points: MIN_POINTS,
@@ -607,23 +616,44 @@ export async function createUserLoyaltyWithdrawal(userId, payload = {}) {
   };
 }
 
-function mapUserWithdrawalRow(row) {
+function mapUserWithdrawalRow(row, accountDisplay = null) {
   const points = Number(row.point_withdrawal_amount || 0);
   const cashout = Number(row.cashout_amount || 0);
   const received = Number(row.account_currency_amount || 0);
+  const paymentOption = String(row.payment_option || '').trim();
+  const optionUpper = paymentOption.toUpperCase();
+  const receivingCurrency =
+    optionUpper === 'BANK TRANSFER' || optionUpper === 'CARD PAYMENT'
+      ? 'LKR'
+      : optionUpper === 'CRYPTO' || optionUpper.startsWith('CRYPTO')
+        ? 'USDT'
+        : 'USD';
+  const datetime = formatYmdHis(row.created_at);
+  const [datePart, timePart] = String(datetime).split(' ');
 
   return {
     id: displayTransactionId(row.id),
     withdrawal_id: row.id,
+    type: 'Loyalty Cash-out',
+    method: 'Point Withdrawal',
     points,
     points_display: points.toLocaleString(),
     amount: `USD ${cashout.toFixed(2)}`,
+    cashout_amount: cashout,
     received_amount: received.toFixed(2),
-    payment_option: row.payment_option,
+    receiving_amount: `${receivingCurrency} ${received.toLocaleString(undefined, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`,
+    currency: 'USD',
+    payment_option: paymentOption || '—',
     account_id: row.account_id,
+    account: accountDisplay?.platformDetail || accountDisplay?.platformId || '—',
+    account_platform: accountDisplay?.platform || paymentOption || '—',
     status: mapUserStatus(row.status),
-    date: formatYmd(row.created_at),
-    datetime: formatYmdHis(row.created_at),
+    date: datePart || formatYmd(row.created_at),
+    time: timePart || '',
+    datetime,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -681,8 +711,15 @@ export async function listUserLoyaltyWithdrawals(userId, params = {}) {
     offset,
   ]);
 
+  const transactions = await Promise.all(
+    rows.map(async (row) => {
+      const accountDisplay = await loadAccountDisplay(userId, row.payment_option, row.account_id);
+      return mapUserWithdrawalRow(row, accountDisplay);
+    }),
+  );
+
   return {
-    transactions: rows.map(mapUserWithdrawalRow),
+    transactions,
     pagination: {
       page,
       per_page: perPage,
