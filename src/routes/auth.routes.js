@@ -19,7 +19,7 @@ export const authRouter = Router();
 authRouter.get('/config', (_req, res) => {
   res.json({
     ok: true,
-    turnstileSiteKey: env.turnstile.siteKey || null,
+    turnstileRequired: Boolean(env.turnstile.secret),
   });
 });
 

@@ -177,11 +177,6 @@ export async function registerUser(payload, { remoteIp } = {}) {
     if (!valid) {
       throw validationError('You failed to verify that you are not a robot.');
     }
-  } else if (env.turnstile?.secret && turnstileToken) {
-    const valid = await verifyTurnstileToken(turnstileToken, remoteIp);
-    if (!valid) {
-      throw validationError('You failed to verify that you are not a robot.');
-    }
   }
 
   if (mobileNumber) {
