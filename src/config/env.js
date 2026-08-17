@@ -49,10 +49,6 @@ export const env = {
   projectRoot,
   turnstile: {
     secret: process.env.TURNSTILE_SECRET_KEY || process.env.TURNSTILE_SECRET || '',
-    siteKey:
-      process.env.TURNSTILE_SITE_KEY ||
-      process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ||
-      '0x4AAAAAABgpWO1byq2Cgv3v',
   },
   loyalty: {
     starterWithdrawalTransactionId:
