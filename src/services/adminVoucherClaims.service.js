@@ -4,6 +4,7 @@ import {
   logSystemUserAction,
   SYSTEM_USER_ACTIONS,
 } from './systemUserActionLog.service.js';
+import { assertCanUpdateRecordStatus } from './statusUpdateScope.service.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -300,6 +301,10 @@ export async function completeVoucherClaim(adminUserId, payload = {}) {
   if (!voucher) {
     throw validationError('Voucher not found.', 404);
   }
+
+  const currentStatus = mapVoucherStatus(voucher);
+  await assertCanUpdateRecordStatus(adminUserId, 'loyalty_voucher', currentStatus);
+
   if (Number(voucher.is_claimed) === 1) {
     throw validationError('Voucher already claimed.', 400);
   }
@@ -343,6 +348,10 @@ export async function rejectVoucherClaim(adminUserId, payload = {}) {
   if (!voucher) {
     throw validationError('Voucher not found.', 404);
   }
+
+  const currentStatus = mapVoucherStatus(voucher);
+  await assertCanUpdateRecordStatus(adminUserId, 'loyalty_voucher', currentStatus);
+
   if (Number(voucher.is_claimed) === 1) {
     throw validationError('Voucher already claimed.', 400);
   }

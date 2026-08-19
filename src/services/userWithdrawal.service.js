@@ -4,8 +4,6 @@ import {
   isAccountBanned,
   needsVerification,
 } from './accountHolder.service.js';
-import { env } from '../config/env.js';
-import { queueSmsMessage } from './notification.service.js';
 import { resolveWalletLogoPublicUrl } from './walletLogoStorage.service.js';
 import { ensureWalletNavigateSchema } from './wallet.service.js';
 import { autoAssignWithdrawal } from './withdrawalAssignment.service.js';
@@ -800,14 +798,6 @@ export async function getWithdrawalPaymentProofContext(userId, withdrawalId) {
   };
 }
 
-const WITHDRAWAL_OPS_SMS_NUMBERS_FALLBACK = ['767676684', '767676023', '752256911', '763383069'];
-
-function getWithdrawalOpsSmsNumbers() {
-  const fromEnv = env.loyalty?.staffAlertNumbers?.slice(1, 5)?.filter(Boolean);
-  if (fromEnv?.length) return fromEnv;
-  return WITHDRAWAL_OPS_SMS_NUMBERS_FALLBACK;
-}
-
 export async function saveWithdrawalPaymentProof(userId, withdrawalId, file, payload = {}) {
   await assertWithdrawalAccess(userId);
   const withdrawal = await getUserWithdrawalById(userId, withdrawalId);
@@ -863,19 +853,6 @@ export async function saveWithdrawalPaymentProof(userId, withdrawalId, file, pay
     await autoAssignWithdrawal(updatedWithdrawal);
   } catch (error) {
     console.error('[withdrawal:auto-assign]', error.message);
-  }
-
-  const smsMessage = `Pending withdrawal request has been added: ${withdrawal.transaction_id}. Please review. Thanks`;
-  for (const msisdn of getWithdrawalOpsSmsNumbers()) {
-    try {
-      await queueSmsMessage({
-        message: smsMessage,
-        msisdn,
-        smsType: 'WITHDRAWAL_PENDING',
-      });
-    } catch (error) {
-      console.error('[withdrawal:ops-sms]', msisdn, error.message);
-    }
   }
 
   return {

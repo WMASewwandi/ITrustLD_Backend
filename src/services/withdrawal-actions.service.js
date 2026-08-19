@@ -12,6 +12,7 @@ import {
   SYSTEM_USER_ACTIONS,
 } from './systemUserActionLog.service.js';
 import { refillWithdrawalPendingForExecutive } from './withdrawalAssignment.service.js';
+import { notifyAssignedSystemUser } from './assignedUserNotify.service.js';
 import {
   ensureWithdrawalAuthorizationSchema,
   hasActiveWithdrawalAuthorizers,
@@ -117,6 +118,16 @@ export async function assignWithdrawals(auth, { withdrawalIds, executiveId }) {
     execId,
     ...ids,
   ]);
+
+  if (execId) {
+    await notifyAssignedSystemUser({
+      userId: execId,
+      message: `${ids.length} pending withdrawal request(s) have been assigned to you. Please review. Thanks`,
+      smsType: 'WITHDRAWAL_PENDING',
+    }).catch((error) => {
+      console.error('[withdrawal:assigned-sms]', error.message);
+    });
+  }
 
   return {
     error: false,

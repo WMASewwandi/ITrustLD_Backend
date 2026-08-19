@@ -6,6 +6,9 @@ import { hashLaravelPassword } from '../utils/laravelPassword.js';
 import {
   DEPOSIT_UPDATE_STATUSES,
   WITHDRAWAL_UPDATE_STATUSES,
+  LOYALTY_ORDER_UPDATE_STATUSES,
+  LOYALTY_BONUS_UPDATE_STATUSES,
+  LOYALTY_VOUCHER_UPDATE_STATUSES,
   ensureStatusUpdateScopeColumns,
   parseAllowedStatuses,
   serializeAllowedStatuses,
@@ -123,6 +126,18 @@ function mapSystemUser(user, roles) {
       user.allowed_withdrawal_statuses,
       WITHDRAWAL_UPDATE_STATUSES,
     ),
+    allowed_loyalty_order_statuses: parseAllowedStatuses(
+      user.allowed_loyalty_order_statuses,
+      LOYALTY_ORDER_UPDATE_STATUSES,
+    ),
+    allowed_loyalty_bonus_statuses: parseAllowedStatuses(
+      user.allowed_loyalty_bonus_statuses,
+      LOYALTY_BONUS_UPDATE_STATUSES,
+    ),
+    allowed_loyalty_voucher_statuses: parseAllowedStatuses(
+      user.allowed_loyalty_voucher_statuses,
+      LOYALTY_VOUCHER_UPDATE_STATUSES,
+    ),
     created_at: user.created_at,
     roles,
     role: primaryRole,
@@ -170,7 +185,12 @@ export async function getAllSystemUsers() {
   await ensureStatusUpdateScopeColumns();
   const users = await query(
     `SELECT DISTINCT u.id, u.name, u.email, u.mobile_number, u.is_active, u.is_online, u.shift, u.pending_show_count,
-            u.allowed_deposit_statuses, u.allowed_withdrawal_statuses, u.created_at
+            u.allowed_deposit_statuses,
+            u.allowed_withdrawal_statuses,
+            u.allowed_loyalty_order_statuses,
+            u.allowed_loyalty_bonus_statuses,
+            u.allowed_loyalty_voucher_statuses,
+            u.created_at
      FROM users u
      INNER JOIN model_has_roles mhr ON mhr.model_id = u.id AND mhr.model_type = ?
      INNER JOIN roles r ON r.id = mhr.role_id
@@ -190,7 +210,12 @@ export async function findSystemUserById(userId) {
   await ensureStatusUpdateScopeColumns();
   const rows = await query(
     `SELECT u.id, u.name, u.email, u.mobile_number, u.is_active, u.is_online, u.shift, u.pending_show_count,
-            u.allowed_deposit_statuses, u.allowed_withdrawal_statuses, u.created_at
+            u.allowed_deposit_statuses,
+            u.allowed_withdrawal_statuses,
+            u.allowed_loyalty_order_statuses,
+            u.allowed_loyalty_bonus_statuses,
+            u.allowed_loyalty_voucher_statuses,
+            u.created_at
      FROM users u
      WHERE u.id = ?
      LIMIT 1`,
@@ -253,6 +278,10 @@ async function resolveStatusScopeForRole(roleName, payload = {}) {
     permissions.includes('status_update_withdrawal_data') ||
     permissions.includes('authorize_withdrawal_data');
 
+  const canUpdateLoyaltyOrders = permissions.includes('status_update_loyalty_orders_data');
+  const canUpdateLoyaltyBonus = permissions.includes('status_update_loyalty_bonus_claims_data');
+  const canUpdateLoyaltyVouchers = permissions.includes('status_update_loyalty_voucher_claims_data');
+
   return {
     allowedDepositStatuses: canUpdateDeposits
       ? serializeAllowedStatuses(payload.allowed_deposit_statuses, DEPOSIT_UPDATE_STATUSES, {
@@ -262,6 +291,21 @@ async function resolveStatusScopeForRole(roleName, payload = {}) {
     allowedWithdrawalStatuses: canUpdateWithdrawals
       ? serializeAllowedStatuses(payload.allowed_withdrawal_statuses, WITHDRAWAL_UPDATE_STATUSES, {
           required: Array.isArray(payload.allowed_withdrawal_statuses),
+        })
+      : null,
+    allowedLoyaltyOrderStatuses: canUpdateLoyaltyOrders
+      ? serializeAllowedStatuses(payload.allowed_loyalty_order_statuses, LOYALTY_ORDER_UPDATE_STATUSES, {
+          required: Array.isArray(payload.allowed_loyalty_order_statuses),
+        })
+      : null,
+    allowedLoyaltyBonusStatuses: canUpdateLoyaltyBonus
+      ? serializeAllowedStatuses(payload.allowed_loyalty_bonus_statuses, LOYALTY_BONUS_UPDATE_STATUSES, {
+          required: Array.isArray(payload.allowed_loyalty_bonus_statuses),
+        })
+      : null,
+    allowedLoyaltyVoucherStatuses: canUpdateLoyaltyVouchers
+      ? serializeAllowedStatuses(payload.allowed_loyalty_voucher_statuses, LOYALTY_VOUCHER_UPDATE_STATUSES, {
+          required: Array.isArray(payload.allowed_loyalty_voucher_statuses),
         })
       : null,
   };
@@ -337,6 +381,9 @@ export async function updateSystemUser(userId, payload) {
     'pending_show_count = ?',
     'allowed_deposit_statuses = ?',
     'allowed_withdrawal_statuses = ?',
+    'allowed_loyalty_order_statuses = ?',
+    'allowed_loyalty_bonus_statuses = ?',
+    'allowed_loyalty_voucher_statuses = ?',
     'updated_at = ?',
   ];
   const updateParams = [
@@ -350,6 +397,9 @@ export async function updateSystemUser(userId, payload) {
     pendingShowCount,
     statusScope.allowedDepositStatuses,
     statusScope.allowedWithdrawalStatuses,
+    statusScope.allowedLoyaltyOrderStatuses,
+    statusScope.allowedLoyaltyBonusStatuses,
+    statusScope.allowedLoyaltyVoucherStatuses,
     now,
   ];
 
@@ -433,8 +483,26 @@ export async function createSystemUser(payload) {
   const hashedPassword = await hashLaravelPassword(password);
 
   const result = await query(
-    `INSERT INTO users (name, email, mobile_number, password, is_active, is_online, shift, shift_start_time, shift_end_time, pending_show_count, allowed_deposit_statuses, allowed_withdrawal_statuses, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO users (
+      name,
+      email,
+      mobile_number,
+      password,
+      is_active,
+      is_online,
+      shift,
+      shift_start_time,
+      shift_end_time,
+      pending_show_count,
+      allowed_deposit_statuses,
+      allowed_withdrawal_statuses,
+      allowed_loyalty_order_statuses,
+      allowed_loyalty_bonus_statuses,
+      allowed_loyalty_voucher_statuses,
+      created_at,
+      updated_at
+    )
+     VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       name,
       email,
@@ -447,6 +515,9 @@ export async function createSystemUser(payload) {
       pendingShowCount,
       statusScope.allowedDepositStatuses,
       statusScope.allowedWithdrawalStatuses,
+      statusScope.allowedLoyaltyOrderStatuses,
+      statusScope.allowedLoyaltyBonusStatuses,
+      statusScope.allowedLoyaltyVoucherStatuses,
       now,
       now,
     ],

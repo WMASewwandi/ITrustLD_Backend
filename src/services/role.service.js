@@ -3,8 +3,22 @@ import {
   buildGroupedActivitiesFromCatalog,
   sortActivitiesForDisplay,
   sortCategoriesForDisplay,
+  SYSTEM_ACTIVITIES,
+  SYSTEM_ACTIVITY_CATEGORIES,
 } from '../constants/systemActivityCatalog.js';
 import { nowSqlDateTime } from '../utils/slTime.js';
+import {
+  LEGACY_LOYALTY_READ,
+  LEGACY_LOYALTY_UPDATE,
+  LOYALTY_BONUS_READ,
+  LOYALTY_BONUS_UPDATE,
+  LOYALTY_GIFTS_CLAIMS_UPDATE,
+  LOYALTY_GIFTS_READ,
+  LOYALTY_ORDERS_READ,
+  LOYALTY_ORDERS_UPDATE,
+  LOYALTY_VOUCHER_READ,
+  LOYALTY_VOUCHER_UPDATE,
+} from '../constants/loyaltyPermissions.js';
 
 const GUARD_NAME = 'web';
 
@@ -150,9 +164,30 @@ export async function getRoleWithPermissions(roleName) {
     [role.id],
   );
 
+  const permissionList = permissions
+    .map((p) => normalizeToActivityIdentifier(p.name));
+
+  // Back-compat: replace legacy loyalty perms with the new section-wise perms,
+  // so the Customer roles UI can display/maintain them separately.
+  const mapped = new Set(permissionList);
+  if (mapped.has(LEGACY_LOYALTY_READ)) {
+    mapped.delete(LEGACY_LOYALTY_READ);
+    mapped.add(LOYALTY_ORDERS_READ);
+    mapped.add(LOYALTY_BONUS_READ);
+    mapped.add(LOYALTY_VOUCHER_READ);
+    mapped.add(LOYALTY_GIFTS_READ);
+  }
+  if (mapped.has(LEGACY_LOYALTY_UPDATE)) {
+    mapped.delete(LEGACY_LOYALTY_UPDATE);
+    mapped.add(LOYALTY_ORDERS_UPDATE);
+    mapped.add(LOYALTY_BONUS_UPDATE);
+    mapped.add(LOYALTY_VOUCHER_UPDATE);
+    mapped.add(LOYALTY_GIFTS_CLAIMS_UPDATE);
+  }
+
   return toPublicRole(
     role,
-    permissions.map((p) => normalizeToActivityIdentifier(p.name)),
+    [...mapped],
   );
 }
 
@@ -167,20 +202,34 @@ export async function getAllActivitiesGrouped() {
      FROM system_activities`,
   );
 
+  // Use canonical catalog to determine which activities belong to which category.
+  // This ensures DB-lag (before restart syncs) doesn't show stale groupings.
+  const catalogActivityMap = new Map(
+    SYSTEM_ACTIVITIES.map((a) => [a.activity_identifier, a.category_id]),
+  );
+
+  // Merge DB categories with canonical ones so new categories work even before restart.
   const categoryMeta = new Map(
-    categories.map((category) => [
-      category.id,
-      {
+    SYSTEM_ACTIVITY_CATEGORIES.map((c) => [
+      c.id,
+      { id: c.id, identifier: c.category_identifier, name: c.categoy_name },
+    ]),
+  );
+  for (const category of categories) {
+    if (!categoryMeta.has(category.id)) {
+      categoryMeta.set(category.id, {
         id: category.id,
         identifier: category.category_identifier,
         name: category.category_name,
-      },
-    ]),
-  );
+      });
+    }
+  }
 
   const grouped = new Map();
   for (const activity of activities) {
-    const category = categoryMeta.get(activity.category_id);
+    const canonicalCategoryId = catalogActivityMap.get(activity.activity_identifier);
+    if (canonicalCategoryId == null) continue;
+    const category = categoryMeta.get(canonicalCategoryId);
     if (!category) continue;
     if (!grouped.has(category.id)) {
       grouped.set(category.id, { ...category, activities: [] });

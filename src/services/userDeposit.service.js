@@ -1,5 +1,4 @@
 import { query } from '../config/database.js';
-import { env } from '../config/env.js';
 import {
   findAccountHolderByUserId,
   isAccountBanned,
@@ -7,7 +6,6 @@ import {
 } from './accountHolder.service.js';
 import { autoAssignDeposit } from './depositAssignment.service.js';
 import { storeDepositProof } from './depositProofStorage.service.js';
-import { queueSmsMessage } from './notification.service.js';
 import { resolveWalletLogoPublicUrl } from './walletLogoStorage.service.js';
 import { ensureWalletNavigateSchema } from './wallet.service.js';
 import {
@@ -606,17 +604,6 @@ export async function saveDepositPaymentProof(userId, depositId, file) {
     await autoAssignDeposit(updatedDeposit);
   } catch (error) {
     console.error('[deposit:auto-assign]', error.message);
-  }
-
-  try {
-    const opsNumber = env.loyalty.staffAlertNumbers?.[0] || '94766850647';
-    await queueSmsMessage({
-      message: `Pending deposit request has been added: ${deposit.transaction_id}. Please review. Thanks`,
-      msisdn: opsNumber,
-      smsType: 'DEPOSIT_PENDING',
-    });
-  } catch (error) {
-    console.error('[deposit:ops-sms]', error.message);
   }
 
   return {
