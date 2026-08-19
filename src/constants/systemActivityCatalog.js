@@ -5,19 +5,54 @@
  * Category display order follows Laravel SystemActivitySeeder insert order (groupBy first-seen),
  * not numeric category id order (44 Dashboard appears before 40 User Management).
  */
+import {
+  ALL_LOYALTY_READ_PERMISSIONS,
+  ALL_LOYALTY_UPDATE_PERMISSIONS,
+  LOYALTY_BONUS_READ,
+  LOYALTY_BONUS_UPDATE,
+  LOYALTY_GIFTS_CATALOG_UPDATE,
+  LOYALTY_GIFTS_CLAIMS_UPDATE,
+  LOYALTY_GIFTS_READ,
+  LOYALTY_ORDERS_READ,
+  LOYALTY_ORDERS_UPDATE,
+  LOYALTY_VOUCHER_READ,
+  LOYALTY_VOUCHER_UPDATE,
+} from './loyaltyPermissions.js';
+
+/** Loyalty queue work (orders, bonus, vouchers, gift claims) — no management catalog. */
+const LOYALTY_QUEUE_PERMISSIONS = [
+  LOYALTY_ORDERS_READ,
+  LOYALTY_ORDERS_UPDATE,
+  LOYALTY_BONUS_READ,
+  LOYALTY_BONUS_UPDATE,
+  LOYALTY_VOUCHER_READ,
+  LOYALTY_VOUCHER_UPDATE,
+  LOYALTY_GIFTS_READ,
+  LOYALTY_GIFTS_CLAIMS_UPDATE,
+];
+
+const FULL_ADMIN_LOYALTY_PERMISSIONS = [
+  ...ALL_LOYALTY_READ_PERMISSIONS,
+  ...ALL_LOYALTY_UPDATE_PERMISSIONS,
+  LOYALTY_GIFTS_CATALOG_UPDATE,
+];
 export const SYSTEM_ACTIVITY_CATEGORIES = [
   { id: 1, category_identifier: 'deposit_activities', categoy_name: 'Deposit Activities', display_order: 1 },
   { id: 2, category_identifier: 'withdrawal_activities', categoy_name: 'Withdrawal Activities', display_order: 2 },
   { id: 3, category_identifier: 'profile_activities', categoy_name: 'Profile Activities', display_order: 3 },
   { id: 4, category_identifier: 'customer_accounts_activities', categoy_name: 'Customer Accounts Activities', display_order: 4 },
-  { id: 5, category_identifier: 'loyalty_activities', categoy_name: 'Loyalty Activities', display_order: 5 },
-  { id: 6, category_identifier: 'general_activities', categoy_name: 'General Activities', display_order: 6 },
-  { id: 44, category_identifier: 'dashboard_activities', categoy_name: 'Dashboard Activities', display_order: 7 },
-  { id: 40, category_identifier: 'user_manage_activities', categoy_name: 'User and Role Management', display_order: 8 },
-  { id: 41, category_identifier: 'account_config_activities', categoy_name: 'Account Configurations', display_order: 9 },
-  { id: 42, category_identifier: 'currency_config_activities', categoy_name: 'Currency Configurations', display_order: 10 },
-  { id: 43, category_identifier: 'blog_post_activities', categoy_name: 'Blog Post Activities', display_order: 11 },
-  { id: 45, category_identifier: 'performance_activities', categoy_name: 'Performance Activities', display_order: 12 },
+  { id: 51, category_identifier: 'loyalty_order_activities', categoy_name: 'Loyalty Order Activities', display_order: 5 },
+  { id: 52, category_identifier: 'loyalty_bonus_claim_activities', categoy_name: 'Loyalty Bonus Claim Activities', display_order: 6 },
+  { id: 53, category_identifier: 'loyalty_voucher_claim_activities', categoy_name: 'Loyalty Voucher Claim Activities', display_order: 7 },
+  { id: 54, category_identifier: 'loyalty_management_activities', categoy_name: 'Loyalty Management Activities', display_order: 8 },
+  { id: 55, category_identifier: 'loyalty_gift_activities', categoy_name: 'Loyalty Gift Activities', display_order: 9 },
+  { id: 6, category_identifier: 'general_activities', categoy_name: 'General Activities', display_order: 10 },
+  { id: 44, category_identifier: 'dashboard_activities', categoy_name: 'Dashboard Activities', display_order: 11 },
+  { id: 40, category_identifier: 'user_manage_activities', categoy_name: 'User and Role Management', display_order: 12 },
+  { id: 41, category_identifier: 'account_config_activities', categoy_name: 'Account Configurations', display_order: 13 },
+  { id: 42, category_identifier: 'currency_config_activities', categoy_name: 'Currency Configurations', display_order: 14 },
+  { id: 43, category_identifier: 'blog_post_activities', categoy_name: 'Blog Post Activities', display_order: 15 },
+  { id: 45, category_identifier: 'performance_activities', categoy_name: 'Performance Activities', display_order: 16 },
 ];
 
 export const SYSTEM_ACTIVITIES = [
@@ -40,9 +75,23 @@ export const SYSTEM_ACTIVITIES = [
   { activity_identifier: 'read_scammer_data', activity_name: 'Read Scammer Records', category_id: 4, sort_order: 4 },
   { activity_identifier: 'change_scammer_status', activity_name: 'Manage Scammer Records', category_id: 4, sort_order: 5 },
 
-  { activity_identifier: 'customer_loyalty_activity', activity_name: 'Customer Loyalty Activity', category_id: 5, sort_order: 1 },
-  { activity_identifier: 'read_customer_loyalty_data', activity_name: 'Read Customer Loyalty Requests', category_id: 5, sort_order: 2 },
-  { activity_identifier: 'change_customer_loyalty_status', activity_name: 'Update Customer Loyalty  Request Status', category_id: 5, sort_order: 3 },
+  { activity_identifier: 'customer_loyalty_activity', activity_name: 'Customer Loyalty Activity', category_id: 51, sort_order: 0 },
+
+  { activity_identifier: 'read_loyalty_orders_data', activity_name: 'Read Loyalty Order Requests', category_id: 51, sort_order: 1 },
+  { activity_identifier: 'status_update_loyalty_orders_data', activity_name: 'Status Update Loyalty Order Records', category_id: 51, sort_order: 2 },
+
+  { activity_identifier: 'read_loyalty_bonus_claims_data', activity_name: 'Read Loyalty Bonus Claims', category_id: 52, sort_order: 1 },
+  { activity_identifier: 'status_update_loyalty_bonus_claims_data', activity_name: 'Status Update Loyalty Bonus Claims', category_id: 52, sort_order: 2 },
+
+  { activity_identifier: 'read_loyalty_voucher_claims_data', activity_name: 'Read Loyalty Voucher Claims', category_id: 53, sort_order: 1 },
+  { activity_identifier: 'status_update_loyalty_voucher_claims_data', activity_name: 'Status Update Loyalty Voucher Claims', category_id: 53, sort_order: 2 },
+
+  { activity_identifier: 'read_loyalty_management_data', activity_name: 'Read Loyalty Management Settings', category_id: 54, sort_order: 1 },
+  { activity_identifier: 'change_loyalty_management_data', activity_name: 'Update Loyalty Management Settings', category_id: 54, sort_order: 2 },
+
+  { activity_identifier: 'read_loyalty_gifts_data', activity_name: 'Read Loyalty Gifts & Claims', category_id: 55, sort_order: 1 },
+  { activity_identifier: 'status_update_loyalty_gifts_data', activity_name: 'Status Update Loyalty Gift Claims', category_id: 55, sort_order: 2 },
+  { activity_identifier: 'change_loyalty_gifts_data', activity_name: 'Manage Loyalty Gift Catalog', category_id: 55, sort_order: 3 },
 
   { activity_identifier: 'customer_help_activity', activity_name: 'Customer Help Activity', category_id: 6, sort_order: 1 },
   { activity_identifier: 'read_help_requests', activity_name: 'Read Customer Help Request', category_id: 6, sort_order: 2 },
@@ -91,8 +140,7 @@ export const BUILTIN_ROLE_PERMISSIONS = {
     'change_profile_status',
     'read_customer_accounts_data',
     'change_customer_account_status',
-    'read_customer_loyalty_data',
-    'change_customer_loyalty_status',
+    ...FULL_ADMIN_LOYALTY_PERMISSIONS,
     'read_help_requests',
     'change_help_requests_status',
     'customer_manage_activity',
@@ -114,8 +162,7 @@ export const BUILTIN_ROLE_PERMISSIONS = {
     'change_profile_status',
     'read_customer_accounts_data',
     'change_customer_account_status',
-    'read_customer_loyalty_data',
-    'change_customer_loyalty_status',
+    ...FULL_ADMIN_LOYALTY_PERMISSIONS,
     'read_help_requests',
     'change_help_requests_status',
     'customer_manage_activity',
@@ -140,8 +187,7 @@ export const BUILTIN_ROLE_PERMISSIONS = {
     'view_admin_dashboard',
     'read_deposit_data',
     'status_update_deposit_data',
-    'read_customer_loyalty_data',
-    'change_customer_loyalty_status',
+    ...LOYALTY_QUEUE_PERMISSIONS,
     'comunicatte_to_customer',
     'view_my_performance',
   ],

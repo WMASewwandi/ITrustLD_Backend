@@ -5,7 +5,7 @@ import {
   isAccountBanned,
   needsVerification,
 } from './accountHolder.service.js';
-import { queueSmsMessage, sendEmailAndSms } from './notification.service.js';
+import { sendEmailAndSms } from './notification.service.js';
 import {
   loyaltyRedemptionApprovedEmailHtml,
   loyaltyRedemptionPendingEmailHtml,
@@ -27,6 +27,7 @@ import {
   logSystemUserAction,
   SYSTEM_USER_ACTIONS,
 } from './systemUserActionLog.service.js';
+import { assertCanUpdateRecordStatus } from './statusUpdateScope.service.js';
 import {
   addColomboDays,
   formatTimestampSl,
@@ -383,19 +384,6 @@ async function ensureAffiliateCode(userId, accountHolder) {
   return null;
 }
 
-async function notifyStaffLoyaltyWithdrawal(transactionId) {
-  const message = `Loyalty Point Withdraw request has been added: ${transactionId}. Please review. Thanks`;
-  await Promise.all(
-    env.loyalty.staffAlertNumbers.map((msisdn) =>
-      queueSmsMessage({
-        message,
-        msisdn,
-        smsType: 'LOYALTY_WITHDRAWAL',
-      }).catch(() => null),
-    ),
-  );
-}
-
 function resolveFilterDates(filterTemplate, fromDate, toDate) {
   const template = String(filterTemplate || '').trim().toUpperCase();
   const today = new Date();
@@ -591,7 +579,6 @@ export async function createUserLoyaltyWithdrawal(userId, payload = {}) {
   const transactionId = displayTransactionId(withdrawalId);
 
   await ensureAffiliateCode(userId, accountHolder);
-  await notifyStaffLoyaltyWithdrawal(transactionId);
 
   const updatedTotals = await getPointTotals(userId);
 
@@ -926,6 +913,9 @@ export async function updateLoyaltyOrderStatus(adminUserId, payload = {}) {
     throw validationError(`Invalid point withdrawal transaction id: ${transactionId}`);
   }
 
+  const currentStatus = mapUserStatus(withdrawal.status);
+  await assertCanUpdateRecordStatus(adminUserId, 'loyalty_order', currentStatus);
+
   if (nextStatus === 'Pending') {
     await query(
       `UPDATE point_withdrawals
@@ -1176,6 +1166,9 @@ export async function updateBonusClaimStatus(adminUserId, payload = {}) {
   if (!bonusClaim) {
     throw validationError(`Invalid bonus transaction id: ${transactionId}`);
   }
+
+  const currentStatus = mapBonusUserStatus(bonusClaim.status);
+  await assertCanUpdateRecordStatus(adminUserId, 'loyalty_bonus', currentStatus);
 
   if (nextStatus === 'Pending') {
     await query(

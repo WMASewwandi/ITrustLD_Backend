@@ -59,7 +59,6 @@ export const env = {
     standardUsdPerBlock: 10,
     partnerUsdPerBlock: 35,
     minimumPoints: 10000,
-    staffAlertNumbers: ['94766850647', '94767676684', '94767676023', '94752256911', '94763383069'],
   },
   sms: {
     // Prefer DIALOG_SMS_*; also accept Laravel SMS_API_* and legacy SMS_DIALOG_* aliases.

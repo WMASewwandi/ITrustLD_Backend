@@ -26,6 +26,8 @@ export const ACCOUNT_HOLDER_ID_OFFSET = 126872;
 
 const SELECT_COLUMNS = `
   account_holders.id, account_holders.user_id, account_holders.first_name, account_holders.last_name,
+  account_holders.date_of_birth, account_holders.address_number, account_holders.street,
+  account_holders.city, account_holders.country,
   account_holders.email, account_holders.mobile_number, account_holders.account_number,
   account_holders.email_verification, account_holders.mobile_number_verification,
   account_holders.identity_verification, account_holders.address_verification,
@@ -137,6 +139,11 @@ export function toCustomerRow(row) {
     accountId: row.account_number,
     firstName,
     lastName,
+    dateOfBirth: row.date_of_birth || '',
+    addressNumber: row.address_number || '',
+    street: row.street || '',
+    city: row.city || '',
+    country: row.country || '',
     name: `${firstName} ${lastName}`.trim(),
     email: row.email,
     mobile: row.mobile_number || '',

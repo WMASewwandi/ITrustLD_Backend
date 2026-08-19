@@ -2,6 +2,7 @@ import { getDbDriver } from '../config/database.js';
 import { query } from '../config/database.js';
 import { sendMail } from './mail.service.js';
 import { helpTicketReplyEmailHtml } from './mail.templates.js';
+import { isTurnstileRequired, verifyTurnstileToken } from './turnstile.service.js';
 
 let schemaReady = false;
 
@@ -88,7 +89,32 @@ export async function countUnreadHelpTickets() {
   return Number(rows[0]?.total ?? 0);
 }
 
-export async function createHelpTicket(userId, payload = {}) {
+async function assertGuestDuplicateWindow(email, subject, message) {
+  const sql =
+    getDbDriver() === 'sqlite'
+      ? `SELECT COUNT(*) AS total
+         FROM help_tickets
+         WHERE user_id IS NULL
+           AND email = ?
+           AND subject = ?
+           AND message = ?
+           AND created_at >= datetime('now', '-10 minutes')`
+      : `SELECT COUNT(*) AS total
+         FROM help_tickets
+         WHERE user_id IS NULL
+           AND email = ?
+           AND subject = ?
+           AND message = ?
+           AND created_at >= DATE_SUB(CURRENT_TIMESTAMP, INTERVAL 10 MINUTE)`;
+
+  const rows = await query(sql, [email, `Guest: ${subject}`, message]);
+  const duplicates = Number(rows[0]?.total ?? 0);
+  if (duplicates > 0) {
+    throw validationError('We already received this support request recently. Please wait for our reply instead of submitting the same message again.', 429);
+  }
+}
+
+export async function createHelpTicket(userId, payload = {}, { remoteIp = null } = {}) {
   await ensureHelpTicketsSchema();
 
   const firstName = String(payload.first_name ?? payload.firstName ?? '').trim();
@@ -101,8 +127,25 @@ export async function createHelpTicket(userId, payload = {}) {
   if (!email) throw validationError('Email is required.');
   if (!subject) throw validationError('Subject is required.');
   if (!message) throw validationError('Message is required.');
+  if (!email.includes('@')) throw validationError('A valid email is required.');
 
   const resolvedUserId = userId != null ? Number(userId) : null;
+  const turnstileToken =
+    payload.cf_turnstile_response ||
+    payload['cf-turnstile-response'] ||
+    payload.turnstile_token;
+
+  if (resolvedUserId == null) {
+    if (isTurnstileRequired()) {
+      const valid = await verifyTurnstileToken(turnstileToken, remoteIp);
+      if (!valid) {
+        throw validationError('You failed to verify that you are not a robot.');
+      }
+    }
+
+    await assertGuestDuplicateWindow(email, subject, message);
+  }
+
   const resolvedSubject =
     resolvedUserId != null ? subject : `Guest: ${subject}`;
 
@@ -209,7 +252,11 @@ export async function markHelpTicketRead(id) {
 
   const existing = await getHelpTicketById(ticketId);
   if (existing.ticket.isRead) {
-    return { ok: true, ticket: existing.ticket };
+    return {
+      ok: true,
+      ticket: existing.ticket,
+      unread: await countUnreadHelpTickets(),
+    };
   }
 
   await query(
@@ -217,7 +264,11 @@ export async function markHelpTicketRead(id) {
     [ticketId],
   );
 
-  return getHelpTicketById(ticketId);
+  const updated = await getHelpTicketById(ticketId);
+  return {
+    ...updated,
+    unread: await countUnreadHelpTickets(),
+  };
 }
 
 export async function markAllHelpTicketsRead() {
@@ -274,5 +325,6 @@ export async function replyToHelpTicket(id, payload = {}) {
     ok: true,
     message: `Reply sent to ${ticket.email}.`,
     ticket: (await getHelpTicketById(ticketId)).ticket,
+    unread: await countUnreadHelpTickets(),
   };
 }

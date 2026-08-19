@@ -2,6 +2,19 @@ import { Router } from 'express';
 import { requireAdminAuth } from '../../middleware/requireAdminAuth.js';
 import { requirePermission } from '../../middleware/requirePermission.js';
 import {
+  LOYALTY_BONUS_READ,
+  LOYALTY_BONUS_UPDATE,
+  LOYALTY_GIFTS_CATALOG_UPDATE,
+  LOYALTY_GIFTS_CLAIMS_UPDATE,
+  LOYALTY_GIFTS_READ,
+  LOYALTY_MANAGEMENT_READ,
+  LOYALTY_MANAGEMENT_UPDATE,
+  LOYALTY_ORDERS_READ,
+  LOYALTY_ORDERS_UPDATE,
+  LOYALTY_VOUCHER_READ,
+  LOYALTY_VOUCHER_UPDATE,
+} from '../../constants/loyaltyPermissions.js';
+import {
   createBonus,
   createLoyaltyLevel,
   createPointCollection,
@@ -48,7 +61,7 @@ adminLoyaltyRouter.use(requireAdminAuth);
 
 adminLoyaltyRouter.get(
   '/orders',
-  requirePermission('read_customer_loyalty_data'),
+  requirePermission(LOYALTY_ORDERS_READ),
   async (req, res, next) => {
     try {
       const data = await listLoyaltyOrdersForAdmin(req.query ?? {});
@@ -61,7 +74,7 @@ adminLoyaltyRouter.get(
 
 adminLoyaltyRouter.post(
   '/orders/status',
-  requirePermission('change_customer_loyalty_status'),
+  requirePermission(LOYALTY_ORDERS_UPDATE),
   async (req, res, next) => {
     try {
       const data = await updateLoyaltyOrderStatus(req.auth.userId, req.body ?? {});
@@ -74,7 +87,7 @@ adminLoyaltyRouter.post(
 
 adminLoyaltyRouter.get(
   '/bonus-claims',
-  requirePermission('read_customer_loyalty_data'),
+  requirePermission(LOYALTY_BONUS_READ),
   async (req, res, next) => {
     try {
       const data = await listBonusClaimsForAdmin(req.query ?? {});
@@ -87,7 +100,7 @@ adminLoyaltyRouter.get(
 
 adminLoyaltyRouter.post(
   '/bonus-claims/status',
-  requirePermission('change_customer_loyalty_status'),
+  requirePermission(LOYALTY_BONUS_UPDATE),
   async (req, res, next) => {
     try {
       const data = await updateBonusClaimStatus(req.auth.userId, req.body ?? {});
@@ -100,7 +113,7 @@ adminLoyaltyRouter.post(
 
 adminLoyaltyRouter.get(
   '/voucher-claims',
-  requirePermission('read_customer_loyalty_data'),
+  requirePermission(LOYALTY_VOUCHER_READ),
   async (req, res, next) => {
     try {
       const data = await listVoucherClaimsForAdmin(req.query ?? {});
@@ -113,7 +126,7 @@ adminLoyaltyRouter.get(
 
 adminLoyaltyRouter.get(
   '/voucher-claims/duplicate-stats',
-  requirePermission('read_customer_loyalty_data'),
+  requirePermission(LOYALTY_VOUCHER_READ),
   async (req, res, next) => {
     try {
       const data = await getVoucherDuplicatePlatformStats();
@@ -126,7 +139,7 @@ adminLoyaltyRouter.get(
 
 adminLoyaltyRouter.get(
   '/voucher-claims/:voucherId/duplicates',
-  requirePermission('read_customer_loyalty_data'),
+  requirePermission(LOYALTY_VOUCHER_READ),
   async (req, res, next) => {
     try {
       const data = await checkVoucherDuplicatePlatformId(req.params.voucherId);
@@ -139,7 +152,7 @@ adminLoyaltyRouter.get(
 
 adminLoyaltyRouter.post(
   '/voucher-claims/complete',
-  requirePermission('change_customer_loyalty_status'),
+  requirePermission(LOYALTY_VOUCHER_UPDATE),
   async (req, res, next) => {
     try {
       const data = await completeVoucherClaim(req.auth.userId, req.body ?? {});
@@ -152,7 +165,7 @@ adminLoyaltyRouter.post(
 
 adminLoyaltyRouter.post(
   '/voucher-claims/reject',
-  requirePermission('change_customer_loyalty_status'),
+  requirePermission(LOYALTY_VOUCHER_UPDATE),
   async (req, res, next) => {
     try {
       const data = await rejectVoucherClaim(req.auth.userId, req.body ?? {});
@@ -165,7 +178,7 @@ adminLoyaltyRouter.post(
 
 adminLoyaltyRouter.get(
   '/management/configs',
-  requirePermission('view_account_configs'),
+  requirePermission(LOYALTY_MANAGEMENT_READ),
   async (req, res, next) => {
     try {
       const data = await getLoyaltyManagementData(req.query?.audience, req.query?.tier);
@@ -178,7 +191,7 @@ adminLoyaltyRouter.get(
 
 adminLoyaltyRouter.post(
   '/management/master-config/state',
-  requirePermission('change_account_configs'),
+  requirePermission(LOYALTY_MANAGEMENT_UPDATE),
   async (req, res, next) => {
     try {
       const body = req.body ?? {};
@@ -195,7 +208,7 @@ adminLoyaltyRouter.post(
 
 adminLoyaltyRouter.post(
   '/management/point-collections',
-  requirePermission('change_account_configs'),
+  requirePermission(LOYALTY_MANAGEMENT_UPDATE),
   async (req, res, next) => {
     try {
       const body = req.body ?? {};
@@ -217,7 +230,7 @@ adminLoyaltyRouter.post(
 
 adminLoyaltyRouter.post(
   '/management/point-collections/amount',
-  requirePermission('change_account_configs'),
+  requirePermission(LOYALTY_MANAGEMENT_UPDATE),
   async (req, res, next) => {
     try {
       const body = req.body ?? {};
@@ -239,7 +252,7 @@ adminLoyaltyRouter.post(
 
 adminLoyaltyRouter.post(
   '/management/point-collections/state',
-  requirePermission('change_account_configs'),
+  requirePermission(LOYALTY_MANAGEMENT_UPDATE),
   async (req, res, next) => {
     try {
       const body = req.body ?? {};
@@ -257,7 +270,7 @@ adminLoyaltyRouter.post(
 
 adminLoyaltyRouter.post(
   '/management/point-collections/delete',
-  requirePermission('change_account_configs'),
+  requirePermission(LOYALTY_MANAGEMENT_UPDATE),
   async (req, res, next) => {
     try {
       const body = req.body ?? {};
@@ -273,7 +286,7 @@ adminLoyaltyRouter.post(
 
 adminLoyaltyRouter.post(
   '/management/bonuses',
-  requirePermission('change_account_configs'),
+  requirePermission(LOYALTY_MANAGEMENT_UPDATE),
   async (req, res, next) => {
     try {
       const body = req.body ?? {};
@@ -297,7 +310,7 @@ adminLoyaltyRouter.post(
 
 adminLoyaltyRouter.post(
   '/management/bonuses/amount',
-  requirePermission('change_account_configs'),
+  requirePermission(LOYALTY_MANAGEMENT_UPDATE),
   async (req, res, next) => {
     try {
       const body = req.body ?? {};
@@ -321,7 +334,7 @@ adminLoyaltyRouter.post(
 
 adminLoyaltyRouter.post(
   '/management/bonuses/state',
-  requirePermission('change_account_configs'),
+  requirePermission(LOYALTY_MANAGEMENT_UPDATE),
   async (req, res, next) => {
     try {
       const body = req.body ?? {};
@@ -338,7 +351,7 @@ adminLoyaltyRouter.post(
 
 adminLoyaltyRouter.post(
   '/management/bonuses/delete',
-  requirePermission('change_account_configs'),
+  requirePermission(LOYALTY_MANAGEMENT_UPDATE),
   async (req, res, next) => {
     try {
       const body = req.body ?? {};
@@ -354,7 +367,7 @@ adminLoyaltyRouter.post(
 
 adminLoyaltyRouter.post(
   '/management/loyalty-levels',
-  requirePermission('change_account_configs'),
+  requirePermission(LOYALTY_MANAGEMENT_UPDATE),
   async (req, res, next) => {
     try {
       const body = req.body ?? {};
@@ -374,7 +387,7 @@ adminLoyaltyRouter.post(
 
 adminLoyaltyRouter.post(
   '/management/loyalty-levels/amount',
-  requirePermission('change_account_configs'),
+  requirePermission(LOYALTY_MANAGEMENT_UPDATE),
   async (req, res, next) => {
     try {
       const body = req.body ?? {};
@@ -394,7 +407,7 @@ adminLoyaltyRouter.post(
 
 adminLoyaltyRouter.post(
   '/management/loyalty-levels/state',
-  requirePermission('change_account_configs'),
+  requirePermission(LOYALTY_MANAGEMENT_UPDATE),
   async (req, res, next) => {
     try {
       const body = req.body ?? {};
@@ -411,7 +424,7 @@ adminLoyaltyRouter.post(
 
 adminLoyaltyRouter.post(
   '/management/loyalty-levels/delete',
-  requirePermission('change_account_configs'),
+  requirePermission(LOYALTY_MANAGEMENT_UPDATE),
   async (req, res, next) => {
     try {
       const body = req.body ?? {};
@@ -427,7 +440,7 @@ adminLoyaltyRouter.post(
 
 adminLoyaltyRouter.get(
   '/gifts',
-  requirePermission('read_customer_loyalty_data'),
+  requirePermission(LOYALTY_GIFTS_READ),
   async (req, res, next) => {
     try {
       const data = await listGiftsForAdmin(req.query?.audience);
@@ -440,7 +453,7 @@ adminLoyaltyRouter.get(
 
 adminLoyaltyRouter.post(
   '/gifts',
-  requirePermission('change_account_configs'),
+  requirePermission(LOYALTY_GIFTS_CATALOG_UPDATE),
   async (req, res, next) => {
     try {
       const body = req.body ?? {};
@@ -462,7 +475,7 @@ adminLoyaltyRouter.post(
 
 adminLoyaltyRouter.post(
   '/gifts/update',
-  requirePermission('change_account_configs'),
+  requirePermission(LOYALTY_GIFTS_CATALOG_UPDATE),
   async (req, res, next) => {
     try {
       const data = await updateGift(req.body ?? {});
@@ -475,7 +488,7 @@ adminLoyaltyRouter.post(
 
 adminLoyaltyRouter.post(
   '/gifts/state',
-  requirePermission('change_account_configs'),
+  requirePermission(LOYALTY_GIFTS_CATALOG_UPDATE),
   async (req, res, next) => {
     try {
       const data = await updateGiftState(req.body ?? {});
@@ -488,7 +501,7 @@ adminLoyaltyRouter.post(
 
 adminLoyaltyRouter.post(
   '/gifts/delete',
-  requirePermission('change_account_configs'),
+  requirePermission(LOYALTY_GIFTS_CATALOG_UPDATE),
   async (req, res, next) => {
     try {
       const data = await deleteGift(req.body ?? {});
@@ -501,7 +514,7 @@ adminLoyaltyRouter.post(
 
 adminLoyaltyRouter.get(
   '/gift-claims',
-  requirePermission('read_customer_loyalty_data'),
+  requirePermission(LOYALTY_GIFTS_READ),
   async (req, res, next) => {
     try {
       const data = await listGiftClaimsForAdmin(req.query ?? {});
@@ -514,7 +527,7 @@ adminLoyaltyRouter.get(
 
 adminLoyaltyRouter.post(
   '/gift-claims/approve',
-  requirePermission('change_customer_loyalty_status'),
+  requirePermission(LOYALTY_GIFTS_CLAIMS_UPDATE),
   async (req, res, next) => {
     try {
       const data = await approveGiftClaim(req.auth.userId, req.body ?? {});
@@ -527,7 +540,7 @@ adminLoyaltyRouter.post(
 
 adminLoyaltyRouter.post(
   '/gift-claims/reject',
-  requirePermission('change_customer_loyalty_status'),
+  requirePermission(LOYALTY_GIFTS_CLAIMS_UPDATE),
   async (req, res, next) => {
     try {
       const data = await rejectGiftClaim(req.auth.userId, req.body ?? {});
@@ -540,7 +553,7 @@ adminLoyaltyRouter.post(
 
 adminLoyaltyRouter.post(
   '/gift-claims/deliver',
-  requirePermission('change_customer_loyalty_status'),
+  requirePermission(LOYALTY_GIFTS_CLAIMS_UPDATE),
   async (req, res, next) => {
     try {
       const data = await markGiftClaimDelivered(req.auth.userId, req.body ?? {});

@@ -13,6 +13,7 @@ import {
   SYSTEM_USER_ACTIONS,
 } from './systemUserActionLog.service.js';
 import { refillDepositPendingForExecutive } from './depositAssignment.service.js';
+import { notifyAssignedSystemUser } from './assignedUserNotify.service.js';
 import { assertCanUpdateRecordStatus } from './statusUpdateScope.service.js';
 
 function validationError(message, status = 422) {
@@ -65,6 +66,16 @@ export async function assignDeposits(auth, { depositIds, executiveId }) {
     execId,
     ...ids,
   ]);
+
+  if (execId) {
+    await notifyAssignedSystemUser({
+      userId: execId,
+      message: `${ids.length} pending deposit request(s) have been assigned to you. Please review. Thanks`,
+      smsType: 'DEPOSIT_PENDING',
+    }).catch((error) => {
+      console.error('[deposit:assigned-sms]', error.message);
+    });
+  }
 
   return {
     error: false,

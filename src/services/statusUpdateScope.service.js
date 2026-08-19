@@ -8,6 +8,10 @@ export const WITHDRAWAL_UPDATE_STATUSES = [
   'Rejected',
 ];
 
+export const LOYALTY_ORDER_UPDATE_STATUSES = ['Pending', 'Completed', 'Rejected'];
+export const LOYALTY_BONUS_UPDATE_STATUSES = ['Pending', 'Claimed', 'Rejected'];
+export const LOYALTY_VOUCHER_UPDATE_STATUSES = ['Pending', 'Claimed', 'Rejected'];
+
 let statusScopeColumnsReady = false;
 
 async function columnExists(table, column) {
@@ -21,7 +25,13 @@ async function columnExists(table, column) {
 
 export async function ensureStatusUpdateScopeColumns() {
   if (statusScopeColumnsReady) return;
-  const columns = ['allowed_deposit_statuses', 'allowed_withdrawal_statuses'];
+  const columns = [
+    'allowed_deposit_statuses',
+    'allowed_withdrawal_statuses',
+    'allowed_loyalty_order_statuses',
+    'allowed_loyalty_bonus_statuses',
+    'allowed_loyalty_voucher_statuses',
+  ];
   for (const column of columns) {
     if (await columnExists('users', column)) continue;
     if (getDbDriver() === 'sqlite') {
@@ -65,11 +75,13 @@ export function serializeAllowedStatuses(list, allowedAll, { required = false } 
     ...new Set((list || []).map((item) => String(item || '').trim()).filter((item) => allowedAll.includes(item))),
   ];
   if (required && unique.length === 0) {
-    const error = new Error(
-      allowedAll === WITHDRAWAL_UPDATE_STATUSES
-        ? 'Select at least one withdrawal status this user can update.'
-        : 'Select at least one deposit status this user can update.',
-    );
+    let label = 'deposit';
+    if (allowedAll === WITHDRAWAL_UPDATE_STATUSES) label = 'withdrawal';
+    if (allowedAll === LOYALTY_ORDER_UPDATE_STATUSES) label = 'loyalty order';
+    if (allowedAll === LOYALTY_BONUS_UPDATE_STATUSES) label = 'loyalty bonus claim';
+    if (allowedAll === LOYALTY_VOUCHER_UPDATE_STATUSES) label = 'loyalty voucher claim';
+
+    const error = new Error(`Select at least one ${label} status this user can update.`);
     error.status = 422;
     throw error;
   }
@@ -84,11 +96,23 @@ export function canUpdateCurrentStatus(allowedList, currentStatus) {
 
 export async function getUserStatusUpdateScope(userId) {
   if (!userId) {
-    return { allowed_deposit_statuses: null, allowed_withdrawal_statuses: null };
+    return {
+      allowed_deposit_statuses: null,
+      allowed_withdrawal_statuses: null,
+      allowed_loyalty_order_statuses: null,
+      allowed_loyalty_bonus_statuses: null,
+      allowed_loyalty_voucher_statuses: null,
+    };
   }
   await ensureStatusUpdateScopeColumns();
   const rows = await query(
-    `SELECT allowed_deposit_statuses, allowed_withdrawal_statuses FROM users WHERE id = ? LIMIT 1`,
+    `SELECT
+      allowed_deposit_statuses,
+      allowed_withdrawal_statuses,
+      allowed_loyalty_order_statuses,
+      allowed_loyalty_bonus_statuses,
+      allowed_loyalty_voucher_statuses
+     FROM users WHERE id = ? LIMIT 1`,
     [userId],
   );
   const row = rows[0] || {};
@@ -98,15 +122,44 @@ export async function getUserStatusUpdateScope(userId) {
       row.allowed_withdrawal_statuses,
       WITHDRAWAL_UPDATE_STATUSES,
     ),
+    allowed_loyalty_order_statuses: parseAllowedStatuses(
+      row.allowed_loyalty_order_statuses,
+      LOYALTY_ORDER_UPDATE_STATUSES,
+    ),
+    allowed_loyalty_bonus_statuses: parseAllowedStatuses(
+      row.allowed_loyalty_bonus_statuses,
+      LOYALTY_BONUS_UPDATE_STATUSES,
+    ),
+    allowed_loyalty_voucher_statuses: parseAllowedStatuses(
+      row.allowed_loyalty_voucher_statuses,
+      LOYALTY_VOUCHER_UPDATE_STATUSES,
+    ),
   };
 }
 
 export async function assertCanUpdateRecordStatus(userId, kind, currentStatus) {
   const scope = await getUserStatusUpdateScope(userId);
-  const allowed =
-    kind === 'withdrawal' ? scope.allowed_withdrawal_statuses : scope.allowed_deposit_statuses;
+
+  let allowed = null;
+  let label = 'deposit';
+
+  if (kind === 'withdrawal') {
+    allowed = scope.allowed_withdrawal_statuses;
+    label = 'withdrawal';
+  } else if (kind === 'loyalty_order') {
+    allowed = scope.allowed_loyalty_order_statuses;
+    label = 'loyalty order';
+  } else if (kind === 'loyalty_bonus') {
+    allowed = scope.allowed_loyalty_bonus_statuses;
+    label = 'loyalty bonus claim';
+  } else if (kind === 'loyalty_voucher') {
+    allowed = scope.allowed_loyalty_voucher_statuses;
+    label = 'loyalty voucher claim';
+  } else {
+    allowed = scope.allowed_deposit_statuses;
+  }
+
   if (canUpdateCurrentStatus(allowed, currentStatus)) return;
-  const label = kind === 'withdrawal' ? 'withdrawal' : 'deposit';
   const error = new Error(
     `You can only update ${label} records with status: ${(allowed || []).join(', ') || 'none'}.`,
   );

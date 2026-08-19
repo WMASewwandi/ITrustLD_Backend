@@ -1,5 +1,6 @@
 import jwt from 'jsonwebtoken';
 import { ADMIN_PORTAL_ROLES } from '../constants/adminRoles.js';
+import { resolveFirstLoyaltyHref } from '../constants/loyaltyPermissions.js';
 import { env } from '../config/env.js';
 import {
   findUserByEmail,
@@ -47,8 +48,9 @@ export function resolveAdminRedirect(roles, permissions = []) {
   if (permissions.includes('read_withdrawal_data')) {
     return '/transactions?tab=withdrawals&status=Pending';
   }
-  if (permissions.includes('read_customer_loyalty_data')) {
-    return '/loyalty?tab=orders&status=Pending';
+  const loyaltyHref = resolveFirstLoyaltyHref(permissions);
+  if (loyaltyHref) {
+    return loyaltyHref;
   }
   return '/dashboard';
 }

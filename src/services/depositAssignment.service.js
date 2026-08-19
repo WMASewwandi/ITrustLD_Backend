@@ -5,6 +5,7 @@ import {
   getPendingCountForRole,
   touchExecutiveLastAssigned,
 } from './shiftAssignment.service.js';
+import { notifyAssignedSystemUser } from './assignedUserNotify.service.js';
 import { getUserPendingShowCount } from './systemUser.service.js';
 import { getUserRoles } from './user.service.js';
 
@@ -43,6 +44,15 @@ export async function autoAssignDeposit(deposit) {
 
   await touchExecutiveLastAssigned(executive.id);
 
+  const transactionId = deposit.transaction_id || deposit.id;
+  await notifyAssignedSystemUser({
+    userId: executive.id,
+    message: `Pending deposit request has been assigned to you: ${transactionId}. Please review. Thanks`,
+    smsType: 'DEPOSIT_PENDING',
+  }).catch((error) => {
+    console.error('[deposit:assigned-sms]', error.message);
+  });
+
   return executive.id;
 }
 
@@ -80,5 +90,14 @@ export async function refillDepositPendingForExecutive(userId) {
     ...ids,
   ]);
   await touchExecutiveLastAssigned(executiveId);
+
+  await notifyAssignedSystemUser({
+    userId: executiveId,
+    message: `${ids.length} pending deposit request(s) have been assigned to you. Please review. Thanks`,
+    smsType: 'DEPOSIT_PENDING',
+  }).catch((error) => {
+    console.error('[deposit:assigned-sms]', error.message);
+  });
+
   return ids.length;
 }

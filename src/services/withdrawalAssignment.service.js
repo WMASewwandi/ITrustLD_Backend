@@ -5,6 +5,7 @@ import {
   getPendingCountForRole,
   touchExecutiveLastAssigned,
 } from './shiftAssignment.service.js';
+import { notifyAssignedSystemUser } from './assignedUserNotify.service.js';
 import { getUserPendingShowCount } from './systemUser.service.js';
 import { getUserRoles } from './user.service.js';
 
@@ -43,6 +44,15 @@ export async function autoAssignWithdrawal(withdrawal) {
 
   await touchExecutiveLastAssigned(executive.id);
 
+  const transactionId = withdrawal.transaction_id || withdrawal.id;
+  await notifyAssignedSystemUser({
+    userId: executive.id,
+    message: `Pending withdrawal request has been assigned to you: ${transactionId}. Please review. Thanks`,
+    smsType: 'WITHDRAWAL_PENDING',
+  }).catch((error) => {
+    console.error('[withdrawal:assigned-sms]', error.message);
+  });
+
   return executive.id;
 }
 
@@ -80,5 +90,14 @@ export async function refillWithdrawalPendingForExecutive(userId) {
     [executiveId, ...ids],
   );
   await touchExecutiveLastAssigned(executiveId);
+
+  await notifyAssignedSystemUser({
+    userId: executiveId,
+    message: `${ids.length} pending withdrawal request(s) have been assigned to you. Please review. Thanks`,
+    smsType: 'WITHDRAWAL_PENDING',
+  }).catch((error) => {
+    console.error('[withdrawal:assigned-sms]', error.message);
+  });
+
   return ids.length;
 }
