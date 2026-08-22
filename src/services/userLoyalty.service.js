@@ -19,7 +19,10 @@ import {
   getUserPointLevel,
   updateUserPointLevel,
 } from './pointEarning.service.js';
-import { getMembershipTierThresholds } from './loyaltyMembershipTier.service.js';
+import {
+  getMembershipTierThresholds,
+  resolveLevelId,
+} from './loyaltyMembershipTier.service.js';
 import { ensureBonusTierSchema } from './adminLoyaltyManagement.service.js';
 import { getClientBonusSummaryForUser } from './userVoucherClaims.service.js';
 import { listAvailableGiftsForUser } from './userLoyaltyGifts.service.js';
