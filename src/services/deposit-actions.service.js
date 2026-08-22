@@ -243,6 +243,7 @@ export async function updateDepositStatus(
        WHERE id = ?`,
       [adminId, deposit.id],
     );
+    await reverseDepositPoints(deposit);
     await logSystemUserAction(adminId, SYSTEM_USER_ACTIONS.DEPOSIT_PENDING);
   } else if (normalizedStatus === 'Completed') {
     await query(
@@ -273,6 +274,7 @@ export async function updateDepositStatus(
       [adminId, rejectedReason || null, rejectedReasonMessage || null, deposit.id],
     );
 
+    await reverseDepositPoints(deposit);
     await notifyDepositStatus(
       auth,
       accountHolder,
@@ -282,7 +284,6 @@ export async function updateDepositStatus(
       rejectedReason,
       rejectedReasonMessage,
     );
-    await reverseDepositPoints(deposit);
     await logSystemUserAction(adminId, SYSTEM_USER_ACTIONS.DEPOSIT_REJECT);
   }
 
