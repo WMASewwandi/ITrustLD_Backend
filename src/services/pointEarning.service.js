@@ -4,10 +4,6 @@ import { sendEmailAndSms } from './notification.service.js';
 import { loyaltyLevelUpgradeEmailHtml } from './mail.templates.js';
 import { ensurePointCollectionTierSchema } from './adminLoyaltyManagement.service.js';
 import { resolveLevelId } from './loyaltyMembershipTier.service.js';
-import { promoteUserToPartnerByUserId } from './customerAccount.service.js';
-
-/** Silver and above — normal users are auto-converted to affiliates. */
-const AFFILIATE_UNLOCK_LEVEL_ID = 2;
 
 const LEVEL_LABELS = {
   1: 'NORMAL',
@@ -199,7 +195,7 @@ async function notifyLevelUpgrade(userId, levelId, loyaltyPoints) {
 }
 
 export async function updateUserPointLevel(userId) {
-  const [lastLevelRows, earnedRows, partnerRows] = await Promise.all([
+  const [lastLevelRows, earnedRows] = await Promise.all([
     query(
       `SELECT id, point_level_id, event_type
        FROM point_level_customers
@@ -213,13 +209,6 @@ export async function updateUserPointLevel(userId) {
        FROM point_earnings
        WHERE user_id = ?
          AND created_at > DATE_SUB(NOW(), INTERVAL 365 DAY)`,
-      [userId],
-    ),
-    query(
-      `SELECT is_patner
-       FROM account_holders
-       WHERE user_id = ?
-       LIMIT 1`,
       [userId],
     ),
   ]);
@@ -255,16 +244,6 @@ export async function updateUserPointLevel(userId) {
   } else if (pointLevelIdNew > 1) {
     await insertLevelRecord('PROMOTED');
     await notifyLevelUpgrade(userId, pointLevelIdNew, pointCollectionDuringYear);
-  }
-
-  // Silver+ unlocks affiliate/partner status for normal users.
-  const alreadyPartner = String(partnerRows[0]?.is_patner || '').toUpperCase() === 'YES';
-  if (pointLevelIdNew >= AFFILIATE_UNLOCK_LEVEL_ID && !alreadyPartner) {
-    try {
-      await promoteUserToPartnerByUserId(userId, { notify: true });
-    } catch (error) {
-      console.error('[auto-affiliate-convert]', error.message);
-    }
   }
 
   return pointLevelIdNew;
@@ -365,44 +344,28 @@ export async function awardDepositPoints(deposit, accountHolder = null) {
 
 /**
  * Reverse loyalty points awarded for a deposit when admin rejects it.
- * Mirrors Laravel DepositManagementController reject branch.
+ * Deletes depositor and referral earnings for this deposit, then refreshes
+ * each affected user's loyalty level.
  */
 export async function reverseDepositPoints(deposit) {
-  if (!deposit?.id || !deposit?.user_id) return;
+  if (!deposit?.id) return;
 
   try {
     const earningRows = await query(
-      `SELECT COALESCE(SUM(point_earning_amount), 0) AS total
+      `SELECT user_id
        FROM point_earnings
-       WHERE deposit_id = ? AND user_id = ?`,
-      [deposit.id, deposit.user_id],
+       WHERE deposit_id = ?`,
+      [deposit.id],
     );
-    const pointEarningAmount = Number(earningRows[0]?.total) || 0;
-    if (pointEarningAmount <= 0) return;
+    if (!earningRows.length) return;
 
-    const [earnedRows, withdrawnRows] = await Promise.all([
-      query(
-        `SELECT COALESCE(SUM(point_earning_amount), 0) AS total
-         FROM point_earnings
-         WHERE user_id = ?`,
-        [deposit.user_id],
-      ),
-      query(
-        `SELECT COALESCE(SUM(point_withdrawal_amount), 0) AS total
-         FROM point_withdrawals
-         WHERE user_id = ? AND status != 'Rejected'`,
-        [deposit.user_id],
-      ),
-    ]);
+    const userIds = [
+      ...new Set(earningRows.map((row) => Number(row.user_id)).filter(Boolean)),
+    ];
 
-    const pointsTotalEarned = Number(earnedRows[0]?.total) || 0;
-    const pointsTotalWithdrawn = Number(withdrawnRows[0]?.total) || 0;
-    const pointsRemaining = pointsTotalEarned - pointsTotalWithdrawn;
+    await query(`DELETE FROM point_earnings WHERE deposit_id = ?`, [deposit.id]);
 
-    if (pointsRemaining >= pointEarningAmount) {
-      await query(`DELETE FROM point_earnings WHERE deposit_id = ?`, [deposit.id]);
-      await updateUserPointLevel(deposit.user_id);
-    }
+    await Promise.all(userIds.map((userId) => updateUserPointLevel(userId)));
   } catch (error) {
     console.error('[deposit-points-reverse]', error.message);
   }
