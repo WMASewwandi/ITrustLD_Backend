@@ -26,6 +26,11 @@ function dialogApiMessage(data, fallback) {
   return data?.comment || data?.message || fallback;
 }
 
+/** Dialog requires a unique transaction_id per request (DB ids collide with old Laravel sends). */
+function uniqueDialogTransactionId(smsTransactionId) {
+  return Date.now() * 1000 + (Number(smsTransactionId) % 1000);
+}
+
 async function loadLatestToken() {
   const rows = await query(
     `SELECT token, token_expires_at
@@ -147,7 +152,7 @@ export async function sendDialogSms({
       body: JSON.stringify({
         sourceAddress: env.sms.sourceAddress,
         message,
-        transaction_id: smsTransactionId,
+        transaction_id: uniqueDialogTransactionId(smsTransactionId),
         payment_method: Number(paymentMethod ?? env.sms.paymentMethod) || 0,
         msisdn: [{ mobile }],
       }),
