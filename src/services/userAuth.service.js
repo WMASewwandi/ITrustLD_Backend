@@ -23,7 +23,8 @@ import { query } from '../config/database.js';
 import { LARAVEL_USER_MODEL } from '../constants/adminRoles.js';
 import { sendRegistrationEmails } from './verification.service.js';
 import { sendEmailAndSms } from './notification.service.js';
-import { isTurnstileRequired, verifyTurnstileToken } from './turnstile.service.js';
+// TEMPORARY: Cloudflare Turnstile disabled on register.
+// import { isTurnstileRequired, verifyTurnstileToken } from './turnstile.service.js';
 import { env } from '../config/env.js';
 import { getUserAccountSummary, resolveUserType } from './userSummary.service.js';
 
@@ -168,16 +169,17 @@ export async function registerUser(payload, { remoteIp } = {}) {
     throw validationError('Password confirmation does not match.');
   }
 
-  const turnstileToken =
-    payload.cf_turnstile_response ||
-    payload['cf-turnstile-response'] ||
-    payload.turnstile_token;
-  if (isTurnstileRequired()) {
-    const valid = await verifyTurnstileToken(turnstileToken, remoteIp);
-    if (!valid) {
-      throw validationError('You failed to verify that you are not a robot.');
-    }
-  }
+  // TEMPORARY: Cloudflare Turnstile disabled on register.
+  // const turnstileToken =
+  //   payload.cf_turnstile_response ||
+  //   payload['cf-turnstile-response'] ||
+  //   payload.turnstile_token;
+  // if (isTurnstileRequired()) {
+  //   const valid = await verifyTurnstileToken(turnstileToken, remoteIp);
+  //   if (!valid) {
+  //     throw validationError('You failed to verify that you are not a robot.');
+  //   }
+  // }
 
   if (mobileNumber) {
     const mobileDuplicate = await findAccountHolderByMobile(mobileNumber);
