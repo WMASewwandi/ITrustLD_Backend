@@ -42,6 +42,9 @@ export function resolveAdminRedirect(roles, permissions = []) {
   if (permissions.includes('read_customer_accounts_data')) {
     return '/users?filter=pending';
   }
+  if (permissions.includes('read_mobile_verification_pending')) {
+    return '/users?filter=mobile-pending';
+  }
   if (permissions.includes('read_deposit_data')) {
     return '/transactions?tab=deposits&status=Pending';
   }
