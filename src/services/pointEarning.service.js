@@ -31,6 +31,13 @@ const TIER_RANGES = {
   5: [500000, 1000000],
 };
 
+export const SILVER_LEVEL_ID = 2;
+
+export function isAffiliateLinkEligible(isPartner, levelId) {
+  if (isPartner) return true;
+  return (Number(levelId) || 1) >= SILVER_LEVEL_ID;
+}
+
 export function getLevelId(pointCount) {
   const points = Number(pointCount) || 0;
   if (points >= 1000000) return 6;

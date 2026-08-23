@@ -17,6 +17,7 @@ import {
   getLevelLabel,
   getTierProgressPercentage,
   getUserPointLevel,
+  isAffiliateLinkEligible,
   updateUserPointLevel,
 } from './pointEarning.service.js';
 import {
@@ -445,7 +446,10 @@ export async function getUserLoyaltySummary(userId) {
   }
 
   const usdPerBlock = isPartner ? PARTNER_USD : STANDARD_USD;
-  const affiliateCode = accountHolder.affiliate_code || null;
+  const eligibleForAffiliate = isAffiliateLinkEligible(isPartner, level);
+  const affiliateCode = eligibleForAffiliate
+    ? await ensureAffiliateCode(userId, accountHolder)
+    : null;
 
   const partnerProgressPromise = isPartner
     ? Promise.all([
@@ -501,7 +505,7 @@ export async function getUserLoyaltySummary(userId) {
     },
     is_partner: isPartner,
     affiliate_code: affiliateCode,
-    has_affiliate_link: Boolean(affiliateCode),
+    has_affiliate_link: eligibleForAffiliate && Boolean(affiliateCode),
     direct_client_count: directClientCount,
     partner_tier: getLevelDisplayName(level),
     partner_progress: partnerProgress,
@@ -581,7 +585,11 @@ export async function createUserLoyaltyWithdrawal(userId, payload = {}) {
   const withdrawalId = insert.insertId;
   const transactionId = displayTransactionId(withdrawalId);
 
-  await ensureAffiliateCode(userId, accountHolder);
+  const pointLevelDetails = await getUserPointLevel(userId);
+  const levelId = Number(pointLevelDetails?.point_level_id) || 1;
+  if (isAffiliateLinkEligible(isPartner, levelId)) {
+    await ensureAffiliateCode(userId, accountHolder);
+  }
 
   const updatedTotals = await getPointTotals(userId);
 
