@@ -1,10 +1,6 @@
 import { query } from '../config/database.js';
 import { env } from '../config/env.js';
 
-const API_LOGIN_URL = 'https://e-sms.dialog.lk/api/v1/login';
-const API_SEND_URL = 'https://e-sms.dialog.lk/api/v2/sms';
-const SOURCE_ADDRESS = 'ITrustLD';
-
 export function parseLkMobileNumber(msisdn) {
   const digits = String(msisdn || '').replace(/\D/g, '');
   if (!digits) return null;
@@ -51,7 +47,7 @@ async function fetchDialogToken() {
     throw new Error('Dialog SMS credentials are not configured.');
   }
 
-  const response = await fetch(API_LOGIN_URL, {
+  const response = await fetch(env.sms.loginUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password }),
@@ -123,17 +119,17 @@ export async function sendDialogSms({
 
   try {
     const token = await getDialogToken();
-    const response = await fetch(API_SEND_URL, {
+    const response = await fetch(env.sms.sendUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({
-        sourceAddress: SOURCE_ADDRESS,
+        sourceAddress: env.sms.sourceAddress,
         message,
         transaction_id: smsTransactionId,
-        payment_method: paymentMethod,
+        payment_method: paymentMethod || env.sms.paymentMethod,
         msisdn: [{ mobile }],
       }),
     });

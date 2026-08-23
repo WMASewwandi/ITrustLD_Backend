@@ -26,7 +26,7 @@ export const env = {
     connection: (process.env.DB_CONNECTION || 'mysql').toLowerCase(),
     host: process.env.DB_HOST || '127.0.0.1',
     port: Number(process.env.DB_PORT) || 3306,
-    database: process.env.DB_DATABASE || 'itrustld_live',
+    database: process.env.DB_DATABASE || 'itrustld',
     username: process.env.DB_USERNAME || 'root',
     password: process.env.DB_PASSWORD || '',
   },
@@ -61,25 +61,30 @@ export const env = {
     minimumPoints: 10000,
   },
   sms: {
-    // Prefer DIALOG_SMS_*; also accept Laravel SMS_API_* and legacy SMS_DIALOG_* aliases.
+    // Same Dialog e-SMS portal as ITrustLD_Existing. Prefer Laravel SMS_API_* names.
     username:
-      process.env.DIALOG_SMS_USERNAME ||
       process.env.SMS_API_USERNAME ||
+      process.env.DIALOG_SMS_USERNAME ||
       process.env.SMS_DIALOG_USERNAME ||
       '',
     password:
-      process.env.DIALOG_SMS_PASSWORD ||
       process.env.SMS_API_PASSWORD ||
+      process.env.DIALOG_SMS_PASSWORD ||
       process.env.SMS_DIALOG_PASSWORD ||
       '',
+    loginUrl:
+      process.env.SMS_API_LOGIN_URL || 'https://e-sms.dialog.lk/api/v1/login',
+    sendUrl: process.env.SMS_API_SEND_URL || 'https://e-sms.dialog.lk/api/v2/sms',
+    sourceAddress: process.env.SMS_SOURCE_ADDRESS || 'ITrustLD',
+    paymentMethod: process.env.SMS_PAYMENT_METHOD || '0',
     enabled:
       process.env.SMS_ENABLED !== 'false' &&
       Boolean(
-        (process.env.DIALOG_SMS_USERNAME ||
-          process.env.SMS_API_USERNAME ||
+        (process.env.SMS_API_USERNAME ||
+          process.env.DIALOG_SMS_USERNAME ||
           process.env.SMS_DIALOG_USERNAME) &&
-          (process.env.DIALOG_SMS_PASSWORD ||
-            process.env.SMS_API_PASSWORD ||
+          (process.env.SMS_API_PASSWORD ||
+            process.env.DIALOG_SMS_PASSWORD ||
             process.env.SMS_DIALOG_PASSWORD),
       ),
     twilioAccountSid: process.env.TWILIO_ACCOUNT_SID || '',
