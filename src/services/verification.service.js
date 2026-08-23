@@ -1,7 +1,8 @@
 import { query } from '../config/database.js';
 import { findAccountHolderByUserId } from './accountHolder.service.js';
 import { findUserByEmail, findUserById } from './user.service.js';
-import { sendTemplatedEmailAndSms, sendEmailAndSms } from './notification.service.js';
+import { sendMail } from './mail.service.js';
+import { sendTemplatedEmailAndSms, sendEmailAndSms, queueSmsMessage } from './notification.service.js';
 import {
   accountVerifiedEmailHtml,
   verificationCodeEmailHtml,
@@ -49,6 +50,8 @@ function devDeliveryPayload(mailResult, code) {
     'Email was not sent to your inbox (MAIL_MAILER=log). Use the code below or configure SMTP in ITrustLD_Existing/.env.';
   if (mailResult?.via === 'local-catcher') {
     hint = 'Email captured locally. Open http://localhost:8025 (Mailpit) or use the code below.';
+  } else if (mailResult?.via === 'sms') {
+    hint = 'SMS may not have been delivered in this environment. Use the code below.';
   }
 
   return {
@@ -179,17 +182,12 @@ export async function sendVerificationEmail(userId, email) {
   const code = await createVerificationCode(userId);
 
   try {
-    await sendEmailAndSms({
-      email: normalizedEmail,
+    await sendMail({
+      to: normalizedEmail,
       subject: 'OTP',
       html: verificationCodeEmailHtml(code),
       text: `Your iTrustLD verification code is ${code}. It expires in 5 minutes.`,
-      smsMessage: `Your iTrustLD verification code is ${code}.`,
-      msisdn: accountHolder.mobile_number,
-      userId,
-      smsType: 'VERIFICATION_CODE',
     });
-    // Temporary: do not return OTP to the UI for email verification (code is only in email/SMS).
     return {
       ok: true,
       message: 'Verification code sent.',
@@ -275,17 +273,12 @@ export async function sendVerificationSms(userId, mobileNumber) {
   }
 
   const code = await createVerificationCode(userId);
-  const user = await findUserById(userId);
 
   const message = `Your ITrustLD mobile number verification code is: ${code}. Do not share this code with anyone. - For more info: +94 117 751 751 ,iTrustLD`;
 
   try {
-    const mailResult = await sendEmailAndSms({
-      email: user.email,
-      subject: 'Mobile verification code',
-      html: verificationCodeEmailHtml(code),
-      text: `Your iTrustLD mobile verification code is ${code}.`,
-      smsMessage: message,
+    await queueSmsMessage({
+      message,
       msisdn: mobile,
       userId,
       smsType: 'verification code',
@@ -293,7 +286,7 @@ export async function sendVerificationSms(userId, mobileNumber) {
     return {
       ok: true,
       message: 'Verification code sent.',
-      ...devDeliveryPayload(mailResult, code),
+      ...devDeliveryPayload({ delivered: false, via: 'sms' }, code),
     };
   } catch (error) {
     console.error('[verify] sms send failed:', error.message);
