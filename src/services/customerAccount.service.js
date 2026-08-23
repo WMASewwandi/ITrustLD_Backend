@@ -61,6 +61,9 @@ const FILTER_WHERE = {
     AND identity_document_status = 'RECEIVED'
     AND identity_verification = 'NOT_VERIFIED'
   `,
+  'mobile-pending': `
+    mobile_number_verification = 'NOT_VERIFIED'
+  `,
   'self-verified': `
     email_verification = 'VERIFIED'
     AND mobile_number_verification = 'VERIFIED'
@@ -147,6 +150,7 @@ export function toCustomerRow(row) {
     name: `${firstName} ${lastName}`.trim(),
     email: row.email,
     mobile: row.mobile_number || '',
+    mobileVerification: row.mobile_number_verification === 'VERIFIED' ? 'Verified' : 'Pending',
     partner: mapPartner(row.is_patner),
     userType: row.is_patner === 'YES' ? 'Affluent' : 'Normal',
     loyaltyTier: 'Normal',
@@ -617,6 +621,33 @@ export async function updateCustomerKycVerification(
     await notifyKycDecision(holder, 'address', 'VERIFIED');
     await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.ADDRESS_APPROVE);
   }
+
+  return findCustomerAccountById(accountHolderId);
+}
+
+export async function verifyCustomerMobile(accountHolderId) {
+  const holders = await query(
+    `SELECT id, mobile_number_verification
+     FROM account_holders
+     WHERE id = ?
+     LIMIT 1`,
+    [accountHolderId],
+  );
+  const holder = holders[0];
+  if (!holder) {
+    throw customerValidationError('Customer not found.', 404);
+  }
+  if (holder.mobile_number_verification === 'VERIFIED') {
+    throw customerValidationError('Mobile number is already verified.');
+  }
+
+  await query(
+    `UPDATE account_holders
+     SET mobile_number_verification = 'VERIFIED',
+         updated_at = NOW()
+     WHERE id = ?`,
+    [accountHolderId],
+  );
 
   return findCustomerAccountById(accountHolderId);
 }

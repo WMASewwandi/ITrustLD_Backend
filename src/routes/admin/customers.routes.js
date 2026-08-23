@@ -9,6 +9,7 @@ import {
   updateCustomerEmail,
   updateCustomerKycVerification,
   updateCustomerPartnerStatus,
+  verifyCustomerMobile,
   updateMultipleCustomerAccountStatus,
 } from '../../services/customerAccount.service.js';
 import {
@@ -180,6 +181,24 @@ adminCustomersRouter.get(
       const field = String(req.query.field || 'nic').toLowerCase();
       const result = await getCustomerKycDocuments(accountHolderId, field);
       res.json({ ok: true, ...result, field });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminCustomersRouter.post(
+  '/:accountHolderId/mobile/verify',
+  requirePermission('change_customer_account_status'),
+  async (req, res, next) => {
+    try {
+      const accountHolderId = Number(req.params.accountHolderId);
+      if (!Number.isFinite(accountHolderId) || accountHolderId <= 0) {
+        return res.status(400).json({ message: 'Invalid customer id.' });
+      }
+
+      const customer = await verifyCustomerMobile(accountHolderId);
+      res.json({ ok: true, customer, message: 'Mobile number marked as verified.' });
     } catch (error) {
       next(error);
     }
