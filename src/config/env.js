@@ -61,7 +61,7 @@ export const env = {
     minimumPoints: 10000,
   },
   sms: {
-    // Same Dialog e-SMS portal as ITrustLD_Existing. Prefer Laravel SMS_API_* names.
+    // Dialog eSMS v2 (esms.dialog.lk). SMS_API_* preferred; DIALOG_SMS_* still accepted.
     username:
       process.env.SMS_API_USERNAME ||
       process.env.DIALOG_SMS_USERNAME ||
@@ -73,8 +73,8 @@ export const env = {
       process.env.SMS_DIALOG_PASSWORD ||
       '',
     loginUrl:
-      process.env.SMS_API_LOGIN_URL || 'https://e-sms.dialog.lk/api/v1/login',
-    sendUrl: process.env.SMS_API_SEND_URL || 'https://e-sms.dialog.lk/api/v2/sms',
+      process.env.SMS_API_LOGIN_URL || 'https://esms.dialog.lk/api/v2/user/login',
+    sendUrl: process.env.SMS_API_SEND_URL || 'https://esms.dialog.lk/api/v2/sms',
     sourceAddress: process.env.SMS_SOURCE_ADDRESS || 'ITrustLD',
     paymentMethod: process.env.SMS_PAYMENT_METHOD || '0',
     enabled:

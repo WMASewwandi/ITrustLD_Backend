@@ -16,6 +16,16 @@ export function parseLkMobileNumber(msisdn) {
   return number;
 }
 
+/** Dialog eSMS v2 expects 94 + 9-digit local number, e.g. 94771234567. */
+function toEsmsMsisdn(msisdn) {
+  const local = parseLkMobileNumber(msisdn);
+  return local ? `94${local}` : null;
+}
+
+function dialogApiMessage(data, fallback) {
+  return data?.comment || data?.message || fallback;
+}
+
 async function loadLatestToken() {
   const rows = await query(
     `SELECT token, token_expires_at
@@ -54,27 +64,36 @@ async function fetchDialogToken() {
   });
 
   const data = await response.json().catch(() => ({}));
-  if (data?.status !== 'success' || !data?.token) {
-    throw new Error(data?.message || 'Unable to retrieve Dialog SMS token.');
+  const token = data?.token;
+  if (String(data?.status || '').toLowerCase() !== 'success' || !token) {
+    throw new Error(dialogApiMessage(data, 'Unable to retrieve Dialog SMS token.'));
   }
 
-  await storeDialogToken({
-    token: data.token,
-    refreshToken: data.refreshToken,
-    expirationSec: data.expiration,
-    refreshExpirationSec: data.refreshExpiration,
-  });
+  try {
+    await storeDialogToken({
+      token,
+      refreshToken: data.refreshToken || data.refresh_token,
+      expirationSec: data.expiration,
+      refreshExpirationSec: data.refreshExpiration || data.refresh_expiration,
+    });
+  } catch (error) {
+    console.error('[sms:token-store]', error.message);
+  }
 
-  return data.token;
+  return token;
 }
 
 async function getDialogToken() {
-  const existing = await loadLatestToken();
-  if (existing?.token && existing?.token_expires_at) {
-    const expiresAt = new Date(existing.token_expires_at);
-    if (!Number.isNaN(expiresAt.getTime()) && expiresAt > new Date()) {
-      return existing.token;
+  try {
+    const existing = await loadLatestToken();
+    if (existing?.token && existing?.token_expires_at) {
+      const expiresAt = new Date(existing.token_expires_at);
+      if (!Number.isNaN(expiresAt.getTime()) && expiresAt > new Date()) {
+        return existing.token;
+      }
     }
+  } catch (error) {
+    console.error('[sms:token-load]', error.message);
   }
 
   return fetchDialogToken();
@@ -92,7 +111,7 @@ async function persistSmsResponse(smsTransactionId, responseData) {
 }
 
 /**
- * Send SMS via Dialog e-SMS (Laravel SmsService parity).
+ * Send SMS via Dialog eSMS v2 (https://esms.dialog.lk).
  * Always records sms_transactions; dispatches to Dialog when credentials are configured.
  */
 export async function sendDialogSms({
@@ -102,7 +121,7 @@ export async function sendDialogSms({
   smsType = 'GENERAL',
   paymentMethod = '0',
 }) {
-  const mobile = parseLkMobileNumber(msisdn);
+  const mobile = toEsmsMsisdn(msisdn);
   if (!mobile) return null;
 
   const insertResult = await query(
@@ -129,13 +148,19 @@ export async function sendDialogSms({
         sourceAddress: env.sms.sourceAddress,
         message,
         transaction_id: smsTransactionId,
-        payment_method: paymentMethod || env.sms.paymentMethod,
+        payment_method: Number(paymentMethod ?? env.sms.paymentMethod) || 0,
         msisdn: [{ mobile }],
       }),
     });
 
     const responseData = await response.json().catch(() => ({}));
     await persistSmsResponse(smsTransactionId, responseData);
+    if (String(responseData?.status || '').toLowerCase() !== 'success') {
+      console.error(
+        '[sms:dialog-error]',
+        dialogApiMessage(responseData, 'Dialog SMS send failed.'),
+      );
+    }
     return responseData;
   } catch (error) {
     console.error('[sms:dialog-error]', error.message);
