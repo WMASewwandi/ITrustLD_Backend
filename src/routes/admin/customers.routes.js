@@ -1,7 +1,9 @@
 import { Router } from 'express';
 import multer from 'multer';
+import { userHasPermission } from '../../constants/loyaltyPermissions.js';
 import { requireAdminAuth } from '../../middleware/requireAdminAuth.js';
 import { requirePermission } from '../../middleware/requirePermission.js';
+import { getUserPermissions } from '../../services/user.service.js';
 import {
   getCustomerKycDocuments,
   listCustomerAccounts,
@@ -30,9 +32,28 @@ const upload = multer({
 
 adminCustomersRouter.use(requireAdminAuth);
 
+const READ_CUSTOMER_ACCOUNTS = 'read_customer_accounts_data';
+const READ_MOBILE_VERIFICATION_PENDING = 'read_mobile_verification_pending';
+
+async function requireCustomerListPermission(req, res, next) {
+  try {
+    const permissions = await getUserPermissions(req.auth.userId);
+    const filter = String(req.query.filter || 'pending');
+    const required =
+      filter === 'mobile-pending' ? READ_MOBILE_VERIFICATION_PENDING : READ_CUSTOMER_ACCOUNTS;
+    if (!userHasPermission(permissions, required)) {
+      return res.status(403).json({ message: 'You do not have permission to perform this action.' });
+    }
+    req.auth.permissions = permissions;
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+}
+
 adminCustomersRouter.get(
   '/',
-  requirePermission('read_customer_accounts_data'),
+  requireCustomerListPermission,
   async (req, res, next) => {
     try {
       const filter = String(req.query.filter || 'pending');
@@ -189,7 +210,7 @@ adminCustomersRouter.get(
 
 adminCustomersRouter.post(
   '/:accountHolderId/mobile/verify',
-  requirePermission('change_customer_account_status'),
+  requirePermission('change_customer_account_status', 'read_mobile_verification_pending'),
   async (req, res, next) => {
     try {
       const accountHolderId = Number(req.params.accountHolderId);

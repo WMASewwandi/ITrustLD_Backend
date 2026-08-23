@@ -97,6 +97,7 @@ export async function ensureSystemActivitiesCatalog() {
 
   await ensureBuiltinRolePermissions();
   await grantAuthorizePermissionToExistingAuthorizerRole();
+  await grantMobileVerificationPendingToExistingAccountReaders();
 
   syncReady = true;
 }
@@ -119,6 +120,32 @@ async function grantAuthorizePermissionToExistingAuthorizerRole() {
   if (current.includes('authorize_withdrawal_data')) return;
 
   await syncRolePermissions('withdrawal-authorizer', [...current, 'authorize_withdrawal_data']);
+}
+
+async function grantMobileVerificationPendingToExistingAccountReaders() {
+  const roleRows = await query(
+    `SELECT DISTINCT r.id, r.name
+     FROM roles r
+     INNER JOIN role_has_permissions rhp ON rhp.role_id = r.id
+     INNER JOIN permissions p ON p.id = rhp.permission_id
+     WHERE r.guard_name = ?
+       AND p.name = ?
+       AND r.name <> 'customer'`,
+    [GUARD_NAME, 'read_customer_accounts_data'],
+  );
+
+  for (const role of roleRows) {
+    const currentRows = await query(
+      `SELECT p.name
+       FROM permissions p
+       INNER JOIN role_has_permissions rhp ON rhp.permission_id = p.id
+       WHERE rhp.role_id = ?`,
+      [role.id],
+    );
+    const current = currentRows.map((row) => normalizeToActivityIdentifier(row.name));
+    if (current.includes('read_mobile_verification_pending')) continue;
+    await syncRolePermissions(role.name, [...current, 'read_mobile_verification_pending']);
+  }
 }
 
 async function ensureBuiltinRolePermissions() {

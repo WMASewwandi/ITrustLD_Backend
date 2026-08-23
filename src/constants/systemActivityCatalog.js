@@ -74,6 +74,7 @@ export const SYSTEM_ACTIVITIES = [
   { activity_identifier: 'change_customer_account_status', activity_name: 'Update Customer Accounts Status', category_id: 4, sort_order: 3 },
   { activity_identifier: 'read_scammer_data', activity_name: 'Read Scammer Records', category_id: 4, sort_order: 4 },
   { activity_identifier: 'change_scammer_status', activity_name: 'Manage Scammer Records', category_id: 4, sort_order: 5 },
+  { activity_identifier: 'read_mobile_verification_pending', activity_name: 'Mobile Verification Pending', category_id: 4, sort_order: 6 },
 
   { activity_identifier: 'customer_loyalty_activity', activity_name: 'Customer Loyalty Activity', category_id: 51, sort_order: 0 },
 
@@ -140,6 +141,7 @@ export const BUILTIN_ROLE_PERMISSIONS = {
     'change_profile_status',
     'read_customer_accounts_data',
     'change_customer_account_status',
+    'read_mobile_verification_pending',
     ...FULL_ADMIN_LOYALTY_PERMISSIONS,
     'read_help_requests',
     'change_help_requests_status',
@@ -162,6 +164,7 @@ export const BUILTIN_ROLE_PERMISSIONS = {
     'change_profile_status',
     'read_customer_accounts_data',
     'change_customer_account_status',
+    'read_mobile_verification_pending',
     ...FULL_ADMIN_LOYALTY_PERMISSIONS,
     'read_help_requests',
     'change_help_requests_status',
