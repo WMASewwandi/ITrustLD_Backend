@@ -5,6 +5,7 @@ import morgan from 'morgan';
 import { env } from './config/env.js';
 import { apiRouter } from './routes/index.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
+import { withRequestContext } from './utils/publicApiUrl.js';
 
 const localhostOriginPattern = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
 
@@ -39,6 +40,7 @@ export function createApp() {
     }),
   );
 
+  app.use(withRequestContext);
   app.use('/api/v1', apiRouter);
 
   app.use(notFoundHandler);
