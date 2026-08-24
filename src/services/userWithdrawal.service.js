@@ -939,6 +939,30 @@ function parseTransactionStatusFilter(status) {
   return value;
 }
 
+function parseUserWithdrawalListFilters(params = {}) {
+  const { fromDate, toDate } = resolveFilterDates(
+    params.filter_template ?? params.filterTemplate,
+    params.from_date ?? params.fromDate,
+    params.to_date ?? params.toDate,
+  );
+  const cashoutMethodId = params.cashout_method_id ?? params.cashoutMethodId;
+  const parsedCashoutMethodId =
+    cashoutMethodId != null && String(cashoutMethodId).trim() !== ''
+      ? Number(cashoutMethodId)
+      : null;
+  const status = parseTransactionStatusFilter(params.status ?? params.transaction_status);
+  const search = String(params.search ?? params.q ?? '').trim() || null;
+
+  return {
+    fromDate,
+    toDate,
+    cashoutMethodId: Number.isInteger(parsedCashoutMethodId) ? parsedCashoutMethodId : null,
+    parsedCashoutMethodId,
+    status,
+    search,
+  };
+}
+
 function buildUserWithdrawalListQuery(userId, filters = {}) {
   const { fromDate, toDate, cashoutMethodId, status, search } = filters;
   let sql = `SELECT w.*, po.payment_option_name, cm.cashout_method_name
@@ -987,23 +1011,13 @@ export async function listUserWithdrawalTransactions(userId, params = {}) {
   const perPage = Math.min(50, Math.max(1, Number(params.per_page) || 10));
   const offset = (page - 1) * perPage;
 
-  const { fromDate, toDate } = resolveFilterDates(
-    params.filter_template ?? params.filterTemplate,
-    params.from_date ?? params.fromDate,
-    params.to_date ?? params.toDate,
-  );
-  const cashoutMethodId = params.cashout_method_id ?? params.cashoutMethodId;
-  const parsedCashoutMethodId =
-    cashoutMethodId != null && String(cashoutMethodId).trim() !== ''
-      ? Number(cashoutMethodId)
-      : null;
-  const status = parseTransactionStatusFilter(params.status ?? params.transaction_status);
-  const search = String(params.search ?? params.q ?? '').trim() || null;
+  const { fromDate, toDate, cashoutMethodId, parsedCashoutMethodId, status, search } =
+    parseUserWithdrawalListFilters(params);
 
   const { sql, values } = buildUserWithdrawalListQuery(userId, {
     fromDate,
     toDate,
-    cashoutMethodId: Number.isInteger(parsedCashoutMethodId) ? parsedCashoutMethodId : null,
+    cashoutMethodId,
     status,
     search,
   });
@@ -1069,20 +1083,19 @@ function csvEscape(value) {
   return text;
 }
 
-export async function exportUserWithdrawalTransactions(userId) {
+export async function exportUserWithdrawalTransactions(userId, params = {}) {
   await assertWithdrawalAccess(userId);
 
-  const rows = await query(
-    `SELECT w.id, w.user_id, w.transaction_id, w.receiving_payment_option_id,
-            w.cashout_amount_currency, w.receiving_amount_currency,
-            w.cashout_amount, w.receiving_amount, w.applied_payment_option_rate,
-            w.applied_payment_option_rate_id, w.cashout_payment_proof, w.cashout_method_id,
-            w.cashout_account_id, w.transaction_status, w.message, w.created_at, w.updated_at
-     FROM withdrawals w
-     WHERE w.user_id = ?
-     ORDER BY w.id DESC`,
-    [userId],
-  );
+  const { fromDate, toDate, cashoutMethodId, status, search } =
+    parseUserWithdrawalListFilters(params);
+  const { sql, values } = buildUserWithdrawalListQuery(userId, {
+    fromDate,
+    toDate,
+    cashoutMethodId,
+    status,
+    search,
+  });
+  const rows = await query(`${sql} ORDER BY w.id DESC`, values);
 
   const headings = [
     'id',
@@ -1119,27 +1132,16 @@ export async function exportUserWithdrawalTransactions(userId) {
 export async function listUserWithdrawalTransactionsForPrint(userId, params = {}) {
   await assertWithdrawalAccess(userId);
 
-  const { fromDate, toDate } = resolveFilterDates(
-    params.filter_template ?? params.filterTemplate,
-    params.from_date ?? params.fromDate,
-    params.to_date ?? params.toDate,
-  );
-  const cashoutMethodId = params.cashout_method_id ?? params.cashoutMethodId;
-  const parsedCashoutMethodId =
-    cashoutMethodId != null && String(cashoutMethodId).trim() !== ''
-      ? Number(cashoutMethodId)
-      : null;
-  const status = parseTransactionStatusFilter(params.status ?? params.transaction_status);
-  const search = String(params.search ?? params.q ?? '').trim() || null;
-
+  const { fromDate, toDate, cashoutMethodId, status, search } =
+    parseUserWithdrawalListFilters(params);
   const { sql, values } = buildUserWithdrawalListQuery(userId, {
     fromDate,
     toDate,
-    cashoutMethodId: Number.isInteger(parsedCashoutMethodId) ? parsedCashoutMethodId : null,
+    cashoutMethodId,
     status,
     search,
   });
 
-  const rows = await query(`${sql} ORDER BY w.id DESC LIMIT 10`, values);
+  const rows = await query(`${sql} ORDER BY w.id DESC`, values);
   return rows.map(mapUserWithdrawalTransaction);
 }

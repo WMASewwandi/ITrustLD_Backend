@@ -76,7 +76,7 @@ userWithdrawalsRouter.get('/transactions/:transactionId', async (req, res, next)
 
 userWithdrawalsRouter.get('/export', async (req, res, next) => {
   try {
-    const exported = await exportUserWithdrawalTransactions(req.auth.userId);
+    const exported = await exportUserWithdrawalTransactions(req.auth.userId, req.query);
     res.setHeader('Content-Type', exported.mimeType);
     res.setHeader('Content-Disposition', `attachment; filename="${exported.filename}"`);
     res.send(exported.content);
