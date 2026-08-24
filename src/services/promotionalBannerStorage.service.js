@@ -1,21 +1,13 @@
 import fs from 'fs/promises';
 import path from 'node:path';
 import { env } from '../config/env.js';
+import { getPublicApiBaseUrl as getApiBaseUrl } from '../utils/publicApiUrl.js';
 
 const ALLOWED_IMAGE_EXTENSIONS = new Set(['jpeg', 'jpg', 'png', 'gif', 'svg', 'webp']);
 const ALLOWED_VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'mov']);
 const MAX_BYTES = 10 * 1024 * 1024;
 
-export function getApiBaseUrl() {
-  const configured =
-    process.env.API_PUBLIC_URL ||
-    process.env.PUBLIC_API_URL ||
-    process.env.NEXT_PUBLIC_API_URL;
-  if (configured) {
-    return String(configured).replace(/\/$/, '');
-  }
-  return `http://localhost:${env.port}/api/v1`;
-}
+export { getApiBaseUrl };
 
 function promotionsDir() {
   return path.resolve(env.projectRoot, '../ITrustLD_Existing/storage/app/promotions');
