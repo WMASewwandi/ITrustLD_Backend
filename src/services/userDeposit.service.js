@@ -669,6 +669,30 @@ function parseTransactionStatusFilter(status) {
   return value;
 }
 
+function parseUserDepositListFilters(params = {}) {
+  const { fromDate, toDate } = resolveFilterDates(
+    params.filter_template ?? params.filterTemplate,
+    params.from_date ?? params.fromDate,
+    params.to_date ?? params.toDate,
+  );
+  const topupMethodId = params.topup_method_id ?? params.topupMethodId;
+  const parsedTopupMethodId =
+    topupMethodId != null && String(topupMethodId).trim() !== ''
+      ? Number(topupMethodId)
+      : null;
+  const status = parseTransactionStatusFilter(params.status ?? params.transaction_status);
+  const search = String(params.search ?? params.q ?? '').trim() || null;
+
+  return {
+    fromDate,
+    toDate,
+    topupMethodId: Number.isInteger(parsedTopupMethodId) ? parsedTopupMethodId : null,
+    parsedTopupMethodId,
+    status,
+    search,
+  };
+}
+
 function buildUserDepositListQuery(userId, filters = {}) {
   const { fromDate, toDate, topupMethodId, status, search } = filters;
   let sql = `SELECT d.*, po.payment_option_name, tm.topup_method_name
@@ -717,23 +741,13 @@ export async function listUserDepositTransactions(userId, params = {}) {
   const perPage = Math.min(50, Math.max(1, Number(params.per_page) || 10));
   const offset = (page - 1) * perPage;
 
-  const { fromDate, toDate } = resolveFilterDates(
-    params.filter_template ?? params.filterTemplate,
-    params.from_date ?? params.fromDate,
-    params.to_date ?? params.toDate,
-  );
-  const topupMethodId = params.topup_method_id ?? params.topupMethodId;
-  const parsedTopupMethodId =
-    topupMethodId != null && String(topupMethodId).trim() !== ''
-      ? Number(topupMethodId)
-      : null;
-  const status = parseTransactionStatusFilter(params.status ?? params.transaction_status);
-  const search = String(params.search ?? params.q ?? '').trim() || null;
+  const { fromDate, toDate, topupMethodId, parsedTopupMethodId, status, search } =
+    parseUserDepositListFilters(params);
 
   const { sql, values } = buildUserDepositListQuery(userId, {
     fromDate,
     toDate,
-    topupMethodId: Number.isInteger(parsedTopupMethodId) ? parsedTopupMethodId : null,
+    topupMethodId,
     status,
     search,
   });
@@ -799,20 +813,18 @@ function csvEscape(value) {
   return text;
 }
 
-export async function exportUserDepositTransactions(userId) {
+export async function exportUserDepositTransactions(userId, params = {}) {
   await assertDepositAccess(userId);
 
-  const rows = await query(
-    `SELECT d.id, d.user_id, d.transaction_id, d.payment_option_id,
-            d.deposit_amount_currency, d.payment_amount_currency,
-            d.deposit_amount, d.payment_amount, d.applied_payment_option_rate,
-            d.applied_payment_option_rate_id, d.payment_proof, d.topup_method_id,
-            d.topup_account_id, d.transaction_status, d.message, d.created_at, d.updated_at
-     FROM deposits d
-     WHERE d.user_id = ?
-     ORDER BY d.id DESC`,
-    [userId],
-  );
+  const { fromDate, toDate, topupMethodId, status, search } = parseUserDepositListFilters(params);
+  const { sql, values } = buildUserDepositListQuery(userId, {
+    fromDate,
+    toDate,
+    topupMethodId,
+    status,
+    search,
+  });
+  const rows = await query(`${sql} ORDER BY d.id DESC`, values);
 
   const headings = [
     'id',
@@ -849,27 +861,15 @@ export async function exportUserDepositTransactions(userId) {
 export async function listUserDepositTransactionsForPrint(userId, params = {}) {
   await assertDepositAccess(userId);
 
-  const { fromDate, toDate } = resolveFilterDates(
-    params.filter_template ?? params.filterTemplate,
-    params.from_date ?? params.fromDate,
-    params.to_date ?? params.toDate,
-  );
-  const topupMethodId = params.topup_method_id ?? params.topupMethodId;
-  const parsedTopupMethodId =
-    topupMethodId != null && String(topupMethodId).trim() !== ''
-      ? Number(topupMethodId)
-      : null;
-  const status = parseTransactionStatusFilter(params.status ?? params.transaction_status);
-  const search = String(params.search ?? params.q ?? '').trim() || null;
-
+  const { fromDate, toDate, topupMethodId, status, search } = parseUserDepositListFilters(params);
   const { sql, values } = buildUserDepositListQuery(userId, {
     fromDate,
     toDate,
-    topupMethodId: Number.isInteger(parsedTopupMethodId) ? parsedTopupMethodId : null,
+    topupMethodId,
     status,
     search,
   });
 
-  const rows = await query(`${sql} ORDER BY d.id DESC LIMIT 10`, values);
+  const rows = await query(`${sql} ORDER BY d.id DESC`, values);
   return rows.map(mapUserDepositTransaction);
 }

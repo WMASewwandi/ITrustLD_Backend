@@ -76,7 +76,7 @@ userDepositsRouter.get('/transactions/:transactionId', async (req, res, next) =>
 
 userDepositsRouter.get('/export', async (req, res, next) => {
   try {
-    const exported = await exportUserDepositTransactions(req.auth.userId);
+    const exported = await exportUserDepositTransactions(req.auth.userId, req.query);
     res.setHeader('Content-Type', exported.mimeType);
     res.setHeader('Content-Disposition', `attachment; filename="${exported.filename}"`);
     res.send(exported.content);
