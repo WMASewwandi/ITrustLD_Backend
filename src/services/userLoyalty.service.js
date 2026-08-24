@@ -142,6 +142,19 @@ async function getEarnedForYear(userId) {
   return Number(rows[0]?.total || 0);
 }
 
+/** Points whose 1-year anniversary is today — they leave the rolling period today. */
+async function getPointsDroppingToday(userId) {
+  const rows = await query(
+    `SELECT COALESCE(SUM(point_earning_amount), 0) AS total
+     FROM point_earnings
+     WHERE user_id = ?
+       AND created_at >= DATE_SUB(CURDATE(), INTERVAL 1 YEAR)
+       AND created_at <  DATE_ADD(DATE_SUB(CURDATE(), INTERVAL 1 YEAR), INTERVAL 1 DAY)`,
+    [userId],
+  );
+  return Math.floor(Number(rows[0]?.total || 0));
+}
+
 function formatDisplayDate(value) {
   if (!value) return '—';
   const date = new Date(value);
@@ -261,7 +274,13 @@ function getTrackPositionPct(points, tiers = PARTNER_TIER_THRESHOLDS) {
   return Math.min(100, ((segmentIndex + frac) / Math.max(tiers.length - 1, 1)) * 100);
 }
 
-function buildPartnerProgress(level, earnedForYear, levelOverviewRows, tiers = PARTNER_TIER_THRESHOLDS) {
+function buildPartnerProgress(
+  level,
+  earnedForYear,
+  levelOverviewRows,
+  tiers = PARTNER_TIER_THRESHOLDS,
+  todaysLeftPoints = 0,
+) {
   const currentTier = tiers[Math.max(0, Math.min(tiers.length - 1, level - 1))] || tiers[0];
   const nextTier = tiers[level] || null;
   const currentPts = Number(earnedForYear) || 0;
@@ -307,6 +326,7 @@ function buildPartnerProgress(level, earnedForYear, levelOverviewRows, tiers = P
       monthly_review: formatDisplayDate(monthEnd),
       last_upgrade: lastPromotion?.last_upgrade || levelOverviewRows[0]?.last_upgrade || '—',
       days_left: daysLeft,
+      todays_left_points: Math.floor(Number(todaysLeftPoints) || 0),
     },
   };
 }
@@ -455,7 +475,8 @@ export async function getUserLoyaltySummary(userId) {
     ? Promise.all([
         getPointsBreakdownForYear(userId),
         getConfiguredPartnerTiers(),
-      ]).then(async ([pointsBreakdown, tiers]) => {
+        getPointsDroppingToday(userId),
+      ]).then(async ([pointsBreakdown, tiers, todaysLeftPoints]) => {
         const levelOverviewRows = await getPartnerLevelOverviewRows(
           userId,
           level,
@@ -463,7 +484,13 @@ export async function getUserLoyaltySummary(userId) {
           tiers,
         );
         return {
-          ...buildPartnerProgress(level, earnedForYear, levelOverviewRows, tiers),
+          ...buildPartnerProgress(
+            level,
+            earnedForYear,
+            levelOverviewRows,
+            tiers,
+            todaysLeftPoints,
+          ),
           points_breakdown: pointsBreakdown,
         };
       })
