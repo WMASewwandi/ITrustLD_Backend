@@ -1,4 +1,16 @@
 import { query } from '../config/database.js';
+import { getLevelDisplayName, getUserPointLevel } from './pointEarning.service.js';
+
+async function getEarnedForYear(userId) {
+  const rows = await query(
+    `SELECT COALESCE(SUM(point_earning_amount), 0) AS total
+     FROM point_earnings
+     WHERE user_id = ?
+       AND created_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)`,
+    [userId],
+  );
+  return Number(rows[0]?.total || 0);
+}
 
 export async function getTrustPoints(userId) {
   const rows = await query(
@@ -80,12 +92,18 @@ export async function getUserAccountSummary(userId) {
     savedBanksCount,
     pendingDepositIds,
     pendingWithdrawalIds,
+    pointLevel,
+    earnedForYear,
   ] = await Promise.all([
     getTrustPoints(userId),
     getSavedBanksCount(userId),
     getPendingDepositIds(userId),
     getPendingWithdrawalIds(userId),
+    getUserPointLevel(userId),
+    getEarnedForYear(userId),
   ]);
+
+  const level = Number(pointLevel?.point_level_id) || 1;
 
   return {
     trust_points: trustPoints,
@@ -94,5 +112,7 @@ export async function getUserAccountSummary(userId) {
     pending_withdrawals_count: pendingWithdrawalIds.length,
     pending_deposit_ids: pendingDepositIds,
     pending_withdrawal_ids: pendingWithdrawalIds,
+    current_tier: getLevelDisplayName(level),
+    earned_for_year: earnedForYear,
   };
 }

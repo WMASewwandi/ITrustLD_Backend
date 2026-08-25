@@ -10,6 +10,7 @@ import {
   getBusinessDayStart,
   parseDateWindow,
 } from '../utils/slTime.js';
+import { pushAmountKeywordClauses } from '../utils/searchAmount.js';
 
 const EXCLUDED_USER_IDS = [4, 16405];
 
@@ -275,7 +276,7 @@ function sanitizePendingSearchParams(status, params) {
     filter: null,
     fromDate: null,
     toDate: null,
-    requirePaymentProof: !keyword,
+    requirePaymentProof: true,
   };
 }
 
@@ -418,6 +419,14 @@ async function listWithdrawalsQuery({
       )`,
     );
     keywordValues.push(like);
+
+    pushAmountKeywordClauses(
+      keywordParts,
+      keywordValues,
+      ['w.cashout_amount', 'w.receiving_amount'],
+      keyword,
+      escapeLike,
+    );
 
     conditions.push(`(${keywordParts.join(' OR ')})`);
     values.push(...keywordValues);

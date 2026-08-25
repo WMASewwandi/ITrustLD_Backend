@@ -3,10 +3,11 @@ import { listActiveLoyaltyMembershipTiers } from '../../services/loyaltyMembersh
 
 export const publicLoyaltyMembershipTiersRouter = Router();
 
-publicLoyaltyMembershipTiersRouter.get('/', async (_req, res, next) => {
+publicLoyaltyMembershipTiersRouter.get('/', async (req, res, next) => {
   try {
-    const tiers = await listActiveLoyaltyMembershipTiers();
-    res.json({ ok: true, tiers, count: tiers.length });
+    const audience = String(req.query.audience || req.query.user_type || '').trim() || 'normal';
+    const tiers = await listActiveLoyaltyMembershipTiers(audience);
+    res.json({ ok: true, tiers, count: tiers.length, audience });
   } catch (error) {
     next(error);
   }
