@@ -116,30 +116,59 @@ function toBool(value) {
   return value === true || value === 1 || value === '1' || String(value).toLowerCase() === 'true';
 }
 
+function normalizeBenefitAudience(value) {
+  const key = String(value || '').trim().toLowerCase();
+  if (key === 'partner' || key === 'affiliate') return 'affiliate';
+  if (key === 'normal' || key === 'user') return 'normal';
+  if (key === 'both' || key === 'all') return 'both';
+  return 'both';
+}
+
+function normalizeBenefit(item) {
+  if (typeof item === 'string') {
+    const text = item.trim();
+    return text ? { text, audience: 'both' } : null;
+  }
+  if (item && typeof item === 'object') {
+    const text = String(item.text || item.benefit || item.label || '').trim();
+    if (!text) return null;
+    return {
+      text,
+      audience: normalizeBenefitAudience(item.audience || item.type || item.userType),
+    };
+  }
+  return null;
+}
+
+function benefitTexts(benefits = []) {
+  return benefits.map((item) => (typeof item === 'string' ? item : item?.text || '')).filter(Boolean);
+}
+
 function benefitsMatch(current = [], expected = []) {
-  return (
-    current.length === expected.length && current.every((item, index) => item === expected[index])
-  );
+  const a = benefitTexts(parseBenefits(current));
+  const b = benefitTexts(parseBenefits(expected));
+  return a.length === b.length && a.every((item, index) => item === b[index]);
 }
 
 function parseBenefits(value) {
+  let list = [];
   if (Array.isArray(value)) {
-    return value.map((item) => String(item || '').trim()).filter(Boolean);
-  }
-  if (typeof value === 'string' && value.trim()) {
+    list = value;
+  } else if (typeof value === 'string' && value.trim()) {
     try {
       const parsed = JSON.parse(value);
-      if (Array.isArray(parsed)) {
-        return parsed.map((item) => String(item || '').trim()).filter(Boolean);
-      }
+      list = Array.isArray(parsed) ? parsed : value.split('\n');
     } catch {
-      return value
-        .split('\n')
-        .map((line) => line.trim())
-        .filter(Boolean);
+      list = value.split('\n');
     }
   }
-  return [];
+  return list.map(normalizeBenefit).filter(Boolean);
+}
+
+function filterBenefitsForAudience(benefits, audience) {
+  if (!audience) return benefits;
+  const target = normalizeBenefitAudience(audience);
+  return (benefits || []).filter((item) => item.audience === 'both' || item.audience === target);
 }
 
 async function tableExists() {
@@ -316,9 +345,13 @@ export async function listLoyaltyMembershipTiersAdmin() {
   return { ok: true, tiers };
 }
 
-export async function listActiveLoyaltyMembershipTiers() {
+export async function listActiveLoyaltyMembershipTiers(audience = 'normal') {
   const { tiers } = await listLoyaltyMembershipTiersAdmin();
-  return tiers.filter((tier) => tier.active !== false && tier.isActive !== false);
+  const active = tiers.filter((tier) => tier.active !== false && tier.isActive !== false);
+  return active.map((tier) => ({
+    ...tier,
+    benefits: benefitTexts(filterBenefitsForAudience(tier.benefits, audience || 'normal')),
+  }));
 }
 
 export async function saveLoyaltyMembershipTiers(tiersPayload = []) {

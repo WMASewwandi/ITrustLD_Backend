@@ -271,6 +271,31 @@ export async function markHelpTicketRead(id) {
   };
 }
 
+export async function deleteAllHelpTickets() {
+  await ensureHelpTicketsSchema();
+
+  const countRows = await query(`SELECT COUNT(*) AS total FROM help_tickets`, []);
+  const total = Number(countRows[0]?.total ?? 0);
+  if (total === 0) {
+    return {
+      ok: true,
+      message: 'There are no help tickets to delete.',
+      deleted: 0,
+      unread: 0,
+    };
+  }
+
+  const result = await query(`DELETE FROM help_tickets`, []);
+  const deleted = Number(result.affectedRows ?? result.changes ?? total);
+
+  return {
+    ok: true,
+    message: `${deleted} help ticket${deleted === 1 ? '' : 's'} permanently deleted.`,
+    deleted,
+    unread: 0,
+  };
+}
+
 export async function markAllHelpTicketsRead() {
   await ensureHelpTicketsSchema();
 

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { requireAdminAuth } from '../../middleware/requireAdminAuth.js';
 import { requirePermission } from '../../middleware/requirePermission.js';
 import {
+  deleteAllHelpTickets,
   getHelpTicketById,
   listHelpTickets,
   markAllHelpTicketsRead,
@@ -32,6 +33,19 @@ adminHelpTicketsRouter.patch(
   async (req, res, next) => {
     try {
       const data = await markAllHelpTicketsRead();
+      res.json(data);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminHelpTicketsRouter.delete(
+  '/delete-all',
+  requirePermission('change_help_requests_status'),
+  async (req, res, next) => {
+    try {
+      const data = await deleteAllHelpTickets();
       res.json(data);
     } catch (error) {
       next(error);
