@@ -156,6 +156,10 @@ export function toCustomerRow(row) {
     loyaltyTier: 'Normal',
     nic: mapKycStatus(row.identity_verification, row.identity_document_status),
     address: mapKycStatus(row.address_verification, row.address_document_status),
+    hasNicDocument:
+      row.identity_document_status === 'RECEIVED' && Boolean(row.identity_document_name),
+    hasAddressDocument:
+      row.address_document_status === 'RECEIVED' && Boolean(row.address_document_name),
     status: deriveStatus(row),
     banned: row.account_status === 'BANNED',
     banReason: row.banned_reason || undefined,

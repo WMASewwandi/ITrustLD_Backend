@@ -15,10 +15,19 @@ adminPerformanceRouter.use(requireAdminAuth);
 adminPerformanceRouter.get('/me', async (req, res, next) => {
   try {
     const user = await findSystemUserById(req.auth.userId);
-    const data = await getMyPerformance(req.auth.userId, req.query.period, {
-      name: user?.name,
-      email: user?.email,
-    });
+    const range = {
+      from: req.query.from || req.query.from_date,
+      to: req.query.to || req.query.to_date,
+    };
+    const data = await getMyPerformance(
+      req.auth.userId,
+      req.query.period,
+      {
+        name: user?.name,
+        email: user?.email,
+      },
+      range,
+    );
     res.json({ ok: true, ...data });
   } catch (error) {
     next(error);
@@ -31,7 +40,11 @@ adminPerformanceRouter.get('/team', async (req, res, next) => {
     if (!canViewTeamPerformance(req.auth.roles, permissions)) {
       return res.status(403).json({ message: 'You do not have permission to view team performance.' });
     }
-    const data = await getTeamPerformance(req.query.period);
+    const range = {
+      from: req.query.from || req.query.from_date,
+      to: req.query.to || req.query.to_date,
+    };
+    const data = await getTeamPerformance(req.query.period, range);
     res.json({ ok: true, ...data });
   } catch (error) {
     next(error);
