@@ -304,7 +304,7 @@ export async function logoutUser(userId) {
   return { ok: true };
 }
 
-export async function getUserSession(userId) {
+export async function getUserSession(userId, options = {}) {
   const user = await findUserById(userId);
   if (!user) {
     throw validationError('User not found.', 404);
@@ -319,7 +319,7 @@ export async function getUserSession(userId) {
     throw validationError('This account is not authorized for the user portal.', 403);
   }
 
-  const accountHolder = await findAccountHolderByUserId(userId);
+  const accountHolder = options.accountHolder ?? (await findAccountHolderByUserId(userId));
   if (isAccountBanned(accountHolder)) {
     throw validationError('Your account has been banned.', 403);
   }

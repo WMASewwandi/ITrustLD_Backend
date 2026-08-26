@@ -1,25 +1,29 @@
 import { query } from '../config/database.js';
 import { getLevelDisplayName, getUserPointLevel } from './pointEarning.service.js';
 
-async function getEarnedForYear(userId) {
+async function getPointTotals(userId) {
   const rows = await query(
-    `SELECT COALESCE(SUM(point_earning_amount), 0) AS total
-     FROM point_earnings
-     WHERE user_id = ?
-       AND created_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)`,
-    [userId],
-  );
-  return Number(rows[0]?.total || 0);
-}
-
-export async function getTrustPoints(userId) {
-  const rows = await query(
-    `SELECT COALESCE(SUM(point_earning_amount), 0) AS total
+    `SELECT
+        COALESCE(SUM(point_earning_amount), 0) AS total,
+        COALESCE(SUM(
+          CASE
+            WHEN created_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR) THEN point_earning_amount
+            ELSE 0
+          END
+        ), 0) AS year_total
      FROM point_earnings
      WHERE user_id = ?`,
     [userId],
   );
-  return Number(rows[0]?.total || 0);
+  return {
+    trustPoints: Number(rows[0]?.total || 0),
+    earnedForYear: Number(rows[0]?.year_total || 0),
+  };
+}
+
+export async function getTrustPoints(userId) {
+  const totals = await getPointTotals(userId);
+  return totals.trustPoints;
 }
 
 export async function getSavedBanksCount(userId) {
@@ -56,6 +60,8 @@ export async function getPendingWithdrawalsCount(userId) {
   return Number(rows[0]?.count || 0);
 }
 
+const PENDING_ID_LIMIT = 5;
+
 export async function getPendingDepositIds(userId) {
   const rows = await query(
     `SELECT COALESCE(transaction_id, CAST(id AS CHAR)) AS transaction_id
@@ -63,7 +69,8 @@ export async function getPendingDepositIds(userId) {
      WHERE user_id = ?
        AND transaction_status = 'Pending'
        AND payment_proof IS NOT NULL
-     ORDER BY created_at DESC`,
+     ORDER BY created_at DESC
+     LIMIT ${PENDING_ID_LIMIT}`,
     [userId],
   );
   return rows.map((row) => String(row.transaction_id));
@@ -76,7 +83,8 @@ export async function getPendingWithdrawalIds(userId) {
      WHERE user_id = ?
        AND transaction_status = 'Pending'
        AND cashout_payment_proof IS NOT NULL
-     ORDER BY created_at DESC`,
+     ORDER BY created_at DESC
+     LIMIT ${PENDING_ID_LIMIT}`,
     [userId],
   );
   return rows.map((row) => String(row.transaction_id));
@@ -88,31 +96,33 @@ export function resolveUserType(accountHolder) {
 
 export async function getUserAccountSummary(userId) {
   const [
-    trustPoints,
+    pointTotals,
     savedBanksCount,
+    pendingDepositsCount,
+    pendingWithdrawalsCount,
     pendingDepositIds,
     pendingWithdrawalIds,
     pointLevel,
-    earnedForYear,
   ] = await Promise.all([
-    getTrustPoints(userId),
+    getPointTotals(userId),
     getSavedBanksCount(userId),
+    getPendingDepositsCount(userId),
+    getPendingWithdrawalsCount(userId),
     getPendingDepositIds(userId),
     getPendingWithdrawalIds(userId),
     getUserPointLevel(userId),
-    getEarnedForYear(userId),
   ]);
 
   const level = Number(pointLevel?.point_level_id) || 1;
 
   return {
-    trust_points: trustPoints,
+    trust_points: pointTotals.trustPoints,
     saved_banks_count: savedBanksCount,
-    pending_deposits_count: pendingDepositIds.length,
-    pending_withdrawals_count: pendingWithdrawalIds.length,
+    pending_deposits_count: pendingDepositsCount,
+    pending_withdrawals_count: pendingWithdrawalsCount,
     pending_deposit_ids: pendingDepositIds,
     pending_withdrawal_ids: pendingWithdrawalIds,
     current_tier: getLevelDisplayName(level),
-    earned_for_year: earnedForYear,
+    earned_for_year: pointTotals.earnedForYear,
   };
 }

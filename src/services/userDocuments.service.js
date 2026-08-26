@@ -37,8 +37,9 @@ function formatDocTypeLabel(apiType, fallback = '—') {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-export async function buildDocumentRows(accountHolder) {
+export async function buildDocumentRows(accountHolder, options = {}) {
   if (!accountHolder) return [];
+  const checkStorage = options.checkStorage !== false;
 
   const docs = [];
   const identityType = accountHolder.identity_document_type;
@@ -78,7 +79,11 @@ export async function buildDocumentRows(accountHolder) {
     let backStatus = 'Pending';
     if (accountHolder.identity_document_name) {
       const backFilename = deriveBackDocumentFilename(accountHolder.identity_document_name);
-      const hasBack = backFilename ? await documentExists(backFilename) : false;
+      const hasBack = checkStorage
+        ? backFilename
+          ? await documentExists(backFilename)
+          : false
+        : Boolean(backFilename);
       if (hasBack) {
         backStatus = mapVerificationStatus(
           accountHolder.identity_verification,
