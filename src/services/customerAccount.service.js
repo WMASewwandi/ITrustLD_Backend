@@ -40,26 +40,39 @@ const SELECT_COLUMNS = `
   account_holders.updated_at
 `;
 
+const HAS_NIC_DOCUMENT = `
+  identity_document_status = 'RECEIVED'
+  AND identity_document_name IS NOT NULL
+  AND TRIM(identity_document_name) != ''
+`;
+
+const HAS_ADDRESS_DOCUMENT = `
+  address_document_status = 'RECEIVED'
+  AND address_document_name IS NOT NULL
+  AND TRIM(address_document_name) != ''
+`;
+
 const FILTER_WHERE = {
-  // Matches Laravel loadAllPendingUsers — "All Pending Users" in admin nav.
+  // Actionable pending KYC only: unverified NIC/address with an uploaded file.
   pending: `
     email_verification = 'VERIFIED'
     AND mobile_number_verification = 'VERIFIED'
-    AND identity_document_status = 'RECEIVED'
-    AND (address_verification = 'NOT_VERIFIED' OR identity_verification = 'NOT_VERIFIED')
+    AND (
+      (identity_verification = 'NOT_VERIFIED' AND ${HAS_NIC_DOCUMENT})
+      OR (address_verification = 'NOT_VERIFIED' AND ${HAS_ADDRESS_DOCUMENT})
+    )
   `,
   'address-pending': `
     email_verification = 'VERIFIED'
     AND mobile_number_verification = 'VERIFIED'
-    AND identity_document_status = 'RECEIVED'
-    AND address_document_status = 'RECEIVED'
     AND address_verification = 'NOT_VERIFIED'
+    AND ${HAS_ADDRESS_DOCUMENT}
   `,
   'nic-pending': `
     email_verification = 'VERIFIED'
     AND mobile_number_verification = 'VERIFIED'
-    AND identity_document_status = 'RECEIVED'
     AND identity_verification = 'NOT_VERIFIED'
+    AND ${HAS_NIC_DOCUMENT}
   `,
   'mobile-pending': `
     mobile_number_verification = 'NOT_VERIFIED'

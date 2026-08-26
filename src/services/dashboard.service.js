@@ -170,10 +170,10 @@ function buildNotifications({ accountHolder, summary, documents }) {
 export async function getUserDashboard(userId) {
   const accountHolder = await findAccountHolderByUserId(userId);
   const [user, documents, recentTransactions, blogPosts] = await Promise.all([
-    getUserSession(userId),
-    buildDocumentRows(accountHolder),
+    getUserSession(userId, { accountHolder }),
+    buildDocumentRows(accountHolder, { checkStorage: false }),
     getRecentTransactions(userId),
-    listPublishedBlogPostsForUser(),
+    listPublishedBlogPostsForUser(6),
   ]);
 
   const summary = {

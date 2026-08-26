@@ -76,13 +76,15 @@ async function mapPublishedBlogPostForUser(row) {
   };
 }
 
-/** All published posts for the user dashboard / public news feed (no limit). */
-export async function listPublishedBlogPostsForUser() {
+/** Published posts for the user dashboard / public news feed. */
+export async function listPublishedBlogPostsForUser(limit = 12) {
+  const safeLimit = Math.max(1, Math.min(50, Number(limit) || 12));
   const rows = await query(
     `SELECT id, title, description, banner, created_at, updated_at
      FROM blog_posts
      WHERE is_published = 1
-     ORDER BY created_at DESC, id DESC`,
+     ORDER BY created_at DESC, id DESC
+     LIMIT ${safeLimit}`,
   );
 
   return Promise.all(rows.map((row) => mapPublishedBlogPostForUser(row)));
