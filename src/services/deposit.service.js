@@ -355,11 +355,11 @@ async function listDepositsQuery({
 
   if (dateWindow.from) {
     conditions.push('d.updated_at >= ?');
-    values.push(dateWindow.from);
+    values.push(formatTimestampSl(dateWindow.from));
   }
   if (dateWindow.to) {
     conditions.push('d.updated_at < ?');
-    values.push(dateWindow.to);
+    values.push(formatTimestampSl(dateWindow.to));
   }
 
   const whereSql = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -427,7 +427,7 @@ async function getDepositTotals(status, assignedToUserId) {
     const today = parseDateWindow('today');
     conditions.push('d.updated_at >= ?');
     conditions.push('d.updated_at < ?');
-    values.push(today.from, today.to);
+    values.push(formatTimestampSl(today.from), formatTimestampSl(today.to));
   }
 
   const rows = await query(

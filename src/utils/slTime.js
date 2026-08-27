@@ -66,8 +66,8 @@ export function parseDbDateTime(value) {
 
 /**
  * Parse MySQL DATETIME values for this app.
- * Pool uses `timezone: '+05:30'` and session `time_zone`, so mysql2 Date
- * values are already correct instants; naive strings are treated as SL.
+ * Pool reads literal strings (UTC session + dateStrings); naive values
+ * are Sri Lanka wall-clock as written by Laravel and nowSqlDateTime().
  */
 export function parseMysqlWallClockDateTime(value) {
   return parseDbDateTime(value);
@@ -224,6 +224,14 @@ export function yearRangeEndSl(year) {
 }
 
 export function formatTimestampSl(value) {
+  if (value == null || value === '') return '';
+  if (!(value instanceof Date)) {
+    const raw = String(value).trim();
+    const naive = raw.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})/);
+    if (naive && !/[zZ]$/.test(raw) && !/[+-]\d{2}:\d{2}$/.test(raw)) {
+      return `${naive[1]} ${naive[2]}`;
+    }
+  }
   const date = parseDbDateTime(value);
   if (!date) return value == null ? '' : String(value);
   const parts = getColomboDateParts(date);

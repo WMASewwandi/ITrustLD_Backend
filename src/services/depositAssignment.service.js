@@ -1,4 +1,5 @@
 import { query } from '../config/database.js';
+import { nowSqlDateTime } from '../utils/slTime.js';
 import {
   findBestExecutive,
   findExecutiveAmongCandidates,
@@ -37,9 +38,9 @@ export async function autoAssignDeposit(deposit) {
 
   await query(
     `UPDATE deposits
-     SET assigned_to = ?, updated_at = NOW()
+     SET assigned_to = ?, updated_at = ?
      WHERE id = ?`,
-    [executive.id, deposit.id],
+    [executive.id, nowSqlDateTime(), deposit.id],
   );
 
   await touchExecutiveLastAssigned(executive.id);
@@ -85,8 +86,9 @@ export async function refillDepositPendingForExecutive(userId) {
 
   const ids = rows.map((row) => row.id);
   const placeholders = ids.map(() => '?').join(', ');
-  await query(`UPDATE deposits SET assigned_to = ?, updated_at = NOW() WHERE id IN (${placeholders})`, [
+  await query(`UPDATE deposits SET assigned_to = ?, updated_at = ? WHERE id IN (${placeholders})`, [
     executiveId,
+    nowSqlDateTime(),
     ...ids,
   ]);
   await touchExecutiveLastAssigned(executiveId);

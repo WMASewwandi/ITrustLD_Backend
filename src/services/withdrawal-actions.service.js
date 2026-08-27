@@ -1,7 +1,7 @@
 import { query } from '../config/database.js';
 import { sendTemplatedEmailAndSms, sendTemplatedSmsOnly } from './notification.service.js';
 import { buildExecutivesForAssignment } from './shiftAssignment.service.js';
-import { parseDateWindow } from '../utils/slTime.js';
+import { nowSqlDateTime, parseDateWindow } from '../utils/slTime.js';
 import {
   withdrawalApprovedEmailHtml,
   withdrawalRejectedEmailHtml,
@@ -293,27 +293,29 @@ export async function updateWithdrawalStatus(
   const accountHolder = ctx.accountHolder;
 
   if (normalizedStatus === 'Pending') {
+    const now = nowSqlDateTime();
     await query(
       `UPDATE withdrawals
        SET transaction_status = 'Pending',
-           pending_date = NOW(),
+           pending_date = ?,
            pendings_by_admin = ?,
            message = 'Your transaction is in progress',
-           updated_at = NOW()
+           updated_at = ?
        WHERE id = ?`,
-      [adminId, withdrawal.id],
+      [now, adminId, now, withdrawal.id],
     );
     await logSystemUserAction(adminId, SYSTEM_USER_ACTIONS.WITHDRAWAL_PENDING);
   } else if (normalizedStatus === 'Pending Authorization') {
+    const now = nowSqlDateTime();
     await query(
       `UPDATE withdrawals
        SET transaction_status = 'Pending Authorization',
-           pending_date = NOW(),
+           pending_date = ?,
            pendings_by_admin = ?,
            message = 'Your transaction is awaiting authorization',
-           updated_at = NOW()
+           updated_at = ?
        WHERE id = ?`,
-      [adminId, withdrawal.id],
+      [now, adminId, now, withdrawal.id],
     );
     await logSystemUserAction(adminId, SYSTEM_USER_ACTIONS.WITHDRAWAL_PENDING);
     try {
@@ -322,31 +324,33 @@ export async function updateWithdrawalStatus(
       console.error('[withdrawal:refill-pending]', error.message);
     }
   } else if (normalizedStatus === 'Completed') {
+    const now = nowSqlDateTime();
     await query(
       `UPDATE withdrawals
        SET transaction_status = 'Completed',
-           approved_date = NOW(),
+           approved_date = ?,
            approved_by_admin = ?,
            message = 'Please check your wallet',
-           updated_at = NOW()
+           updated_at = ?
        WHERE id = ?`,
-      [adminId, withdrawal.id],
+      [now, adminId, now, withdrawal.id],
     );
 
     await notifyWithdrawalStatus(accountHolder, withdrawal, ctx, 'Completed');
     await logSystemUserAction(adminId, SYSTEM_USER_ACTIONS.WITHDRAWAL_APPROVE);
   } else if (normalizedStatus === 'Rejected') {
+    const now = nowSqlDateTime();
     await query(
       `UPDATE withdrawals
        SET transaction_status = 'Rejected',
-           rejected_date = NOW(),
+           rejected_date = ?,
            rejected_by_admin = ?,
            rejected_reason = ?,
            rejected_reason_message = ?,
            message = 'Your transaction has been rejected',
-           updated_at = NOW()
+           updated_at = ?
        WHERE id = ?`,
-      [adminId, rejectedReason || null, rejectedReasonMessage || null, withdrawal.id],
+      [now, adminId, rejectedReason || null, rejectedReasonMessage || null, now, withdrawal.id],
     );
 
     await notifyWithdrawalStatus(

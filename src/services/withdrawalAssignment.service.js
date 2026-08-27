@@ -1,4 +1,5 @@
 import { query } from '../config/database.js';
+import { nowSqlDateTime } from '../utils/slTime.js';
 import {
   findBestExecutive,
   findExecutiveAmongCandidates,
@@ -37,9 +38,9 @@ export async function autoAssignWithdrawal(withdrawal) {
 
   await query(
     `UPDATE withdrawals
-     SET assigned_to = ?, updated_at = NOW()
+     SET assigned_to = ?, updated_at = ?
      WHERE id = ?`,
-    [executive.id, withdrawal.id],
+    [executive.id, nowSqlDateTime(), withdrawal.id],
   );
 
   await touchExecutiveLastAssigned(executive.id);
@@ -86,8 +87,8 @@ export async function refillWithdrawalPendingForExecutive(userId) {
   const ids = rows.map((row) => row.id);
   const placeholders = ids.map(() => '?').join(', ');
   await query(
-    `UPDATE withdrawals SET assigned_to = ?, updated_at = NOW() WHERE id IN (${placeholders})`,
-    [executiveId, ...ids],
+    `UPDATE withdrawals SET assigned_to = ?, updated_at = ? WHERE id IN (${placeholders})`,
+    [executiveId, nowSqlDateTime(), ...ids],
   );
   await touchExecutiveLastAssigned(executiveId);
 
