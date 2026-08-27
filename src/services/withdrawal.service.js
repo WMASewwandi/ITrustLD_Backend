@@ -6,6 +6,7 @@ import { batchScammerCheck, isScammerMatch } from './scammer.service.js';
 import { getUserPendingShowCount } from './systemUser.service.js';
 import { getUserStatusUpdateScope } from './statusUpdateScope.service.js';
 import {
+  currentColomboDaySqlRange,
   formatTimestampSl,
   getBusinessDayStart,
   parseDateWindow,
@@ -170,7 +171,7 @@ async function batchSimilarWithdrawals(rows, status) {
     ).values(),
   ];
 
-  const dayStart = getBusinessDayStart();
+  const today = currentColomboDaySqlRange();
   const statusSql =
     status === 'Completed'
       ? `transaction_status = 'Completed'`
@@ -184,10 +185,11 @@ async function batchSimilarWithdrawals(rows, status) {
      FROM withdrawals
      WHERE cashout_payment_proof IS NOT NULL
        AND created_at >= ?
+       AND created_at < ?
        AND ${statusSql}
        AND (${pairClauses})
      GROUP BY cashout_method_id, cashout_account_id`,
-    [dayStart, ...pairValues],
+    [today.from, today.to, ...pairValues],
   );
 
   const result = {};
@@ -663,7 +665,7 @@ export async function listSimilarWithdrawalsToday(auth, { withdrawalId, transact
     source.transaction_status === 'Completed'
       ? `w.transaction_status = 'Completed'`
       : `w.transaction_status != 'Rejected'`;
-  const dayStart = getBusinessDayStart();
+  const today = currentColomboDaySqlRange();
 
   const rows = await query(
     `SELECT w.*, u.name AS user_name, cm.cashout_method_name, po.payment_option_name AS receiving_payment_option_name,
@@ -672,11 +674,12 @@ export async function listSimilarWithdrawalsToday(auth, { withdrawalId, transact
      ${WITHDRAWAL_LIST_JOINS}
      WHERE w.cashout_payment_proof IS NOT NULL
        AND w.created_at >= ?
+       AND w.created_at < ?
        AND w.cashout_method_id = ?
        AND w.cashout_account_id = ?
        AND ${statusSql}
      ORDER BY w.created_at DESC`,
-    [dayStart, source.cashout_method_id, source.cashout_account_id],
+    [today.from, today.to, source.cashout_method_id, source.cashout_account_id],
   );
 
   const adminIds = rows.flatMap((row) => [

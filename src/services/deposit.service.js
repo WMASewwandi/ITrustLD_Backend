@@ -4,6 +4,7 @@ import { batchScammerCheck, isScammerMatch } from './scammer.service.js';
 import { getUserPendingShowCount } from './systemUser.service.js';
 import { getUserStatusUpdateScope } from './statusUpdateScope.service.js';
 import {
+  currentColomboDaySqlRange,
   formatTimestampSl,
   getBusinessDayStart,
   parseDateWindow,
@@ -100,7 +101,7 @@ async function batchSimilarDeposits(rows, status) {
     ).values(),
   ];
 
-  const dayStart = getBusinessDayStart();
+  const today = currentColomboDaySqlRange();
   const statusSql =
     status === 'Completed'
       ? `transaction_status = 'Completed'`
@@ -114,10 +115,11 @@ async function batchSimilarDeposits(rows, status) {
      FROM deposits
      WHERE payment_proof IS NOT NULL
        AND created_at >= ?
+       AND created_at < ?
        AND ${statusSql}
        AND (${pairClauses})
      GROUP BY topup_method_id, topup_account_id`,
-    [dayStart, ...pairValues],
+    [today.from, today.to, ...pairValues],
   );
 
   const result = {};
@@ -567,7 +569,7 @@ export async function listSimilarDepositsToday(auth, { depositId, transactionId 
     source.transaction_status === 'Completed'
       ? `d.transaction_status = 'Completed'`
       : `d.transaction_status != 'Rejected'`;
-  const dayStart = getBusinessDayStart();
+  const today = currentColomboDaySqlRange();
   const joins = `
     INNER JOIN users u ON d.user_id = u.id
     INNER JOIN topup_methods tm ON d.topup_method_id = tm.id
@@ -582,11 +584,12 @@ export async function listSimilarDepositsToday(auth, { depositId, transactionId 
      ${joins}
      WHERE d.payment_proof IS NOT NULL
        AND d.created_at >= ?
+       AND d.created_at < ?
        AND d.topup_method_id = ?
        AND d.topup_account_id = ?
        AND ${statusSql}
      ORDER BY d.created_at DESC`,
-    [dayStart, source.topup_method_id, source.topup_account_id],
+    [today.from, today.to, source.topup_method_id, source.topup_account_id],
   );
 
   const adminIds = rows.flatMap((row) => [
