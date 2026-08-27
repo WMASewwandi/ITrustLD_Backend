@@ -188,6 +188,34 @@ function mapLevelRow(row) {
   };
 }
 
+/** Sum client_bonus_amount per level from non-expired, non-deleted rows. */
+export async function getNonExpiredClientBonusTotalsByLevel() {
+  const rows = await query(
+    `SELECT id, client_bonus_amount, loyalty_level, is_deleted, created_at, updated_at
+     FROM loyalty_management_levels
+     WHERE loyalty_level IN ('SILVER', 'GOLD', 'DIAMOND', 'VIP', 'VVIP')
+       AND (is_deleted = 0 OR is_deleted IS NULL OR is_deleted = FALSE)`,
+  );
+
+  const totals = {
+    silver: 0,
+    gold: 0,
+    diamond: 0,
+    vip: 0,
+    vvip: 0,
+  };
+
+  for (const row of rows) {
+    if (mapLevelRow(row).is_expired) continue;
+    const key = String(row.loyalty_level || '').trim().toLowerCase();
+    if (key in totals) {
+      totals[key] += Number(row.client_bonus_amount) || 0;
+    }
+  }
+
+  return totals;
+}
+
 async function assertLevelBonusMutable(loyaltyLevelId, { allowExpired = false } = {}) {
   const rows = await query(
     `SELECT id, created_at, updated_at

@@ -24,7 +24,10 @@ import {
   getMembershipTierThresholds,
   resolveLevelId,
 } from './loyaltyMembershipTier.service.js';
-import { ensureBonusTierSchema } from './adminLoyaltyManagement.service.js';
+import {
+  ensureBonusTierSchema,
+  getNonExpiredClientBonusTotalsByLevel,
+} from './adminLoyaltyManagement.service.js';
 import { getClientBonusSummaryForUser } from './userVoucherClaims.service.js';
 import { listAvailableGiftsForUser } from './userLoyaltyGifts.service.js';
 import {
@@ -187,10 +190,18 @@ async function getPointsBreakdownForYear(userId) {
 }
 
 async function getConfiguredPartnerTiers() {
-  const thresholds = await getMembershipTierThresholds();
+  const [thresholds, voucherTotals] = await Promise.all([
+    getMembershipTierThresholds(),
+    getNonExpiredClientBonusTotalsByLevel(),
+  ]);
   return PARTNER_TIER_THRESHOLDS.map((tier) => {
     const match = thresholds.find((item) => item.slug === tier.id);
-    return match ? { ...tier, levelPoints: Number(match.points) || 0 } : tier;
+    const voucherAmount = voucherTotals[tier.id];
+    return {
+      ...tier,
+      levelPoints: match ? Number(match.points) || 0 : tier.levelPoints,
+      ...(voucherAmount != null ? { voucherAmount } : {}),
+    };
   });
 }
 

@@ -195,8 +195,8 @@ function buildMetrics(typeStats) {
   };
 }
 
-function formatUsd(amount) {
-  return `$ ${Number(amount || 0).toLocaleString('en-US', {
+function formatLkr(amount) {
+  return `LKR ${Number(amount || 0).toLocaleString('en-US', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
@@ -232,7 +232,7 @@ function formatHandleTimeDelta(currentSeconds, previousSeconds) {
 function formatMoneyDelta(current, previous) {
   const diff = current - previous;
   const sign = diff > 0 ? '+' : diff < 0 ? '-' : '';
-  return `${sign}$${Math.abs(diff).toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
+  return `${sign}LKR ${Math.abs(diff).toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
 }
 
 function buildBreakdown(metrics) {
@@ -252,7 +252,7 @@ function buildBreakdown(metrics) {
       label: row.label,
       count,
       pct,
-      commission: formatUsd(share),
+      commission: formatLkr(share),
     };
   });
 }
@@ -522,12 +522,12 @@ function buildResponseFromStats(period, currentStats, previousStats, audit = {},
         currentMetrics.avgHandleSeconds,
         previousMetrics.avgHandleSeconds,
       ),
-      commission: formatUsd(currentMetrics.commission),
+      commission: formatLkr(currentMetrics.commission),
       commissionDelta: formatMoneyDelta(currentMetrics.commission, previousMetrics.commission),
       commissionHint:
         currentMetrics.handled < COMMISSION_BASE_TX
-          ? `${currentMetrics.handled} txs · $0 until 1,000`
-          : `${currentMetrics.handled} txs · $5,000 per 500 after 1,000`,
+          ? `${currentMetrics.handled} txs · LKR 0 until 1,000`
+          : `${currentMetrics.handled} txs · LKR 5,000 per 500 after 1,000`,
     },
     trend: buildTrend(period, [currentStats.buckets], resolvedWindow),
     breakdown: buildBreakdown(currentMetrics),
@@ -702,11 +702,11 @@ export async function getTeamPerformance(periodInput, range = {}) {
         currentMetrics.avgHandleSeconds,
         previousMetrics.avgHandleSeconds,
       ),
-      commission: formatUsd(memberCommissionTotal),
+      commission: formatLkr(memberCommissionTotal),
       commissionHint:
         memberCommissionTotal > 0
-          ? `${currentMetrics.handled} txs · $5,000 per 500 after 1,000 (per admin)`
-          : `${currentMetrics.handled} txs · $0 until 1,000 per admin`,
+          ? `${currentMetrics.handled} txs · LKR 5,000 per 500 after 1,000 (per admin)`
+          : `${currentMetrics.handled} txs · LKR 0 until 1,000 per admin`,
       trendDelta: `${trendDelta >= 0 ? '+' : ''}${trendDelta.toFixed(1)}%`,
     },
     trend,
