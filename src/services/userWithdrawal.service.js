@@ -8,7 +8,7 @@ import { resolveWalletLogoPublicUrl } from './walletLogoStorage.service.js';
 import { ensureWalletNavigateSchema } from './wallet.service.js';
 import { autoAssignWithdrawal } from './withdrawalAssignment.service.js';
 import { storeWithdrawalProof } from './withdrawalProofStorage.service.js';
-import { formatDateTimeParts, resolveFilterDateRange } from '../utils/slTime.js';
+import { formatDateTimeParts, nowSqlDateTime, resolveFilterDateRange } from '../utils/slTime.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -708,6 +708,7 @@ export async function createUserWithdrawal(userId, payload) {
   }
 
   const transactionId = generateTransactionId(userId);
+  const now = nowSqlDateTime();
 
   const result = await query(
     `INSERT INTO withdrawals (
@@ -717,7 +718,7 @@ export async function createUserWithdrawal(userId, payload) {
       applied_payment_option_rate, applied_payment_option_rate_id,
       cashout_method_id, cashout_account_id,
       transaction_status, message, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', 'Check your wallet', NOW(), NOW())`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', 'Check your wallet', ?, ?)`,
     [
       userId,
       transactionId,
@@ -730,6 +731,8 @@ export async function createUserWithdrawal(userId, payload) {
       paymentOptionRateId,
       cashoutMethodId,
       cashoutAccountId,
+      now,
+      now,
     ],
   );
 
@@ -836,13 +839,14 @@ export async function saveWithdrawalPaymentProof(userId, withdrawalId, file, pay
          selected_account_type = ?,
          withdrawal_account_id = ?,
          account_details_log = ?,
-         updated_at = NOW()
+         updated_at = ?
      WHERE id = ? AND user_id = ?`,
     [
       filename,
       selectedAccountType,
       Number(selectedAccountId),
       JSON.stringify(accountDetailsLog),
+      nowSqlDateTime(),
       withdrawal.id,
       userId,
     ],

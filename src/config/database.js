@@ -3,7 +3,6 @@ import path from 'node:path';
 import mysql from 'mysql2/promise';
 import Database from 'better-sqlite3';
 import { env } from './env.js';
-import { SL_MYSQL_OFFSET } from '../utils/slTime.js';
 
 /** @type {import('mysql2/promise').Pool | null} */
 let mysqlPool = null;
@@ -36,8 +35,10 @@ export async function connectDatabase() {
     return { driver: 'sqlite' };
   }
 
-  // Store and read naive DATETIMEs as Sri Lanka wall-clock (matches Laravel business time).
-  // Session time_zone makes NOW()/CURRENT_TIMESTAMP return SL time on every connection.
+  // Laravel writes TIMESTAMP/DATETIME as naive wall-clock with a UTC MySQL session.
+  // Do not SET +05:30 here: that converts TIMESTAMP again and makes old-system
+  // morning times show ~5:30 later (e.g. 10:05 → 15:35). Read literal strings
+  // and treat them as Asia/Colombo in slTime.js.
   mysqlPool = mysql.createPool({
     host: env.db.host,
     port: env.db.port,
@@ -47,16 +48,17 @@ export async function connectDatabase() {
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0,
-    timezone: SL_MYSQL_OFFSET,
+    timezone: 'Z',
+    dateStrings: true,
   });
 
   mysqlPool.on('connection', (connection) => {
-    connection.query(`SET time_zone = '${SL_MYSQL_OFFSET}'`);
+    connection.query(`SET time_zone = '+00:00'`);
   });
 
   const connection = await mysqlPool.getConnection();
   try {
-    await connection.query(`SET time_zone = '${SL_MYSQL_OFFSET}'`);
+    await connection.query(`SET time_zone = '+00:00'`);
     await connection.ping();
   } finally {
     connection.release();

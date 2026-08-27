@@ -1,7 +1,7 @@
 import { query } from '../config/database.js';
 import { sendTemplatedEmailAndSms, sendTemplatedSmsOnly } from './notification.service.js';
 import { buildExecutivesForAssignment } from './shiftAssignment.service.js';
-import { parseDateWindow } from '../utils/slTime.js';
+import { nowSqlDateTime, parseDateWindow } from '../utils/slTime.js';
 import {
   depositApprovedEmailHtml,
   depositRejectedEmailHtml,
@@ -233,45 +233,48 @@ export async function updateDepositStatus(
   const accountHolder = ctx.accountHolder;
 
   if (normalizedStatus === 'Pending') {
+    const now = nowSqlDateTime();
     await query(
       `UPDATE deposits
        SET transaction_status = 'Pending',
-           pending_date = NOW(),
+           pending_date = ?,
            pendings_by_admin = ?,
            message = 'Your transaction is in progress',
-           updated_at = NOW()
+           updated_at = ?
        WHERE id = ?`,
-      [adminId, deposit.id],
+      [now, adminId, now, deposit.id],
     );
     await reverseDepositPoints(deposit);
     await logSystemUserAction(adminId, SYSTEM_USER_ACTIONS.DEPOSIT_PENDING);
   } else if (normalizedStatus === 'Completed') {
+    const now = nowSqlDateTime();
     await query(
       `UPDATE deposits
        SET transaction_status = 'Completed',
-           approved_date = NOW(),
+           approved_date = ?,
            approved_by_admin = ?,
            message = 'Please check your wallet',
-           updated_at = NOW()
+           updated_at = ?
        WHERE id = ?`,
-      [adminId, deposit.id],
+      [now, adminId, now, deposit.id],
     );
 
     await notifyDepositStatus(auth, accountHolder, deposit, ctx, 'Completed');
     await awardDepositPoints(deposit, accountHolder);
     await logSystemUserAction(adminId, SYSTEM_USER_ACTIONS.DEPOSIT_APPROVE);
   } else if (normalizedStatus === 'Rejected') {
+    const now = nowSqlDateTime();
     await query(
       `UPDATE deposits
        SET transaction_status = 'Rejected',
-           rejected_date = NOW(),
+           rejected_date = ?,
            rejected_by_admin = ?,
            rejected_reason = ?,
            rejected_reason_message = ?,
            message = 'Your transaction has been rejected',
-           updated_at = NOW()
+           updated_at = ?
        WHERE id = ?`,
-      [adminId, rejectedReason || null, rejectedReasonMessage || null, deposit.id],
+      [now, adminId, rejectedReason || null, rejectedReasonMessage || null, now, deposit.id],
     );
 
     await reverseDepositPoints(deposit);

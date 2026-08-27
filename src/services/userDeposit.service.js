@@ -10,6 +10,7 @@ import { resolveWalletLogoPublicUrl } from './walletLogoStorage.service.js';
 import { ensureWalletNavigateSchema } from './wallet.service.js';
 import {
   formatDateTimeParts,
+  nowSqlDateTime,
   resolveFilterDateRange,
 } from '../utils/slTime.js';
 
@@ -487,6 +488,7 @@ export async function createUserDeposit(userId, payload) {
   }
 
   const transactionId = generateTransactionId(userId);
+  const now = nowSqlDateTime();
 
   const result = await query(
     `INSERT INTO deposits (
@@ -496,7 +498,7 @@ export async function createUserDeposit(userId, payload) {
       applied_payment_option_rate, applied_payment_option_rate_id,
       topup_method_id, topup_account_id,
       transaction_status, message, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', 'Your deposit is being processed.', NOW(), NOW())`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', 'Your deposit is being processed.', ?, ?)`,
     [
       userId,
       transactionId,
@@ -509,6 +511,8 @@ export async function createUserDeposit(userId, payload) {
       paymentOptionRateId,
       topupMethodId,
       topupAccountId,
+      now,
+      now,
     ],
   );
 
@@ -594,9 +598,9 @@ export async function saveDepositPaymentProof(userId, depositId, file) {
 
   await query(
     `UPDATE deposits
-     SET payment_proof = ?, updated_at = NOW()
+     SET payment_proof = ?, updated_at = ?
      WHERE id = ? AND user_id = ?`,
-    [filename, deposit.id, userId],
+    [filename, nowSqlDateTime(), deposit.id, userId],
   );
 
   const updatedDeposit = { ...deposit, payment_proof: filename };

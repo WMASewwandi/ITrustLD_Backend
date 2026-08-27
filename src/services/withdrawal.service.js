@@ -434,11 +434,11 @@ async function listWithdrawalsQuery({
 
   if (dateWindow.from) {
     conditions.push('w.updated_at >= ?');
-    values.push(dateWindow.from);
+    values.push(formatTimestampSl(dateWindow.from));
   }
   if (dateWindow.to) {
     conditions.push('w.updated_at < ?');
-    values.push(dateWindow.to);
+    values.push(formatTimestampSl(dateWindow.to));
   }
 
   const whereSql = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -508,7 +508,7 @@ async function getWithdrawalTotals(status, assignedToUserId) {
     const today = parseDateWindow('today');
     conditions.push('w.updated_at >= ?');
     conditions.push('w.updated_at < ?');
-    values.push(today.from, today.to);
+    values.push(formatTimestampSl(today.from), formatTimestampSl(today.to));
   }
 
   const rows = await query(
