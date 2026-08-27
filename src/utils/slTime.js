@@ -181,6 +181,15 @@ export function startOfColomboDay(date = new Date()) {
   return colomboLocalToDate({ year: parts.year, month: parts.month, day: parts.day });
 }
 
+/** Calendar day in Sri Lanka as naive SQL bounds (excludes yesterday). */
+export function currentColomboDaySqlRange(date = new Date()) {
+  const from = startOfColomboDay(date);
+  return {
+    from: formatTimestampSl(from),
+    to: formatTimestampSl(addColomboDays(from, 1)),
+  };
+}
+
 export function startOfColomboWeek(date = new Date()) {
   const parts = getColomboDateParts(date);
   const anchor = colomboLocalToDate({ year: parts.year, month: parts.month, day: parts.day });
