@@ -21,6 +21,20 @@ function isWithdrawalExecutive(roles) {
   );
 }
 
+async function getWithdrawalQueueScope(userId, roles = [], permissions = []) {
+  const isAdmin = roles.includes('super-admin') || roles.includes('sub-admin');
+  const isExec = isWithdrawalExecutive(roles);
+  let perms = Array.isArray(permissions) ? permissions : [];
+  if (!isAdmin && !isExec && userId && !perms.includes(AUTHORIZE_WITHDRAWAL_PERMISSION)) {
+    perms = await getUserPermissions(userId);
+  }
+  const isAuthorizerOnly =
+    (perms.includes(AUTHORIZE_WITHDRAWAL_PERMISSION) || roles.includes('withdrawal-authorizer')) &&
+    !isAdmin &&
+    !isExec;
+  return { isExec, isAuthorizerOnly };
+}
+
 async function countPendingDeposits(userId, roles) {
   const conditions = ["transaction_status = 'Pending'", 'payment_proof IS NOT NULL'];
   const values = [];
@@ -37,20 +51,30 @@ async function countPendingDeposits(userId, roles) {
   return Number(rows[0]?.total ?? 0);
 }
 
-async function countPendingWithdrawals(userId, roles, permissions = []) {
-  const isAdmin = roles.includes('super-admin') || roles.includes('sub-admin');
-  const isExec = roles.includes('withdrawal-executive') && !isAdmin;
-  let perms = Array.isArray(permissions) ? permissions : [];
-  if (!isAdmin && !isExec && userId && !perms.includes(AUTHORIZE_WITHDRAWAL_PERMISSION)) {
-    perms = await getUserPermissions(userId);
-  }
-  const isAuthorizerOnly =
-    perms.includes(AUTHORIZE_WITHDRAWAL_PERMISSION) && !isAdmin && !isExec;
-  const status = isAuthorizerOnly ? 'Pending Authorization' : 'Pending';
-  const conditions = ['transaction_status = ?', 'cashout_payment_proof IS NOT NULL'];
-  const values = [status];
+async function countPendingWithdrawals(userId, { isExec, isAuthorizerOnly } = {}) {
+  const conditions = ["transaction_status = 'Pending'", 'cashout_payment_proof IS NOT NULL'];
+  const values = [];
 
-  if (isExec && userId) {
+  if ((isExec || isAuthorizerOnly) && userId) {
+    conditions.push('assigned_to = ?');
+    values.push(userId);
+  }
+
+  const rows = await query(
+    `SELECT COUNT(*) AS total FROM withdrawals WHERE ${conditions.join(' AND ')}`,
+    values,
+  );
+  return Number(rows[0]?.total ?? 0);
+}
+
+async function countPendingAuthorizationWithdrawals(userId, { isAuthorizerOnly } = {}) {
+  const conditions = [
+    "transaction_status = 'Pending Authorization'",
+    'cashout_payment_proof IS NOT NULL',
+  ];
+  const values = [];
+
+  if (isAuthorizerOnly && userId) {
     conditions.push('assigned_to = ?');
     values.push(userId);
   }
@@ -89,12 +113,14 @@ async function countPendingVoucherClaims() {
 }
 
 export async function getAdminNavCounts(roles = [], userId = null) {
+  const withdrawalScope = await getWithdrawalQueueScope(userId, roles);
   const [
     usersPending,
     usersAddressPending,
     usersNicPending,
     depositsPending,
     withdrawalsPending,
+    withdrawalsPendingAuthorization,
     loyaltyOrdersPending,
     loyaltyBonusPending,
     loyaltyVouchersPending,
@@ -106,7 +132,8 @@ export async function getAdminNavCounts(roles = [], userId = null) {
     countCustomerAccounts('address-pending'),
     countCustomerAccounts('nic-pending'),
     countPendingDeposits(userId, roles),
-    countPendingWithdrawals(userId, roles),
+    countPendingWithdrawals(userId, withdrawalScope),
+    countPendingAuthorizationWithdrawals(userId, withdrawalScope),
     countPendingLoyaltyOrders(),
     countPendingBonusClaims(),
     countPendingVoucherClaims(),
@@ -122,7 +149,10 @@ export async function getAdminNavCounts(roles = [], userId = null) {
       nic_pending: usersNicPending,
     },
     deposits: { pending: depositsPending },
-    withdrawals: { pending: withdrawalsPending },
+    withdrawals: {
+      pending: withdrawalsPending,
+      pending_authorization: withdrawalsPendingAuthorization,
+    },
     loyalty: {
       orders: loyaltyOrdersPending,
       bonus: loyaltyBonusPending,

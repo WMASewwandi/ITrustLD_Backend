@@ -1,4 +1,5 @@
 import { query } from '../config/database.js';
+import { LARAVEL_USER_MODEL } from '../constants/adminRoles.js';
 import { sendTemplatedEmailAndSms, sendTemplatedSmsOnly } from './notification.service.js';
 import { buildExecutivesForAssignment } from './shiftAssignment.service.js';
 import { nowSqlDateTime, parseDateWindow } from '../utils/slTime.js';
@@ -11,7 +12,10 @@ import {
   logSystemUserAction,
   SYSTEM_USER_ACTIONS,
 } from './systemUserActionLog.service.js';
-import { refillWithdrawalPendingForExecutive } from './withdrawalAssignment.service.js';
+import {
+  autoAssignWithdrawalAuthorizer,
+  refillWithdrawalPendingForExecutive,
+} from './withdrawalAssignment.service.js';
 import { notifyAssignedSystemUser } from './assignedUserNotify.service.js';
 import {
   ensureWithdrawalAuthorizationSchema,
@@ -94,6 +98,10 @@ export async function getExecutivesForWithdrawalAssignment() {
   return buildExecutivesForAssignment('withdrawal-executive');
 }
 
+export async function getAuthorizersForWithdrawalAssignment() {
+  return buildExecutivesForAssignment('withdrawal-authorizer', { includeSubAdmin: false });
+}
+
 export async function assignWithdrawals(auth, { withdrawalIds, executiveId }) {
   if (!isAdmin(auth?.roles || [])) {
     throw validationError('Unauthorized', 403);
@@ -115,25 +123,61 @@ export async function assignWithdrawals(auth, { withdrawalIds, executiveId }) {
   }
 
   const placeholders = ids.map(() => '?').join(', ');
-  const pendingRows = await query(
-    `SELECT id FROM withdrawals WHERE id IN (${placeholders}) AND transaction_status = 'Pending'`,
+  const selectedRows = await query(
+    `SELECT id, transaction_status FROM withdrawals WHERE id IN (${placeholders})`,
     ids,
   );
-  const pendingIds = pendingRows.map((row) => Number(row.id)).filter(Boolean);
-  if (!pendingIds.length) {
-    throw validationError('Only pending withdrawals can be assigned.');
+  const statuses = [...new Set(selectedRows.map((row) => row.transaction_status))];
+  if (!selectedRows.length) {
+    throw validationError('Withdrawal not found.', 404);
+  }
+  if (statuses.length !== 1) {
+    throw validationError('Select withdrawals with the same status to assign.');
+  }
+  const queueStatus = statuses[0];
+  if (queueStatus !== 'Pending' && queueStatus !== 'Pending Authorization') {
+    throw validationError('Only pending or pending-authorization withdrawals can be assigned.');
   }
 
-  const pendingPlaceholders = pendingIds.map(() => '?').join(', ');
-  await query(`UPDATE withdrawals SET assigned_to = ? WHERE id IN (${pendingPlaceholders})`, [
+  const assignableIds = selectedRows.map((row) => Number(row.id)).filter(Boolean);
+  const expectedRole =
+    queueStatus === 'Pending Authorization' ? 'withdrawal-authorizer' : 'withdrawal-executive';
+
+  if (execId != null) {
+    const roleRows = await query(
+      `SELECT r.name
+       FROM model_has_roles mhr
+       INNER JOIN roles r ON r.id = mhr.role_id
+       WHERE mhr.model_id = ? AND mhr.model_type = ?`,
+      [execId, LARAVEL_USER_MODEL],
+    );
+    const roleNames = roleRows.map((row) => row.name);
+    if (
+      !roleNames.includes(expectedRole) &&
+      !(queueStatus === 'Pending' && roleNames.includes('sub-admin'))
+    ) {
+      throw validationError(
+        queueStatus === 'Pending Authorization'
+          ? 'Select a Withdrawal Authorizer.'
+          : 'Select a Withdrawal Executive.',
+      );
+    }
+  }
+
+  const assignPlaceholders = assignableIds.map(() => '?').join(', ');
+  await query(`UPDATE withdrawals SET assigned_to = ? WHERE id IN (${assignPlaceholders})`, [
     execId,
-    ...pendingIds,
+    ...assignableIds,
   ]);
 
   if (execId) {
+    const count = assignableIds.length;
     await notifyAssignedSystemUser({
       userId: execId,
-      message: `${pendingIds.length} pending withdrawal request(s) have been assigned to you. Please review. Thanks`,
+      message:
+        queueStatus === 'Pending Authorization'
+          ? `${count} pending authorization request(s) have been assigned to you. Please review. Thanks`
+          : `${count} pending withdrawal request(s) have been assigned to you. Please review. Thanks`,
       smsType: 'WITHDRAWAL_PENDING',
     }).catch((error) => {
       console.error('[withdrawal:assigned-sms]', error.message);
@@ -143,7 +187,7 @@ export async function assignWithdrawals(auth, { withdrawalIds, executiveId }) {
   return {
     error: false,
     message: execId ? 'Withdrawals assigned successfully' : 'Withdrawals unassigned successfully',
-    assigned_count: pendingIds.length,
+    assigned_count: assignableIds.length,
   };
 }
 
@@ -333,6 +377,11 @@ export async function updateWithdrawalStatus(
       await refillWithdrawalPendingForExecutive(withdrawal.assigned_to || adminId);
     } catch (error) {
       console.error('[withdrawal:refill-pending]', error.message);
+    }
+    try {
+      await autoAssignWithdrawalAuthorizer(withdrawal);
+    } catch (error) {
+      console.error('[withdrawal:assign-authorizer]', error.message);
     }
   } else if (normalizedStatus === 'Completed') {
     const now = nowSqlDateTime();

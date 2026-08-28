@@ -122,6 +122,7 @@ function roleDisplayName(roles) {
   if (roles.includes('sub-admin')) return 'Sub Admin';
   if (roles.includes('deposit-executive')) return 'Deposit Executive';
   if (roles.includes('withdrawal-executive')) return 'Withdrawal Executive';
+  if (roles.includes('withdrawal-authorizer')) return 'Withdrawal Authorizer';
   return 'Executive';
 }
 
@@ -376,6 +377,18 @@ export async function getPendingCountForRole(userId, roles, roleName) {
     return Number(rows[0]?.total) || 0;
   }
 
+  if (roleName === 'withdrawal-authorizer') {
+    const rows = await query(
+      `SELECT COUNT(*) AS total
+       FROM withdrawals
+       WHERE assigned_to = ?
+         AND transaction_status = 'Pending Authorization'
+         AND cashout_payment_proof IS NOT NULL`,
+      [userId],
+    );
+    return Number(rows[0]?.total) || 0;
+  }
+
   const rows = await query(
     `SELECT COUNT(*) AS total
      FROM withdrawals
@@ -467,12 +480,14 @@ export async function findBestExecutive(roleName) {
   return scored[0]?.user || null;
 }
 
-export async function buildExecutivesForAssignment(roleName) {
+export async function buildExecutivesForAssignment(roleName, { includeSubAdmin = true } = {}) {
   await initializeShiftIfNeeded();
   const activeShift = await getActiveShiftForDate();
   const now = new Date();
 
-  const users = await getUsersByRoles([roleName, 'sub-admin']);
+  const users = await getUsersByRoles(
+    includeSubAdmin ? [roleName, 'sub-admin'] : [roleName],
+  );
   const uniqueUsers = [...new Map(users.map((user) => [user.id, user])).values()];
 
   const executives = [];

@@ -4,6 +4,7 @@ import { requirePermission } from '../../middleware/requirePermission.js';
 import {
   assignWithdrawals,
   exportWithdrawalsForAdmin,
+  getAuthorizersForWithdrawalAssignment,
   getExecutivesForWithdrawalAssignment,
   updateWithdrawalStatus,
 } from '../../services/withdrawal-actions.service.js';
@@ -93,7 +94,10 @@ adminWithdrawalsRouter.get(
   requirePermission('read_withdrawal_data'),
   async (req, res, next) => {
     try {
-      const data = await getExecutivesForWithdrawalAssignment();
+      const data =
+        req.query.queue === 'pending-authorization'
+          ? await getAuthorizersForWithdrawalAssignment()
+          : await getExecutivesForWithdrawalAssignment();
       res.json(data);
     } catch (error) {
       next(error);
