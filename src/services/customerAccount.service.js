@@ -17,6 +17,7 @@ import {
 } from './systemUserActionLog.service.js';
 import { findUserById } from './user.service.js';
 import { env } from '../config/env.js';
+import { bumpAdminNavCounts } from './adminNavCountsRevision.service.js';
 import {
   getLevelIdFromThresholds,
   getMembershipTierThresholds,
@@ -638,6 +639,8 @@ export async function updateCustomerKycVerification(
     await notifyKycDecision(holder, 'address', 'VERIFIED');
     await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.ADDRESS_APPROVE);
   }
+
+  bumpAdminNavCounts();
 
   return findCustomerAccountById(accountHolderId);
 }

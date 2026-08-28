@@ -19,6 +19,7 @@ import {
 import { toPublicUser } from './userAuth.service.js';
 import { getUserRoles } from './user.service.js';
 import { env } from '../config/env.js';
+import { bumpAdminNavCounts } from './adminNavCountsRevision.service.js';
 
 const IDENTITY_DOCUMENT_TYPES = new Set(['NIC', 'DL', 'PASSPORT']);
 const ADDRESS_DOCUMENT_TYPES = new Set([
@@ -431,6 +432,8 @@ export async function saveVerificationDocuments(
   if (!identityUploaded && !addressUploaded) {
     throw validationError('Upload at least one document.');
   }
+
+  bumpAdminNavCounts();
 
   const user = await findUserById(userId);
   const updatedAccountHolder = await findAccountHolderByUserId(userId);

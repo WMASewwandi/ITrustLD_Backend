@@ -6,6 +6,7 @@ import {
 } from './accountHolder.service.js';
 import { autoAssignDeposit } from './depositAssignment.service.js';
 import { storeDepositProof } from './depositProofStorage.service.js';
+import { bumpAdminNavCounts } from './adminNavCountsRevision.service.js';
 import { resolveWalletLogoPublicUrl } from './walletLogoStorage.service.js';
 import { ensureWalletNavigateSchema } from './wallet.service.js';
 import {
@@ -516,6 +517,8 @@ export async function createUserDeposit(userId, payload) {
     ],
   );
 
+  bumpAdminNavCounts();
+
   return {
     id: result.insertId,
     transaction_id: transactionId,
@@ -609,6 +612,8 @@ export async function saveDepositPaymentProof(userId, depositId, file) {
   } catch (error) {
     console.error('[deposit:auto-assign]', error.message);
   }
+
+  bumpAdminNavCounts();
 
   return {
     error: false,

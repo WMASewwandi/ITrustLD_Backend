@@ -2,6 +2,8 @@ import { query } from '../config/database.js';
 import { countPendingGiftClaims } from './adminLoyaltyGifts.service.js';
 import { countCustomerAccounts } from './customerAccount.service.js';
 import { countHelpTickets, countUnreadHelpTickets } from './helpTicket.service.js';
+import { AUTHORIZE_WITHDRAWAL_PERMISSION } from '../constants/adminRoles.js';
+import { getUserPermissions } from './user.service.js';
 
 function isDepositExecutive(roles) {
   return (
@@ -35,11 +37,20 @@ async function countPendingDeposits(userId, roles) {
   return Number(rows[0]?.total ?? 0);
 }
 
-async function countPendingWithdrawals(userId, roles) {
-  const conditions = ["transaction_status = 'Pending'", 'cashout_payment_proof IS NOT NULL'];
-  const values = [];
+async function countPendingWithdrawals(userId, roles, permissions = []) {
+  const isAdmin = roles.includes('super-admin') || roles.includes('sub-admin');
+  const isExec = roles.includes('withdrawal-executive') && !isAdmin;
+  let perms = Array.isArray(permissions) ? permissions : [];
+  if (!isAdmin && !isExec && userId && !perms.includes(AUTHORIZE_WITHDRAWAL_PERMISSION)) {
+    perms = await getUserPermissions(userId);
+  }
+  const isAuthorizerOnly =
+    perms.includes(AUTHORIZE_WITHDRAWAL_PERMISSION) && !isAdmin && !isExec;
+  const status = isAuthorizerOnly ? 'Pending Authorization' : 'Pending';
+  const conditions = ['transaction_status = ?', 'cashout_payment_proof IS NOT NULL'];
+  const values = [status];
 
-  if (isWithdrawalExecutive(roles) && userId) {
+  if (isExec && userId) {
     conditions.push('assigned_to = ?');
     values.push(userId);
   }

@@ -19,6 +19,7 @@ import {
   canAuthorizeWithdrawals,
 } from './withdrawal.service.js';
 import { assertCanUpdateRecordStatus } from './statusUpdateScope.service.js';
+import { bumpAdminNavCounts } from './adminNavCountsRevision.service.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -114,15 +115,25 @@ export async function assignWithdrawals(auth, { withdrawalIds, executiveId }) {
   }
 
   const placeholders = ids.map(() => '?').join(', ');
-  await query(`UPDATE withdrawals SET assigned_to = ? WHERE id IN (${placeholders})`, [
+  const pendingRows = await query(
+    `SELECT id FROM withdrawals WHERE id IN (${placeholders}) AND transaction_status = 'Pending'`,
+    ids,
+  );
+  const pendingIds = pendingRows.map((row) => Number(row.id)).filter(Boolean);
+  if (!pendingIds.length) {
+    throw validationError('Only pending withdrawals can be assigned.');
+  }
+
+  const pendingPlaceholders = pendingIds.map(() => '?').join(', ');
+  await query(`UPDATE withdrawals SET assigned_to = ? WHERE id IN (${pendingPlaceholders})`, [
     execId,
-    ...ids,
+    ...pendingIds,
   ]);
 
   if (execId) {
     await notifyAssignedSystemUser({
       userId: execId,
-      message: `${ids.length} pending withdrawal request(s) have been assigned to you. Please review. Thanks`,
+      message: `${pendingIds.length} pending withdrawal request(s) have been assigned to you. Please review. Thanks`,
       smsType: 'WITHDRAWAL_PENDING',
     }).catch((error) => {
       console.error('[withdrawal:assigned-sms]', error.message);
@@ -132,7 +143,7 @@ export async function assignWithdrawals(auth, { withdrawalIds, executiveId }) {
   return {
     error: false,
     message: execId ? 'Withdrawals assigned successfully' : 'Withdrawals unassigned successfully',
-    assigned_count: ids.length,
+    assigned_count: pendingIds.length,
   };
 }
 
@@ -372,6 +383,8 @@ export async function updateWithdrawalStatus(
       console.error('[withdrawal:refill-pending]', error.message);
     }
   }
+
+  bumpAdminNavCounts();
 
   return {
     error: false,

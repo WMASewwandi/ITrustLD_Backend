@@ -15,6 +15,7 @@ import {
 import { refillDepositPendingForExecutive } from './depositAssignment.service.js';
 import { notifyAssignedSystemUser } from './assignedUserNotify.service.js';
 import { assertCanUpdateRecordStatus } from './statusUpdateScope.service.js';
+import { bumpAdminNavCounts } from './adminNavCountsRevision.service.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -62,15 +63,25 @@ export async function assignDeposits(auth, { depositIds, executiveId }) {
   }
 
   const placeholders = ids.map(() => '?').join(', ');
-  await query(`UPDATE deposits SET assigned_to = ? WHERE id IN (${placeholders})`, [
+  const pendingRows = await query(
+    `SELECT id FROM deposits WHERE id IN (${placeholders}) AND transaction_status = 'Pending'`,
+    ids,
+  );
+  const pendingIds = pendingRows.map((row) => Number(row.id)).filter(Boolean);
+  if (!pendingIds.length) {
+    throw validationError('Only pending deposits can be assigned.');
+  }
+
+  const pendingPlaceholders = pendingIds.map(() => '?').join(', ');
+  await query(`UPDATE deposits SET assigned_to = ? WHERE id IN (${pendingPlaceholders})`, [
     execId,
-    ...ids,
+    ...pendingIds,
   ]);
 
   if (execId) {
     await notifyAssignedSystemUser({
       userId: execId,
-      message: `${ids.length} pending deposit request(s) have been assigned to you. Please review. Thanks`,
+      message: `${pendingIds.length} pending deposit request(s) have been assigned to you. Please review. Thanks`,
       smsType: 'DEPOSIT_PENDING',
     }).catch((error) => {
       console.error('[deposit:assigned-sms]', error.message);
@@ -80,7 +91,7 @@ export async function assignDeposits(auth, { depositIds, executiveId }) {
   return {
     error: false,
     message: execId ? 'Deposits assigned successfully' : 'Deposits unassigned successfully',
-    assigned_count: ids.length,
+    assigned_count: pendingIds.length,
   };
 }
 
@@ -298,6 +309,8 @@ export async function updateDepositStatus(
       console.error('[deposit:refill-pending]', error.message);
     }
   }
+
+  bumpAdminNavCounts();
 
   return {
     error: false,

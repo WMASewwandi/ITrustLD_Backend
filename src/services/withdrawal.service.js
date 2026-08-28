@@ -37,6 +37,19 @@ function isAdmin(roles = []) {
   return roles.includes('super-admin') || roles.includes('sub-admin');
 }
 
+function isWithdrawalAuthorizerOnly(roles = [], permissions = []) {
+  return canAuthorizeWithdrawals(permissions) && !isAdmin(roles) && !isWithdrawalExecutive(roles);
+}
+
+/** Authorizers use the Pending withdrawals screen as their authorization queue. */
+function resolveWithdrawalListStatus(status, roles = [], permissions = []) {
+  const normalized = normalizeStatus(status);
+  if (isWithdrawalAuthorizerOnly(roles, permissions) && normalized === 'Pending') {
+    return 'Pending Authorization';
+  }
+  return normalized;
+}
+
 let statusEnumReady = false;
 
 export async function ensureWithdrawalAuthorizationSchema() {
@@ -535,10 +548,10 @@ export async function listWithdrawalsForAdmin(auth, params = {}) {
   const userId = auth?.userId;
   const isExec = isWithdrawalExecutive(roles) && !isAdmin(roles);
   const canAuthorize = canAuthorizeWithdrawals(permissions);
-  const isAuthorizer = canAuthorize && !isAdmin(roles) && !isExec;
+  const isAuthorizer = isWithdrawalAuthorizerOnly(roles, permissions);
   const makerCheckerEnabled = await hasActiveWithdrawalAuthorizers();
 
-  const statusForTotals = normalizeStatus(params.status);
+  const statusForTotals = resolveWithdrawalListStatus(params.status, roles, permissions);
   const assignedToUserId =
     statusForTotals === 'Pending' && isExec ? userId : null;
   const sanitized = sanitizePendingSearchParams(statusForTotals, {
@@ -556,7 +569,7 @@ export async function listWithdrawalsForAdmin(auth, params = {}) {
     statusForTotals === 'Pending' && isExec ? await getUserPendingShowCount(userId) : null;
 
   const result = await listWithdrawalsQuery({
-    status: params.status,
+    status: statusForTotals,
     page: params.page,
     perPage: params.perPage,
     keyword: sanitized.keyword,
