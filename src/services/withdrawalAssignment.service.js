@@ -57,6 +57,54 @@ export async function autoAssignWithdrawal(withdrawal) {
   return executive.id;
 }
 
+/** Reassign a withdrawal that just moved to Pending Authorization. */
+export async function autoAssignWithdrawalAuthorizer(withdrawal) {
+  if (!withdrawal?.id) return null;
+
+  const platformId = String(withdrawal.cashout_account_id || '').trim();
+  let authorizer = null;
+
+  if (platformId) {
+    const rows = await query(
+      `SELECT DISTINCT assigned_to
+       FROM withdrawals
+       WHERE cashout_account_id = ?
+         AND transaction_status = 'Pending Authorization'
+         AND cashout_payment_proof IS NOT NULL
+         AND assigned_to IS NOT NULL`,
+      [platformId],
+    );
+    const preferredIds = rows.map((row) => row.assigned_to).filter(Boolean);
+    authorizer = await findExecutiveAmongCandidates('withdrawal-authorizer', preferredIds);
+  }
+
+  if (!authorizer) {
+    authorizer = await findBestExecutive('withdrawal-authorizer');
+  }
+
+  if (!authorizer) return null;
+
+  await query(
+    `UPDATE withdrawals
+     SET assigned_to = ?, updated_at = ?
+     WHERE id = ?`,
+    [authorizer.id, nowSqlDateTime(), withdrawal.id],
+  );
+
+  await touchExecutiveLastAssigned(authorizer.id);
+
+  const transactionId = withdrawal.transaction_id || withdrawal.id;
+  await notifyAssignedSystemUser({
+    userId: authorizer.id,
+    message: `Pending authorization request has been assigned to you: ${transactionId}. Please review. Thanks`,
+    smsType: 'WITHDRAWAL_PENDING',
+  }).catch((error) => {
+    console.error('[withdrawal:assigned-authorizer-sms]', error.message);
+  });
+
+  return authorizer.id;
+}
+
 /**
  * After approve/reject, top up an executive's assigned pending withdrawals
  * up to their optional pending_show_count (no-op if unset or already full).

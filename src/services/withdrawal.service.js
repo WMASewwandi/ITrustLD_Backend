@@ -41,13 +41,9 @@ function isWithdrawalAuthorizerOnly(roles = [], permissions = []) {
   return canAuthorizeWithdrawals(permissions) && !isAdmin(roles) && !isWithdrawalExecutive(roles);
 }
 
-/** Authorizers use the Pending withdrawals screen as their authorization queue. */
-function resolveWithdrawalListStatus(status, roles = [], permissions = []) {
-  const normalized = normalizeStatus(status);
-  if (isWithdrawalAuthorizerOnly(roles, permissions) && normalized === 'Pending') {
-    return 'Pending Authorization';
-  }
-  return normalized;
+/** Keep the requested status. Pending and Pending Authorization are separate queues. */
+function resolveWithdrawalListStatus(status) {
+  return normalizeStatus(status);
 }
 
 let statusEnumReady = false;
@@ -154,7 +150,10 @@ function buildBaseConditions(status, assignedToUserId, { requirePaymentProof = t
     values.push(...EXCLUDED_USER_IDS);
   }
 
-  if (assignedToUserId != null && status === 'Pending') {
+  if (
+    assignedToUserId != null &&
+    (status === 'Pending' || status === 'Pending Authorization')
+  ) {
     conditions.push('w.assigned_to = ?');
     values.push(assignedToUserId);
   }
@@ -551,9 +550,12 @@ export async function listWithdrawalsForAdmin(auth, params = {}) {
   const isAuthorizer = isWithdrawalAuthorizerOnly(roles, permissions);
   const makerCheckerEnabled = await hasActiveWithdrawalAuthorizers();
 
-  const statusForTotals = resolveWithdrawalListStatus(params.status, roles, permissions);
+  const statusForTotals = resolveWithdrawalListStatus(params.status);
   const assignedToUserId =
-    statusForTotals === 'Pending' && isExec ? userId : null;
+    (statusForTotals === 'Pending' && (isExec || isAuthorizer)) ||
+    (statusForTotals === 'Pending Authorization' && isAuthorizer)
+      ? userId
+      : null;
   const sanitized = sanitizePendingSearchParams(statusForTotals, {
     keyword: params.keyword,
     transactionId: params.transactionId,
@@ -566,7 +568,10 @@ export async function listWithdrawalsForAdmin(auth, params = {}) {
   });
 
   const maxLoadRows =
-    statusForTotals === 'Pending' && isExec ? await getUserPendingShowCount(userId) : null;
+    (statusForTotals === 'Pending' && (isExec || isAuthorizer)) ||
+    (statusForTotals === 'Pending Authorization' && isAuthorizer)
+      ? await getUserPendingShowCount(userId)
+      : null;
 
   const result = await listWithdrawalsQuery({
     status: statusForTotals,

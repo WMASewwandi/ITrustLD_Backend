@@ -1,6 +1,5 @@
 import jwt from 'jsonwebtoken';
 import { ADMIN_PORTAL_ROLES } from '../constants/adminRoles.js';
-import { resolveFirstLoyaltyHref } from '../constants/loyaltyPermissions.js';
 import { env } from '../config/env.js';
 import {
   findUserByEmail,
@@ -14,48 +13,14 @@ import { getUserStatusUpdateScope } from './statusUpdateScope.service.js';
 import { verifyLaravelPassword } from '../utils/laravelPassword.js';
 
 /**
- * Post-login path in the Next.js admin app (mirrors Laravel AuthenticatedSessionController).
+ * Post-login path in the Next.js admin app.
+ * Dashboard when permitted; otherwise the ops home page (not the first queue).
  */
-export function resolveAdminRedirect(roles, permissions = []) {
-  if (roles.includes('deposit-executive')) {
-    return '/transactions?tab=deposits&status=Pending';
-  }
-  if (roles.includes('withdrawal-executive')) {
-    return '/transactions?tab=withdrawals&status=Pending';
-  }
-  if (
-    permissions.includes('authorize_withdrawal_data') &&
-    !roles.includes('super-admin') &&
-    !roles.includes('sub-admin')
-  ) {
-    return '/transactions?tab=withdrawals&status=Pending%20Authorization';
-  }
-  if (roles.includes('sub-admin')) {
-    return '/users?filter=pending';
-  }
-  if (roles.includes('super-admin') && permissions.includes('view_admin_dashboard')) {
-    return '/dashboard';
-  }
+export function resolveAdminRedirect(_roles, permissions = []) {
   if (permissions.includes('view_admin_dashboard')) {
     return '/dashboard';
   }
-  if (permissions.includes('read_customer_accounts_data')) {
-    return '/users?filter=pending';
-  }
-  if (permissions.includes('read_mobile_verification_pending')) {
-    return '/users?filter=mobile-pending';
-  }
-  if (permissions.includes('read_deposit_data')) {
-    return '/transactions?tab=deposits&status=Pending';
-  }
-  if (permissions.includes('read_withdrawal_data')) {
-    return '/transactions?tab=withdrawals&status=Pending';
-  }
-  const loyaltyHref = resolveFirstLoyaltyHref(permissions);
-  if (loyaltyHref) {
-    return loyaltyHref;
-  }
-  return '/dashboard';
+  return '/home';
 }
 
 export function userCanAccessAdminPortal(roles) {
