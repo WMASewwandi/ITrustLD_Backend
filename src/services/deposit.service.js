@@ -451,9 +451,8 @@ export async function listDepositsForAdmin(auth, params = {}) {
   const roles = auth?.roles || [];
   const userId = auth?.userId;
   const isExec = isDepositExecutive(roles) && !isAdmin(roles);
-  const assignedToUserId = isExec ? userId : null;
-
   const statusForTotals = normalizeStatus(params.status);
+  const assignedToUserId = statusForTotals === 'Pending' && isExec ? userId : null;
   const sanitized = sanitizePendingSearchParams(statusForTotals, {
     keyword: params.keyword,
     transactionId: params.transactionId,

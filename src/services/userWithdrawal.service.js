@@ -8,6 +8,7 @@ import { resolveWalletLogoPublicUrl } from './walletLogoStorage.service.js';
 import { ensureWalletNavigateSchema } from './wallet.service.js';
 import { autoAssignWithdrawal } from './withdrawalAssignment.service.js';
 import { storeWithdrawalProof } from './withdrawalProofStorage.service.js';
+import { bumpAdminNavCounts } from './adminNavCountsRevision.service.js';
 import { formatDateTimeParts, nowSqlDateTime, resolveFilterDateRange } from '../utils/slTime.js';
 
 function validationError(message, status = 422) {
@@ -736,6 +737,8 @@ export async function createUserWithdrawal(userId, payload) {
     ],
   );
 
+  bumpAdminNavCounts();
+
   return {
     id: result.insertId,
     transaction_id: transactionId,
@@ -858,6 +861,8 @@ export async function saveWithdrawalPaymentProof(userId, withdrawalId, file, pay
   } catch (error) {
     console.error('[withdrawal:auto-assign]', error.message);
   }
+
+  bumpAdminNavCounts();
 
   return {
     error: false,

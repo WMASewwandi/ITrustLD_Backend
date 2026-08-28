@@ -23,7 +23,7 @@ adminWithdrawalsRouter.use(requireAdminAuth);
 
 adminWithdrawalsRouter.get(
   '/',
-  requirePermission('read_withdrawal_data'),
+  requirePermission('read_withdrawal_data', 'authorize_withdrawal_data'),
   async (req, res, next) => {
     try {
       const data = await listWithdrawalsForAdmin(req.auth, {
