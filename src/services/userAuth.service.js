@@ -23,6 +23,7 @@ import { query } from '../config/database.js';
 import { LARAVEL_USER_MODEL } from '../constants/adminRoles.js';
 import { sendRegistrationEmails } from './verification.service.js';
 import { sendEmailAndSms } from './notification.service.js';
+import { newClientJoinedEmailHtml } from './mail.templates.js';
 import { isTurnstileRequired, verifyTurnstileToken } from './turnstile.service.js';
 import { env } from '../config/env.js';
 import { getUserAccountSummary, resolveUserType } from './userSummary.service.js';
@@ -125,7 +126,7 @@ async function notifyPartnerNewClient(partnerAccountHolder, clientAccountHolder)
     await sendEmailAndSms({
       email: partnerUser.email,
       subject: 'New client joined',
-      html: `<p>A new client has joined with you. <a href="${clientsUrl}">View your clients</a>.</p>`,
+      html: newClientJoinedEmailHtml(clientsUrl),
       smsMessage: 'A new client has joined with you! Check your dashboard to view details.',
       msisdn: partnerAccountHolder.mobile_number,
       userId: partnerUser.id,

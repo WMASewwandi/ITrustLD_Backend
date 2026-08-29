@@ -4,6 +4,8 @@ import {
   documentsRejectedEmailHtml,
   kycApprovedEmailHtml,
   kycRejectedEmailHtml,
+  accountBannedEmailHtml,
+  partnerAccountCreatedEmailHtml,
 } from './mail.templates.js';
 import {
   deriveBackDocumentFilename,
@@ -698,7 +700,7 @@ async function notifyAccountBanned(accountHolder) {
     await sendEmailAndSms({
       email: accountHolder.email,
       subject: 'Account banned',
-      html: '<p>Your iTrustLD account has been banned. Please contact support for assistance.</p>',
+      html: accountBannedEmailHtml(),
       smsMessage: 'Your iTrustLD account has been banned. Please contact support for assistance.',
       msisdn: accountHolder.mobile_number,
       userId: accountHolder.user_id,
@@ -716,7 +718,7 @@ async function notifyPartnerAccountCreated(accountHolder) {
     await sendEmailAndSms({
       email: accountHolder.email,
       subject: 'Partner account created',
-      html: `<p>Hi ${user?.name || 'there'}, your partner account has been successfully created. <a href="${profileUrl}">Open your dashboard</a> to get started.</p>`,
+      html: partnerAccountCreatedEmailHtml(user?.name || 'there', profileUrl),
       smsMessage:
         'Your partner account has been successfully created! Start earning commissions with your audience.',
       msisdn: accountHolder.mobile_number,

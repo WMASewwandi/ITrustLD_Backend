@@ -1,44 +1,204 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { env } from '../config/env.js';
+
+const EMAIL_ASSET_DIR = path.join(env.projectRoot, 'assets/email');
+const EMAIL_INLINE_ASSETS = [
+  ['light.png', 'itrustld-logo-light'],
+  ['dark.png', 'itrustld-logo-dark'],
+  ['icon-email.png', 'itrustld-icon-email'],
+  ['icon-support.png', 'itrustld-icon-support'],
+  ['icon-chat.png', 'itrustld-icon-chat'],
+  ['icon-facebook.png', 'itrustld-icon-facebook'],
+  ['icon-whatsapp.png', 'itrustld-icon-whatsapp'],
+  ['icon-youtube.png', 'itrustld-icon-youtube'],
+];
+
+/** Inline CID images so Gmail/Outlook do not depend on localhost URLs. */
+export function getEmailLogoAttachments() {
+  return EMAIL_INLINE_ASSETS.flatMap(([filename, cid]) => {
+    const filePath = path.join(EMAIL_ASSET_DIR, filename);
+    if (!fs.existsSync(filePath)) return [];
+    return [{ filename, path: filePath, cid, contentDisposition: 'inline' }];
+  });
+}
+
 /**
  * Global email chrome — used by every template via wrap().
- * Keep visual parity with Laravel: emails/layouts/mail.blade.php
+ * Light + dark (prefers-color-scheme). Inner template copy is unchanged.
  */
 function header() {
   return `
-    <div style="padding:0 8px 20px 8px;text-align:left;">
-      <span style="font-family:Poppins,Arial,sans-serif;font-size:18px;font-weight:600;color:#111827;letter-spacing:-0.01em;">iTrustLD</span>
-    </div>`;
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+      <tr>
+        <td align="center" style="padding:8px 8px 16px 8px;text-align:center;">
+          <img
+            class="logo-light"
+            src="cid:itrustld-logo-light"
+            width="180"
+            height="44"
+            alt="iTrustLD"
+            style="display:inline-block;height:auto;max-width:180px;border:0;outline:none;text-decoration:none;"
+          />
+          <img
+            class="logo-dark"
+            src="cid:itrustld-logo-dark"
+            width="180"
+            height="44"
+            alt="iTrustLD"
+            style="display:none;height:auto;max-width:180px;border:0;outline:none;text-decoration:none;mso-hide:all;"
+          />
+        </td>
+      </tr>
+    </table>`;
 }
 
 function footer(extra = '') {
+  const supportUrl = 'https://www.itrustld.com/support';
+  const termsUrl = 'https://www.itrustld.com/terms-and-conditions';
   const extraBlock = extra
-    ? `<div style="padding:0 8px;text-align:center;">${extra}</div>`
+    ? `<div class="email-end-extra" style="padding:8px 8px 0;text-align:left;">${extra}</div>`
     : '';
+  const iconLink = (href, cid, alt) => `
+    <a href="${href}" style="display:inline-block;text-decoration:none;border:0;">
+      <img src="cid:${cid}" width="28" height="28" alt="${alt}" style="display:block;border:0;outline:none;text-decoration:none;" />
+    </a>`;
+  const socialLink = (href, cid, alt) => `
+    <a href="${href}" style="display:inline-block;text-decoration:none;border:0;">
+      <img src="cid:${cid}" width="32" height="32" alt="${alt}" style="display:block;border:0;outline:none;text-decoration:none;" />
+    </a>`;
   return `
     ${extraBlock}
-    <div style="padding:28px 8px 8px;text-align:center;">
-      <p style="font-family:Poppins,Arial,sans-serif;font-size:14px;line-height:22px;color:#6b7280;margin:0;">
-        For more info, please contact us at +94 117 751 751
-      </p>
-    </div>`;
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;">
+      <tr>
+        <td style="padding:8px 8px 0;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr><td height="1" style="height:1px;line-height:1px;font-size:1px;background-color:#e5e7eb;">&nbsp;</td></tr>
+          </table>
+        </td>
+      </tr>
+      <tr>
+        <td align="center" style="padding:28px 8px 20px;text-align:center;">
+          <p class="end-heading" style="font-family:Poppins,Arial,sans-serif;font-size:18px;font-weight:700;line-height:26px;color:#111827;margin:0 0 8px;">Need assistance?</p>
+          <p class="email-muted" style="font-family:Poppins,Arial,sans-serif;font-size:14px;line-height:22px;color:#6b7280;margin:0 0 20px;">
+            For any questions, check out our <a class="end-link" href="${supportUrl}" style="color:#0f766e;text-decoration:underline;">Help Center</a>, or get in touch via email or live chat.
+          </p>
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center">
+            <tr>
+              <td align="center" style="padding:0 14px;">${iconLink('mailto:support@itrustld.com', 'itrustld-icon-email', 'Email')}</td>
+              <td align="center" style="padding:0 14px;">${iconLink('tel:+94117751751', 'itrustld-icon-support', 'Support')}</td>
+              <td align="center" style="padding:0 14px;">${iconLink(supportUrl, 'itrustld-icon-chat', 'Live chat')}</td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+      <tr>
+        <td align="center" style="padding:0 8px 20px;text-align:center;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr><td height="1" style="height:1px;line-height:1px;font-size:1px;background-color:#e5e7eb;">&nbsp;</td></tr>
+          </table>
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin-top:20px;">
+            <tr>
+              <td align="center" style="padding:0 8px;">${socialLink('https://facebook.com/SNXcompany', 'itrustld-icon-facebook', 'Facebook')}</td>
+              <td align="center" style="padding:0 8px;">${socialLink('https://whatsapp.com/channel/0029Va4BZjl47Xe8lo429m2K', 'itrustld-icon-whatsapp', 'WhatsApp')}</td>
+              <td align="center" style="padding:0 8px;">${socialLink('https://youtube.com/@itrustld_official', 'itrustld-icon-youtube', 'YouTube')}</td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+      <tr>
+        <td class="end-legal" align="left" style="padding:0 8px 8px;text-align:left;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr><td height="1" style="height:1px;line-height:1px;font-size:1px;background-color:#e5e7eb;">&nbsp;</td></tr>
+          </table>
+          <p style="font-family:Poppins,Arial,sans-serif;font-size:12px;line-height:20px;color:#6b7280;margin:20px 0 12px;">
+            Our Terms of Use govern the opening, use, and closure of your iTrustLD Account and related payment services. Together with any other referenced terms and conditions, they constitute the agreement between you and iTrustLD.
+          </p>
+          <p style="font-family:Poppins,Arial,sans-serif;font-size:12px;line-height:20px;color:#6b7280;margin:0 0 12px;">
+            iTrustLD electronic money accounts are not considered bank accounts. By accepting these Terms of Use, you acknowledge that Sri Lanka&#39;s Financial Services Compensation Scheme does not cover your iTrustLD Account.
+          </p>
+          <p style="font-family:Poppins,Arial,sans-serif;font-size:12px;line-height:20px;color:#6b7280;margin:0;">
+            ITrustLD provides one-time merchant services only. Please read our <a class="end-link" href="${termsUrl}" style="color:#0f766e;text-decoration:underline;">T&amp;C</a> before using our services.
+          </p>
+        </td>
+      </tr>
+    </table>`;
 }
 
 function wrap(content, footerExtra = '') {
+  const ref = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light dark">
+  <meta name="supported-color-schemes" content="light dark">
   <title>iTrustLD</title>
+  <style>
+    :root { color-scheme: light dark; }
+    .logo-light { display: inline-block !important; }
+    .logo-dark { display: none !important; max-height: 0 !important; overflow: hidden !important; }
+    @media (prefers-color-scheme: light) {
+      .logo-light { display: inline-block !important; max-height: none !important; overflow: visible !important; }
+      .logo-dark { display: none !important; max-height: 0 !important; overflow: hidden !important; }
+    }
+    @media (prefers-color-scheme: dark) {
+      .logo-light { display: none !important; max-height: 0 !important; overflow: hidden !important; }
+      .logo-dark { display: inline-block !important; max-height: none !important; overflow: visible !important; }
+      .email-bg { background-color: #111111 !important; }
+      .email-card { background-color: transparent !important; }
+      .email-card h1,
+      .email-card h2,
+      .email-card h3,
+      .email-card p,
+      .email-card td,
+      .email-card div,
+      .email-card span,
+      .email-card strong,
+      .email-card li { color: #f3f4f6 !important; }
+      .email-muted,
+      .email-end-extra p,
+      .end-legal p { color: #9ca3af !important; }
+      .end-heading { color: #ffffff !important; }
+      .end-link { color: #86efac !important; }
+      .email-card a[style*="background"] { color: #ffffff !important; }
+    }
+    [data-ogsc] .email-bg { background-color: #111111 !important; }
+    [data-ogsc] .email-card { background-color: transparent !important; }
+    [data-ogsc] .email-card h1,
+    [data-ogsc] .email-card p,
+    [data-ogsc] .email-card td,
+    [data-ogsc] .email-card div { color: #f3f4f6 !important; }
+    [data-ogsc] .email-muted { color: #9ca3af !important; }
+    [data-ogsc] .end-heading { color: #ffffff !important; }
+    [data-ogsc] .logo-light { display: none !important; }
+    [data-ogsc] .logo-dark { display: inline-block !important; }
+  </style>
 </head>
-<body style="margin:0;padding:0;font-family:Poppins,Arial,sans-serif;background-color:#f8f8f8;">
-  <div style="padding:40px 16px;">
-    <div style="max-width:600px;margin:0 auto;">
-      ${header()}
-      <div style="background-color:#ffffff;border-radius:12px;overflow:hidden;">
-        ${content}
-      </div>
-      ${footer(footerExtra)}
-    </div>
+<body class="email-bg" style="margin:0;padding:0;font-family:Poppins,Arial,sans-serif;background-color:#f8f8f8;">
+  <div class="email-bg" style="padding:40px 16px;background-color:#f8f8f8;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;margin:0 auto;">
+      <tr>
+        <td>
+          ${header()}
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:0 8px 8px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr><td height="1" style="height:1px;line-height:1px;font-size:1px;background-color:#e5e7eb;">&nbsp;</td></tr>
+          </table>
+        </td>
+      </tr>
+      <tr>
+        <td class="email-card" style="background-color:transparent;text-align:left;">
+          ${content}
+          ${footer(footerExtra)}
+          <div style="font-size:1px;line-height:1px;color:#f8f8f8;">${ref}</div>
+        </td>
+      </tr>
+    </table>
   </div>
 </body>
 </html>`;
@@ -60,7 +220,7 @@ export function welcomeEmailHtml(userName) {
 
 export function verifyAccountEmailHtml(verificationUrl) {
   return wrap(`
-    <div style="padding:40px 30px;text-align:center;">
+    <div style="padding:40px 30px;text-align:left;">
       <h1 style="font-size:24px;color:#1a1a1a;">Verify Your Account</h1>
       <p style="font-size:16px;line-height:25px;color:#4b5563;">
         Welcome to iTrustLD. Complete identity verification to secure your account and transactions.
@@ -74,7 +234,7 @@ export function verifyAccountEmailHtml(verificationUrl) {
 
 export function verificationCodeEmailHtml(code) {
   return wrap(`
-    <div style="padding:40px 30px;text-align:center;">
+    <div style="padding:40px 30px;text-align:left;">
       <h1 style="font-size:24px;color:#1a1a1a;">Verification Code</h1>
       <div style="font-size:36px;font-weight:700;letter-spacing:4px;margin:40px 0;">${code}</div>
       <p style="font-size:16px;color:#6b7280;">Here is your verification code. It will expire in 5 minutes.</p>
@@ -86,7 +246,7 @@ export function verificationCodeEmailHtml(code) {
 
 export function accountVerifiedEmailHtml(dashboardUrl) {
   return wrap(`
-    <div style="padding:40px 30px;text-align:center;">
+    <div style="padding:40px 30px;text-align:left;">
       <h1 style="font-size:24px;color:#1a1a1a;">Account Verified</h1>
       <p style="font-size:16px;line-height:25px;color:#4b5563;">
         Your iTrustLD account email has been successfully verified.
@@ -100,7 +260,7 @@ export function accountVerifiedEmailHtml(dashboardUrl) {
 export function verificationPendingEmailHtml(userName) {
   const firstName = String(userName || 'there').split(' ')[0];
   return wrap(`
-    <div style="padding:40px 30px;text-align:center;">
+    <div style="padding:40px 30px;text-align:left;">
       <h1 style="font-size:24px;color:#1a1a1a;">Verification Documents Received</h1>
       <p style="font-size:16px;line-height:25px;color:#4b5563;">
         Hi ${firstName}, we have received your verification documents and they are now under review.
@@ -113,7 +273,7 @@ export function verificationPendingEmailHtml(userName) {
 
 export function passwordResetEmailHtml(resetUrl) {
   return wrap(`
-    <div style="padding:40px 30px;text-align:center;">
+    <div style="padding:40px 30px;text-align:left;">
       <h1 style="font-size:24px;color:#1a1a1a;">Password Reset</h1>
       <p style="font-size:16px;line-height:25px;color:#4b5563;">
         If you have lost your password or wish to reset it, use the link below to get started.
@@ -127,10 +287,10 @@ export function passwordResetEmailHtml(resetUrl) {
 
 export function documentsRejectedEmailHtml(uploadUrl, rejectionMessage = '') {
   const reasonBlock = rejectionMessage
-    ? `<p style="font-size:16px;line-height:25px;color:#4b5563;margin:0 0 24px;text-align:center;">Reason: ${rejectionMessage}</p>`
+    ? `<p style="font-size:16px;line-height:25px;color:#4b5563;margin:0 0 24px;text-align:left;">Reason: ${rejectionMessage}</p>`
     : '';
   return wrap(`
-    <div style="padding:40px 30px;text-align:center;">
+    <div style="padding:40px 30px;text-align:left;">
       <h1 style="font-size:24px;color:#1a1a1a;">Documents Rejected!</h1>
       <p style="font-size:16px;line-height:25px;color:#4b5563;">
         We regret to inform you that the documents you recently submitted for account verification have been rejected. Please review the documents and resubmit them.
@@ -148,7 +308,7 @@ export function documentsRejectedEmailHtml(uploadUrl, rejectionMessage = '') {
 export function kycApprovedEmailHtml(label) {
   const title = label === 'identity' ? 'Identity' : 'Address';
   return wrap(`
-    <div style="padding:40px 30px;text-align:center;">
+    <div style="padding:40px 30px;text-align:left;">
       <h1 style="font-size:24px;color:#1a1a1a;">${title} Verification Approved</h1>
       <p style="font-size:16px;line-height:25px;color:#4b5563;">
         Your ${label} document has been successfully verified.
@@ -160,7 +320,7 @@ export function kycRejectedEmailHtml(label, rejectionMessage) {
   const title = label === 'identity' ? 'Identity' : 'Address';
   const message = rejectionMessage || 'Please resubmit your documents.';
   return wrap(`
-    <div style="padding:40px 30px;text-align:center;">
+    <div style="padding:40px 30px;text-align:left;">
       <h1 style="font-size:24px;color:#1a1a1a;">${title} Verification Rejected</h1>
       <p style="font-size:16px;line-height:25px;color:#4b5563;">
         Your ${label} proof document has been rejected. ${message}
@@ -223,10 +383,67 @@ function formatDepositDate(value) {
   };
 }
 
+function formatMoney(currency, amount) {
+  const n = Number(amount);
+  const value = Number.isFinite(n) ? n.toFixed(2) : String(amount ?? '—');
+  const code = String(currency || '').trim();
+  return code ? `${code} ${value}` : value;
+}
+
+function statusValueColor(status) {
+  const value = String(status || '');
+  if (value === 'Completed') return '#0D9F1B';
+  if (value === 'Rejected') return '#FF0000';
+  if (value === 'Pending' || value === 'Pending Authorization') return '#FF8329';
+  return '#0E1726';
+}
+
+function transactionDetailsHtml(rows) {
+  const labelTd = 'padding:2px 16px 2px 0;vertical-align:top;white-space:nowrap;';
+  return `
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:16px;font-size:16px;line-height:25px;color:#0E1726;">
+      ${rows
+        .map(([label, value, valueColor]) => {
+          const display = value == null || value === '' ? '—' : String(value);
+          const color = valueColor ? `color:${valueColor};` : '';
+          return `<tr>
+            <td style="${labelTd}">${escapeHtml(label)}</td>
+            <td style="padding:2px 0;vertical-align:top;${color}">: ${escapeHtml(display)}</td>
+          </tr>`;
+        })
+        .join('')}
+    </table>`;
+}
+
 function depositDetailsTable({ firstName, deposit }) {
   const created = formatDepositDate(deposit.created_at);
   const dateText = typeof created === 'string' ? created : created.date;
   const timeText = typeof created === 'string' ? '' : created.time;
+  const amount = formatMoney(deposit.deposit_amount_currency, deposit.deposit_amount);
+  const fee = deposit.fee || formatMoney(deposit.deposit_amount_currency || 'USD', 0);
+  const status = deposit.transaction_status || 'Pending';
+  const rows = [
+    ['Type', 'Top-up'],
+    ['Method', deposit.topupMethodName || '—'],
+    ['Payment Option', deposit.paymentOptionName || '—'],
+    ['Status', status, statusValueColor(status)],
+    ['Currency', deposit.deposit_amount_currency || 'USD'],
+    ['Amount', amount],
+    ['Payment Amount', formatMoney(deposit.payment_amount_currency, deposit.payment_amount)],
+    ['Fee', fee],
+    ['Net amount', deposit.netAmount || amount],
+    ['Date', dateText],
+    ['Time', timeText],
+    ['Account', deposit.topup_account_id || '—'],
+    ['Reference', deposit.transaction_id],
+    ['Note', deposit.message || '—'],
+  ];
+  if (status === 'Rejected' && (deposit.rejected_reason_message || deposit.rejected_reason)) {
+    rows.push([
+      'Rejected Reason',
+      [deposit.rejected_reason_message, deposit.rejected_reason].filter(Boolean).join(' — '),
+    ]);
+  }
   return `
     <div style="padding:40px 30px;">
       <h2 style="font-size:24px;color:#0f172a;">Hi ${firstName},</h2>
@@ -235,18 +452,7 @@ function depositDetailsTable({ firstName, deposit }) {
           ? 'Congratulations! Your deposit request has been approved. You can find the deposit information below.'
           : 'Your deposit request has been rejected. You can find the deposit information below.'}
       </p>
-      <table style="margin-top:16px;font-size:16px;line-height:25px;color:#0E1726;">
-        <tr><td>Transaction ID</td><td>- ${deposit.transaction_id}</td></tr>
-        <tr><td>Payment Amount</td><td>- ${deposit.payment_amount_currency} ${deposit.payment_amount}</td></tr>
-        <tr><td>Payment Method</td><td>- ${deposit.paymentOptionName || '—'}</td></tr>
-        <tr><td>Topup Amount</td><td>- ${deposit.deposit_amount_currency} ${deposit.deposit_amount}</td></tr>
-        <tr><td>Transaction Date</td><td>- ${dateText}</td></tr>
-        <tr><td>Transaction Time</td><td>- ${timeText}</td></tr>
-        <tr><td>Top Up Method</td><td>- ${deposit.topupMethodName || '—'}</td></tr>
-        <tr><td>Topup Account</td><td>- ${deposit.topup_account_id || '—'}</td></tr>
-        <tr><td>Status</td><td>- ${deposit.transaction_status}</td></tr>
-        <tr><td>Message</td><td>- ${deposit.message || '—'}</td></tr>
-      </table>
+      ${transactionDetailsHtml(rows)}
       <p style="font-size:16px;line-height:25px;color:#0E1726;margin-top:16px;">
         If you have any questions or need assistance, please contact our support team.
       </p>
@@ -265,6 +471,31 @@ function withdrawalDetailsTable({ firstName, withdrawal }) {
   const created = formatDepositDate(withdrawal.created_at);
   const dateText = typeof created === 'string' ? created : created.date;
   const timeText = typeof created === 'string' ? '' : created.time;
+  const amount = formatMoney(withdrawal.cashout_amount_currency, withdrawal.cashout_amount);
+  const fee = withdrawal.fee || formatMoney(withdrawal.cashout_amount_currency || 'USD', 0);
+  const status = withdrawal.transaction_status || 'Pending';
+  const rows = [
+    ['Type', 'Cash-out'],
+    ['Method', withdrawal.cashoutMethodName || '—'],
+    ['Payment Option', withdrawal.receivingOptionName || '—'],
+    ['Status', status, statusValueColor(status)],
+    ['Currency', withdrawal.cashout_amount_currency || 'USD'],
+    ['Amount', amount],
+    ['Receiving Amount', formatMoney(withdrawal.receiving_amount_currency, withdrawal.receiving_amount)],
+    ['Fee', fee],
+    ['Net amount', withdrawal.netAmount || amount],
+    ['Date', dateText],
+    ['Time', timeText],
+    ['Account', withdrawal.cashout_account_id || '—'],
+    ['Reference', withdrawal.transaction_id],
+    ['Note', withdrawal.message || '—'],
+  ];
+  if (status === 'Rejected' && (withdrawal.rejected_reason_message || withdrawal.rejected_reason)) {
+    rows.push([
+      'Rejected Reason',
+      [withdrawal.rejected_reason_message, withdrawal.rejected_reason].filter(Boolean).join(' — '),
+    ]);
+  }
   return `
     <div style="padding:40px 30px;">
       <h2 style="font-size:24px;color:#0f172a;">Hi ${firstName},</h2>
@@ -273,18 +504,7 @@ function withdrawalDetailsTable({ firstName, withdrawal }) {
           ? 'Congratulations! Your withdrawal request has been approved. You can find the withdrawal information below.'
           : 'Your withdrawal request has been rejected. You can find the withdrawal information below.'}
       </p>
-      <table style="margin-top:16px;font-size:16px;line-height:25px;color:#0E1726;">
-        <tr><td>Transaction ID</td><td>- ${withdrawal.transaction_id}</td></tr>
-        <tr><td>Cashout Amount</td><td>- ${withdrawal.cashout_amount_currency} ${withdrawal.cashout_amount}</td></tr>
-        <tr><td>Receiving Amount</td><td>- ${withdrawal.receiving_amount_currency} ${withdrawal.receiving_amount}</td></tr>
-        <tr><td>Receiving Method</td><td>- ${withdrawal.receivingOptionName || '—'}</td></tr>
-        <tr><td>Transaction Date</td><td>- ${dateText}</td></tr>
-        <tr><td>Transaction Time</td><td>- ${timeText}</td></tr>
-        <tr><td>Cashout Method</td><td>- ${withdrawal.cashoutMethodName || '—'}</td></tr>
-        <tr><td>Cashout Account</td><td>- ${withdrawal.cashout_account_id || '—'}</td></tr>
-        <tr><td>Status</td><td>- ${withdrawal.transaction_status}</td></tr>
-        <tr><td>Message</td><td>- ${withdrawal.message || '—'}</td></tr>
-      </table>
+      ${transactionDetailsHtml(rows)}
       <p style="font-size:16px;line-height:25px;color:#0E1726;margin-top:16px;">
         If you have any questions or need assistance, please contact our support team.
       </p>
@@ -306,7 +526,7 @@ export function withdrawalRejectedEmailHtml({ firstName, withdrawal }) {
 export function loyaltyLevelUpgradeEmailHtml({ levelName, loyaltyPoints, featureUrl }) {
   const formattedPoints = Math.round(Number(loyaltyPoints) || 0).toLocaleString();
   return wrap(`
-    <div style="padding:40px 30px;text-align:center;">
+    <div style="padding:40px 30px;text-align:left;">
       <h1 style="font-size:24px;color:#0E1726;margin:0 0 24px;">Congratulations!</h1>
       <p style="font-size:16px;line-height:25px;color:#0E1726;margin:0 0 12px;">
         You've just unlocked ${levelName} Trust Level by reaching ${formattedPoints} Loyalty Points!
@@ -323,7 +543,7 @@ export function loyaltyLevelUpgradeEmailHtml({ levelName, loyaltyPoints, feature
 export function loyaltyRedemptionApprovedEmailHtml({ firstName, balanceUrl }) {
   const name = firstName || 'Customer';
   return wrap(`
-    <div style="padding:40px 30px;text-align:center;">
+    <div style="padding:40px 30px;text-align:left;">
       <h1 style="font-size:24px;color:#0E1726;margin:0 0 24px;">Redemption approved</h1>
       <p style="font-size:16px;line-height:25px;color:#0E1726;margin:0 0 12px;">
         Hi ${name}, your loyalty bonus redemption request has been approved.
@@ -340,7 +560,7 @@ export function loyaltyRedemptionApprovedEmailHtml({ firstName, balanceUrl }) {
 export function loyaltyRedemptionRejectedEmailHtml({ firstName, balanceUrl }) {
   const name = firstName || 'Customer';
   return wrap(`
-    <div style="padding:40px 30px;text-align:center;">
+    <div style="padding:40px 30px;text-align:left;">
       <h1 style="font-size:24px;color:#0E1726;margin:0 0 24px;">Redemption rejected</h1>
       <p style="font-size:16px;line-height:25px;color:#0E1726;margin:0 0 12px;">
         Hi ${name}, your loyalty bonus redemption request has been rejected.
@@ -378,7 +598,7 @@ export function clientBonusVoucherEmailHtml({ firstName, platformId, validUntil,
 export function loyaltyRedemptionPendingEmailHtml({ firstName, balanceUrl }) {
   const name = firstName || 'Customer';
   return wrap(`
-    <div style="padding:40px 30px;text-align:center;">
+    <div style="padding:40px 30px;text-align:left;">
       <h1 style="font-size:24px;color:#0E1726;margin:0 0 24px;">Bonus claim submitted</h1>
       <p style="font-size:16px;line-height:25px;color:#0E1726;margin:0 0 12px;">
         Hi ${name}, your loyalty bonus claim has been submitted successfully.
@@ -424,7 +644,7 @@ export function rateChangeEmailHtml({
   }
 
   return wrap(`
-    <div style="padding:40px 30px;text-align:center;">
+    <div style="padding:40px 30px;text-align:left;">
       <h1 style="font-size:24px;color:#0E1726;margin:0 0 24px;">${title}</h1>
       <p style="font-size:16px;line-height:25px;color:#0E1726;margin:0 0 16px;">
         ${intro}
@@ -456,7 +676,7 @@ export function loyaltyCatalogNotifyEmailHtml({
     .join('');
 
   return wrap(`
-    <div style="padding:40px 30px;text-align:center;">
+    <div style="padding:40px 30px;text-align:left;">
       <h1 style="font-size:24px;color:#0E1726;margin:0 0 24px;">${headline || 'Loyalty update'}</h1>
       <p style="font-size:16px;line-height:25px;color:#0E1726;margin:0 0 12px;">
         Hi ${name},
@@ -471,5 +691,33 @@ export function loyaltyCatalogNotifyEmailHtml({
       <a href="${dashboardUrl}" style="display:inline-block;background:#0f766e;color:#fff;text-decoration:none;padding:12px 24px;border-radius:9999px;font-size:16px;font-weight:500;">
         View loyalty
       </a>
+    </div>`);
+}
+
+export function newClientJoinedEmailHtml(clientsUrl) {
+  return wrap(`
+    <div style="padding:40px 30px;">
+      <p style="font-size:16px;line-height:25px;color:#0E1726;">
+        A new client has joined with you. <a href="${clientsUrl}" style="color:#0f766e;">View your clients</a>.
+      </p>
+    </div>`);
+}
+
+export function accountBannedEmailHtml() {
+  return wrap(`
+    <div style="padding:40px 30px;">
+      <p style="font-size:16px;line-height:25px;color:#0E1726;">
+        Your iTrustLD account has been banned. Please contact support for assistance.
+      </p>
+    </div>`);
+}
+
+export function partnerAccountCreatedEmailHtml(userName, profileUrl) {
+  const name = String(userName || 'there').split(' ')[0];
+  return wrap(`
+    <div style="padding:40px 30px;">
+      <p style="font-size:16px;line-height:25px;color:#0E1726;">
+        Hi ${name}, your partner account has been successfully created. <a href="${profileUrl}" style="color:#0f766e;">Open your dashboard</a> to get started.
+      </p>
     </div>`);
 }
