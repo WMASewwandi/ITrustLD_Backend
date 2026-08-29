@@ -22,10 +22,10 @@ function isWithdrawalExecutive(roles) {
 }
 
 async function getWithdrawalQueueScope(userId, roles = [], permissions = []) {
-  const isAdmin = roles.includes('super-admin') || roles.includes('sub-admin');
+  const isAdminUser = roles.includes('super-admin') || roles.includes('sub-admin');
   const isExec = isWithdrawalExecutive(roles);
   let perms = Array.isArray(permissions) ? permissions : [];
-  if (!isAdmin && !isExec && userId && !perms.includes(AUTHORIZE_WITHDRAWAL_PERMISSION)) {
+  if (!isAdminUser && !isExec && userId && !perms.includes(AUTHORIZE_WITHDRAWAL_PERMISSION)) {
     perms = await getUserPermissions(userId);
   }
   const isAuthorizerOnly =
@@ -38,9 +38,9 @@ async function getWithdrawalQueueScope(userId, roles = [], permissions = []) {
             .replace(/[_ ]+/g, '-'),
         ),
       )) &&
-    !isAdmin &&
+    !isAdminUser &&
     !isExec;
-  return { isExec, isAuthorizerOnly };
+  return { isExec, isAuthorizerOnly, isAdmin: isAdminUser };
 }
 
 async function countPendingDeposits(userId, roles) {
@@ -75,14 +75,14 @@ async function countPendingWithdrawals(userId, { isExec, isAuthorizerOnly } = {}
   return Number(rows[0]?.total ?? 0);
 }
 
-async function countPendingAuthorizationWithdrawals(userId, { isAuthorizerOnly } = {}) {
+async function countPendingAuthorizationWithdrawals(userId, { isAdmin } = {}) {
   const conditions = [
     "transaction_status = 'Pending Authorization'",
     'cashout_payment_proof IS NOT NULL',
   ];
   const values = [];
 
-  if (isAuthorizerOnly && userId) {
+  if (!isAdmin && userId) {
     conditions.push('assigned_to = ?');
     values.push(userId);
   }

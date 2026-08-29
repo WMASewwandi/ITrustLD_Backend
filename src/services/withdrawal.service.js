@@ -38,8 +38,26 @@ function isAdmin(roles = []) {
   return roles.includes('super-admin') || roles.includes('sub-admin');
 }
 
+function roleSlug(role) {
+  return String(role || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_ ]+/g, '-');
+}
+
+function hasAuthorizerRole(roles = []) {
+  return roles.some((role) => {
+    const slug = roleSlug(role);
+    return slug === 'withdrawal-authorizer' || slug === 'withdrawal-authorization';
+  });
+}
+
 function isWithdrawalAuthorizerOnly(roles = [], permissions = []) {
-  return canAuthorizeWithdrawals(permissions) && !isAdmin(roles) && !isWithdrawalExecutive(roles);
+  return (
+    (canAuthorizeWithdrawals(permissions) || hasAuthorizerRole(roles)) &&
+    !isAdmin(roles) &&
+    !isWithdrawalExecutive(roles)
+  );
 }
 
 /** Keep the requested status. Pending and Pending Authorization are separate queues. */
@@ -583,11 +601,10 @@ export async function listWithdrawalsForAdmin(auth, params = {}) {
   const makerCheckerEnabled = await hasActiveWithdrawalAuthorizers();
 
   const statusForTotals = resolveWithdrawalListStatus(params.status);
-  const assignedToUserId =
+  const restrictToAssigned =
     (statusForTotals === 'Pending' && (isExec || isAuthorizer)) ||
-    (statusForTotals === 'Pending Authorization' && isAuthorizer)
-      ? userId
-      : null;
+    (statusForTotals === 'Pending Authorization' && !isAdmin(roles));
+  const assignedToUserId = restrictToAssigned ? userId : null;
   const sanitized = sanitizePendingSearchParams(statusForTotals, {
     keyword: params.keyword,
     transactionId: params.transactionId,
@@ -599,11 +616,7 @@ export async function listWithdrawalsForAdmin(auth, params = {}) {
     toDate: params.toDate,
   });
 
-  const maxLoadRows =
-    (statusForTotals === 'Pending' && (isExec || isAuthorizer)) ||
-    (statusForTotals === 'Pending Authorization' && isAuthorizer)
-      ? await getUserPendingShowCount(userId)
-      : null;
+  const maxLoadRows = restrictToAssigned ? await getUserPendingShowCount(userId) : null;
 
   const result = await listWithdrawalsQuery({
     status: statusForTotals,

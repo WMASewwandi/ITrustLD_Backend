@@ -13,6 +13,7 @@ import {
   SYSTEM_USER_ACTIONS,
 } from './systemUserActionLog.service.js';
 import {
+  autoAssignWithdrawal,
   autoAssignWithdrawalAuthorizer,
   refillWithdrawalPendingForExecutive,
 } from './withdrawalAssignment.service.js';
@@ -362,17 +363,44 @@ export async function updateWithdrawalStatus(
 
   if (normalizedStatus === 'Pending') {
     const now = nowSqlDateTime();
+    const revertingFromAuthorization =
+      withdrawal.transaction_status === 'Pending Authorization';
+    const updatedById = Number(withdrawal.pendings_by_admin) || null;
+    const assignTo = revertingFromAuthorization ? updatedById || null : withdrawal.assigned_to ?? null;
+    const pendingByAdmin =
+      revertingFromAuthorization && updatedById ? updatedById : adminId;
+
     await query(
       `UPDATE withdrawals
        SET transaction_status = 'Pending',
            pending_date = ?,
            pendings_by_admin = ?,
+           assigned_to = ?,
            message = 'Your transaction is in progress',
            updated_at = ?
        WHERE id = ?`,
-      [now, adminId, now, withdrawal.id],
+      [now, pendingByAdmin, assignTo, now, withdrawal.id],
     );
     await logSystemUserAction(adminId, SYSTEM_USER_ACTIONS.WITHDRAWAL_PENDING);
+
+    if (revertingFromAuthorization) {
+      if (assignTo) {
+        const transactionId = withdrawal.transaction_id || withdrawal.id;
+        await notifyAssignedSystemUser({
+          userId: assignTo,
+          message: `Pending withdrawal request has been assigned to you: ${transactionId}. Please review. Thanks`,
+          smsType: 'WITHDRAWAL_PENDING',
+        }).catch((error) => {
+          console.error('[withdrawal:reassign-pending]', error.message);
+        });
+      } else {
+        try {
+          await autoAssignWithdrawal({ ...withdrawal, assigned_to: null });
+        } catch (error) {
+          console.error('[withdrawal:auto-assign]', error.message);
+        }
+      }
+    }
   } else if (normalizedStatus === 'Pending Authorization') {
     const now = nowSqlDateTime();
     await query(
