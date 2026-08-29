@@ -845,7 +845,7 @@ async function loadAccountDisplay(userId, paymentOption, accountId) {
   };
 }
 
-function mapAdminWithdrawalRow(row, accountDisplay) {
+function mapAdminWithdrawalRow(row, accountDisplay, adminUsers = {}) {
   const points = Number(row.point_withdrawal_amount || 0);
   const cashout = Number(row.cashout_amount || 0);
   const received = Number(row.account_currency_amount || 0);
@@ -868,6 +868,7 @@ function mapAdminWithdrawalRow(row, accountDisplay) {
     platformDetail: accountDisplay.platformDetail,
     status: mapUserStatus(row.status),
     raw_status: row.status,
+    admin: resolveLoyaltyAdminName(row, adminUsers),
   };
 }
 
@@ -926,10 +927,17 @@ export async function listLoyaltyOrdersForAdmin(params = {}) {
     offset,
   ]);
 
+  const adminIds = rows.flatMap((row) => [
+    row.pendings_by_admin,
+    row.approved_by_admin,
+    row.rejected_by_admin,
+  ]);
+  const adminUsers = await fetchAdminNames(adminIds);
+
   const orders = [];
   for (const row of rows) {
     const accountDisplay = await loadAccountDisplay(row.user_id, row.payment_option, row.account_id);
-    orders.push(mapAdminWithdrawalRow(row, accountDisplay));
+    orders.push(mapAdminWithdrawalRow(row, accountDisplay, adminUsers));
   }
 
   return {
@@ -1049,9 +1057,18 @@ async function fetchAdminNames(adminIds) {
   return Object.fromEntries(rows.map((row) => [row.id, row.name]));
 }
 
-function resolveBonusAdminName(row, adminUsers) {
-  const adminId = row.approved_by_admin || row.rejected_by_admin || row.pendings_by_admin;
+function resolveLoyaltyAdminName(row, adminUsers = {}) {
+  const rawStatus = String(row.status || '');
+  let adminId = null;
+  if (rawStatus === 'Approved' || rawStatus === 'Completed' || rawStatus === 'Claimed') {
+    adminId = row.approved_by_admin;
+  } else if (rawStatus === 'Rejected') {
+    adminId = row.rejected_by_admin;
+  } else {
+    adminId = row.pendings_by_admin;
+  }
   if (adminId && adminUsers[adminId]) return adminUsers[adminId];
+  if (adminId) return String(adminId);
   return '—';
 }
 
@@ -1075,7 +1092,7 @@ function mapAdminBonusRow(row, accountDisplay, adminUsers) {
     platformDetail: accountDisplay.platformDetail,
     status: mapBonusUserStatus(row.status),
     raw_status: row.status,
-    admin: resolveBonusAdminName(row, adminUsers),
+    admin: resolveLoyaltyAdminName(row, adminUsers),
   };
 }
 

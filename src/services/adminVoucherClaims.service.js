@@ -184,6 +184,12 @@ function mapAdminVoucherRow(row, adminUsers, duplicates = null) {
   const status = mapVoucherStatus(row);
   const claimedAdmin = row.claimed_by_admin ? adminUsers[row.claimed_by_admin] : null;
   const rejectedAdmin = row.rejected_by_admin ? adminUsers[row.rejected_by_admin] : null;
+  const adminName =
+    status === 'Claimed'
+      ? claimedAdmin || '—'
+      : status === 'Rejected'
+        ? rejectedAdmin || (isAutoRejected(row) ? 'Auto-rejected' : '—')
+        : claimedAdmin || rejectedAdmin || '—';
 
   return {
     id: String(row.id),
@@ -198,7 +204,7 @@ function mapAdminVoucherRow(row, adminUsers, duplicates = null) {
     method,
     token: row.voucher_token || '—',
     status,
-    admin: claimedAdmin || rejectedAdmin || (status === 'Rejected' && isAutoRejected(row) ? 'Auto-rejected' : '—'),
+    admin: adminName,
     claimedBy: claimedAdmin || '—',
     claimedDate: row.claimed_at ? formatYmdHis(row.claimed_at) : null,
     rejectedDate: row.rejected_at ? formatYmdHis(row.rejected_at) : isAutoRejected(row) ? formatYmdHis(row.created_at) : null,
