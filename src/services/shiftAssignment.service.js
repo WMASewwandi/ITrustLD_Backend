@@ -119,14 +119,35 @@ function formatShiftTimeLabel(user) {
   return `${format12(startMinutes)} – ${format12(endMinutes)}`;
 }
 
+function roleSlug(role) {
+  return String(role || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_ ]+/g, '-');
+}
+
+function isSystemAdminRole(roles = []) {
+  return roles.some((role) => {
+    const slug = roleSlug(role);
+    return slug === 'super-admin' || slug === 'sub-admin';
+  });
+}
+
 function isWithdrawalAuthorizerRole(roles = []) {
   return roles.some((role) => {
-    const normalized = String(role || '')
-      .trim()
-      .toLowerCase()
-      .replace(/[_ ]+/g, '-');
-    return normalized === 'withdrawal-authorizer' || normalized === 'withdrawal-authorization';
+    const slug = roleSlug(role);
+    return slug === 'withdrawal-authorizer' || slug === 'withdrawal-authorization';
   });
+}
+
+async function withoutSystemAdmins(users) {
+  const eligible = [];
+  for (const user of users) {
+    const roles = await getUserRoles(user.id);
+    if (isSystemAdminRole(roles)) continue;
+    eligible.push(user);
+  }
+  return eligible;
 }
 
 function roleDisplayName(roles) {
@@ -476,10 +497,12 @@ export async function getCandidateExecutives(roleName) {
     roleName === 'withdrawal-authorizer'
       ? await getAuthorizerUsers()
       : await getUsersByRole(roleName);
+  const eligible = await withoutSystemAdmins(allInRole);
+  if (!eligible.length) return [];
 
-  let shiftFiltered = allInRole.filter((user) => user.shift === activeShift);
+  let shiftFiltered = eligible.filter((user) => user.shift === activeShift);
   if (!shiftFiltered.length) {
-    shiftFiltered = allInRole;
+    shiftFiltered = eligible;
   }
 
   const now = new Date();

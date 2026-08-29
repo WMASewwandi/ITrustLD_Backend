@@ -247,7 +247,7 @@ function mapWithdrawalRow(row, adminUsers, assignedUsers, similarCounts) {
   const cashoutAmount = Number(row.cashout_amount) || 0;
   const receivingAmount = Number(row.receiving_amount) || 0;
   const adminId =
-    row.transaction_status === 'Pending'
+    row.transaction_status === 'Pending' || row.transaction_status === 'Pending Authorization'
       ? row.pendings_by_admin
       : row.transaction_status === 'Completed'
         ? row.approved_by_admin
@@ -431,7 +431,7 @@ async function listWithdrawalsQuery({
   if (keyword?.trim()) {
     const like = `%${escapeLike(keyword.trim())}%`;
     const adminColumn =
-      normalizedStatus === 'Pending'
+      normalizedStatus === 'Pending' || normalizedStatus === 'Pending Authorization'
         ? 'w.pendings_by_admin'
         : normalizedStatus === 'Completed'
           ? 'w.approved_by_admin'
@@ -447,7 +447,7 @@ async function listWithdrawalsQuery({
     ];
     const keywordValues = [like, like, like, like];
 
-    if (normalizedStatus === 'Pending') {
+    if (normalizedStatus === 'Pending' || normalizedStatus === 'Pending Authorization') {
       keywordParts.push(
         `EXISTS (
           SELECT 1 FROM users exec
