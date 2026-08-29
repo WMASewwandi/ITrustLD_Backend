@@ -1,6 +1,6 @@
 import { query } from '../config/database.js';
 import { getDbDriver } from '../config/database.js';
-import { AUTHORIZE_WITHDRAWAL_PERMISSION, LARAVEL_USER_MODEL } from '../constants/adminRoles.js';
+import { AUTHORIZE_WITHDRAWAL_PERMISSION, AUTHORIZER_ROLE_NAME_ALIASES, LARAVEL_USER_MODEL } from '../constants/adminRoles.js';
 import { buildWithdrawalProofApiUrl } from './withdrawalProofStorage.service.js';
 import { batchScammerCheck, isScammerMatch } from './scammer.service.js';
 import { getUserPendingShowCount } from './systemUser.service.js';
@@ -12,6 +12,7 @@ import {
   parseDateWindow,
 } from '../utils/slTime.js';
 import { pushAmountKeywordClauses } from '../utils/searchAmount.js';
+import { normalizeToActivityIdentifier } from './role.service.js';
 
 const EXCLUDED_USER_IDS = [4, 16405];
 
@@ -65,16 +66,47 @@ export async function ensureWithdrawalAuthorizationSchema() {
 }
 
 export async function hasActiveWithdrawalAuthorizers() {
-  const rows = await query(
+  const permissionRows = await query('SELECT id, name FROM permissions');
+  const ids = permissionRows
+    .filter((row) => normalizeToActivityIdentifier(row.name) === AUTHORIZE_WITHDRAWAL_PERMISSION)
+    .map((row) => row.id);
+
+  if (ids.length) {
+    const placeholders = ids.map(() => '?').join(', ');
+    const viaRole = await query(
+      `SELECT COUNT(*) AS cnt
+       FROM model_has_roles mhr
+       INNER JOIN role_has_permissions rhp ON rhp.role_id = mhr.role_id
+       WHERE rhp.permission_id IN (${placeholders})
+         AND mhr.model_type = ?`,
+      [...ids, LARAVEL_USER_MODEL],
+    );
+    if (Number(viaRole[0]?.cnt) > 0) return true;
+
+    try {
+      const viaDirect = await query(
+        `SELECT COUNT(*) AS cnt
+         FROM model_has_permissions mhp
+         WHERE mhp.permission_id IN (${placeholders})
+           AND mhp.model_type = ?`,
+        [...ids, LARAVEL_USER_MODEL],
+      );
+      if (Number(viaDirect[0]?.cnt) > 0) return true;
+    } catch {
+      // model_has_permissions may be absent
+    }
+  }
+
+  const rolePlaceholders = AUTHORIZER_ROLE_NAME_ALIASES.map(() => '?').join(', ');
+  const viaNamedRole = await query(
     `SELECT COUNT(*) AS cnt
      FROM model_has_roles mhr
-     INNER JOIN role_has_permissions rhp ON rhp.role_id = mhr.role_id
-     INNER JOIN permissions p ON p.id = rhp.permission_id
-     WHERE p.name = ?
+     INNER JOIN roles r ON r.id = mhr.role_id
+     WHERE r.name IN (${rolePlaceholders})
        AND mhr.model_type = ?`,
-    [AUTHORIZE_WITHDRAWAL_PERMISSION, LARAVEL_USER_MODEL],
+    [...AUTHORIZER_ROLE_NAME_ALIASES, LARAVEL_USER_MODEL],
   );
-  return Number(rows[0]?.cnt) > 0;
+  return Number(viaNamedRole[0]?.cnt) > 0;
 }
 
 function escapeLike(value) {

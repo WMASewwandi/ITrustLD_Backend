@@ -28,13 +28,39 @@ const ACTIVITY_PERMISSION_ALIASES = {
   cusomer_withdrawal_activity: 'customer_withdrawal_activity',
 };
 
+const ACTIVITY_NAME_TO_IDENTIFIER = Object.fromEntries(
+  SYSTEM_ACTIVITIES.map((activity) => [
+    String(activity.activity_name).trim().toLowerCase(),
+    activity.activity_identifier,
+  ]),
+);
+
+function slugKey(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+const ACTIVITY_SLUG_TO_IDENTIFIER = new Map();
+for (const activity of SYSTEM_ACTIVITIES) {
+  ACTIVITY_SLUG_TO_IDENTIFIER.set(slugKey(activity.activity_identifier), activity.activity_identifier);
+  ACTIVITY_SLUG_TO_IDENTIFIER.set(slugKey(activity.activity_name), activity.activity_identifier);
+}
+
 export function normalizeToActivityIdentifier(permissionName) {
+  const raw = String(permissionName ?? '');
   for (const [activityId, alias] of Object.entries(ACTIVITY_PERMISSION_ALIASES)) {
-    if (permissionName === alias || permissionName === activityId) {
+    if (raw === alias || raw === activityId) {
       return activityId;
     }
   }
-  return permissionName;
+  const byDisplayName = ACTIVITY_NAME_TO_IDENTIFIER[raw.trim().toLowerCase()];
+  if (byDisplayName) return byDisplayName;
+  const bySlug = ACTIVITY_SLUG_TO_IDENTIFIER.get(slugKey(raw));
+  if (bySlug) return bySlug;
+  return raw;
 }
 
 function permissionNameCandidates(activityIdentifier) {
@@ -81,11 +107,19 @@ const ROLE_DISPLAY_NAMES = {
   'deposit-executive': 'Deposit Executive',
   'withdrawal-executive': 'Withdrawal Executive',
   'withdrawal-authorizer': 'Withdrawal Authorizer',
+  'withdrawal-authorization': 'Withdrawal Authorizer',
 };
 
 export function formatRoleDisplayName(roleName) {
   if (ROLE_DISPLAY_NAMES[roleName]) {
     return ROLE_DISPLAY_NAMES[roleName];
+  }
+  const slug = String(roleName || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_ ]+/g, '-');
+  if (ROLE_DISPLAY_NAMES[slug]) {
+    return ROLE_DISPLAY_NAMES[slug];
   }
   return roleName
     .split('-')

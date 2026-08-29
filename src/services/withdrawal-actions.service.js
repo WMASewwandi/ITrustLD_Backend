@@ -1,5 +1,5 @@
 import { query } from '../config/database.js';
-import { LARAVEL_USER_MODEL } from '../constants/adminRoles.js';
+import { LARAVEL_USER_MODEL, AUTHORIZE_WITHDRAWAL_PERMISSION, AUTHORIZER_ROLE_NAME_ALIASES } from '../constants/adminRoles.js';
 import { sendTemplatedEmailAndSms, sendTemplatedSmsOnly } from './notification.service.js';
 import { buildExecutivesForAssignment } from './shiftAssignment.service.js';
 import { nowSqlDateTime, parseDateWindow } from '../utils/slTime.js';
@@ -22,6 +22,7 @@ import {
   hasActiveWithdrawalAuthorizers,
   canAuthorizeWithdrawals,
 } from './withdrawal.service.js';
+import { getUserPermissions } from './user.service.js';
 import { assertCanUpdateRecordStatus } from './statusUpdateScope.service.js';
 import { bumpAdminNavCounts } from './adminNavCountsRevision.service.js';
 
@@ -140,27 +141,39 @@ export async function assignWithdrawals(auth, { withdrawalIds, executiveId }) {
   }
 
   const assignableIds = selectedRows.map((row) => Number(row.id)).filter(Boolean);
-  const expectedRole =
-    queueStatus === 'Pending Authorization' ? 'withdrawal-authorizer' : 'withdrawal-executive';
 
   if (execId != null) {
-    const roleRows = await query(
-      `SELECT r.name
-       FROM model_has_roles mhr
-       INNER JOIN roles r ON r.id = mhr.role_id
-       WHERE mhr.model_id = ? AND mhr.model_type = ?`,
-      [execId, LARAVEL_USER_MODEL],
-    );
-    const roleNames = roleRows.map((row) => row.name);
-    if (
-      !roleNames.includes(expectedRole) &&
-      !(queueStatus === 'Pending' && roleNames.includes('sub-admin'))
-    ) {
-      throw validationError(
-        queueStatus === 'Pending Authorization'
-          ? 'Select a Withdrawal Authorizer.'
-          : 'Select a Withdrawal Executive.',
+    if (queueStatus === 'Pending Authorization') {
+      const permissions = await getUserPermissions(execId);
+      const hasAuthorizePermission = permissions.includes(AUTHORIZE_WITHDRAWAL_PERMISSION);
+      if (!hasAuthorizePermission) {
+        const roleRows = await query(
+          `SELECT r.name
+           FROM model_has_roles mhr
+           INNER JOIN roles r ON r.id = mhr.role_id
+           WHERE mhr.model_id = ? AND mhr.model_type = ?`,
+          [execId, LARAVEL_USER_MODEL],
+        );
+        const assignedRoleNames = new Set(roleRows.map((row) => row.name));
+        const isAuthorizerRole = AUTHORIZER_ROLE_NAME_ALIASES.some((name) =>
+          assignedRoleNames.has(name),
+        );
+        if (!isAuthorizerRole) {
+          throw validationError('Select a user who can authorize customer withdrawal records.');
+        }
+      }
+    } else {
+      const roleRows = await query(
+        `SELECT r.name
+         FROM model_has_roles mhr
+         INNER JOIN roles r ON r.id = mhr.role_id
+         WHERE mhr.model_id = ? AND mhr.model_type = ?`,
+        [execId, LARAVEL_USER_MODEL],
       );
+      const roleNames = roleRows.map((row) => row.name);
+      if (!roleNames.includes('withdrawal-executive') && !roleNames.includes('sub-admin')) {
+        throw validationError('Select a Withdrawal Executive.');
+      }
     }
   }
 

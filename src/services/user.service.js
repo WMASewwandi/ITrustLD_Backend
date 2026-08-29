@@ -43,7 +43,7 @@ export async function getUserRoles(userId) {
 }
 
 export async function getUserPermissions(userId) {
-  const rows = await query(
+  const viaRole = await query(
     `SELECT DISTINCT p.name
      FROM permissions p
      INNER JOIN role_has_permissions rhp ON rhp.permission_id = p.id
@@ -52,7 +52,26 @@ export async function getUserPermissions(userId) {
      ORDER BY p.name ASC`,
     [userId, LARAVEL_USER_MODEL],
   );
-  return rows.map((row) => normalizeToActivityIdentifier(row.name));
+
+  let viaDirect = [];
+  try {
+    viaDirect = await query(
+      `SELECT DISTINCT p.name
+       FROM permissions p
+       INNER JOIN model_has_permissions mhp ON mhp.permission_id = p.id
+       WHERE mhp.model_id = ? AND mhp.model_type = ?
+       ORDER BY p.name ASC`,
+      [userId, LARAVEL_USER_MODEL],
+    );
+  } catch {
+    viaDirect = [];
+  }
+
+  return [
+    ...new Set(
+      [...viaRole, ...viaDirect].map((row) => normalizeToActivityIdentifier(row.name)),
+    ),
+  ];
 }
 
 export async function setUserOnline(userId, isOnline) {

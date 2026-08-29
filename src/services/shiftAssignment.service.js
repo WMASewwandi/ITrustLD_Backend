@@ -1,7 +1,8 @@
 import { query, getDbDriver } from '../config/database.js';
-import { LARAVEL_USER_MODEL } from '../constants/adminRoles.js';
+import { AUTHORIZE_WITHDRAWAL_PERMISSION, AUTHORIZER_ROLE_NAME_ALIASES, LARAVEL_USER_MODEL } from '../constants/adminRoles.js';
 import { getUserPendingShowCount } from './systemUser.service.js';
 import { getUserRoles } from './user.service.js';
+import { normalizeToActivityIdentifier } from './role.service.js';
 import {
   SL_TIMEZONE,
   alternateShift,
@@ -118,11 +119,21 @@ function formatShiftTimeLabel(user) {
   return `${format12(startMinutes)} – ${format12(endMinutes)}`;
 }
 
+function isWithdrawalAuthorizerRole(roles = []) {
+  return roles.some((role) => {
+    const normalized = String(role || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[_ ]+/g, '-');
+    return normalized === 'withdrawal-authorizer' || normalized === 'withdrawal-authorization';
+  });
+}
+
 function roleDisplayName(roles) {
   if (roles.includes('sub-admin')) return 'Sub Admin';
   if (roles.includes('deposit-executive')) return 'Deposit Executive';
   if (roles.includes('withdrawal-executive')) return 'Withdrawal Executive';
-  if (roles.includes('withdrawal-authorizer')) return 'Withdrawal Authorizer';
+  if (isWithdrawalAuthorizerRole(roles)) return 'Withdrawal Authorizer';
   return 'Executive';
 }
 
@@ -320,6 +331,49 @@ export async function syncShiftHistoryForDates(shiftDates = []) {
   }
 }
 
+async function getUsersByPermission(permissionName) {
+  const hasLastAssigned = await ensureLastAssignedAtColumn();
+  const select = hasLastAssigned ? USER_SELECT_WITH_LAST_ASSIGNED : USER_SELECT_WITHOUT_LAST_ASSIGNED;
+  const permissionRows = await query('SELECT id, name FROM permissions');
+  const ids = permissionRows
+    .filter((row) => normalizeToActivityIdentifier(row.name) === permissionName)
+    .map((row) => row.id);
+  if (!ids.length) return [];
+
+  const placeholders = ids.map(() => '?').join(', ');
+  const byRole = await query(
+    `${select}
+     FROM users u
+     INNER JOIN model_has_roles mhr ON mhr.model_id = u.id AND mhr.model_type = ?
+     INNER JOIN role_has_permissions rhp ON rhp.role_id = mhr.role_id
+     WHERE rhp.permission_id IN (${placeholders})
+     ORDER BY u.id ASC`,
+    [LARAVEL_USER_MODEL, ...ids],
+  );
+
+  let byDirect = [];
+  try {
+    byDirect = await query(
+      `${select}
+       FROM users u
+       INNER JOIN model_has_permissions mhp ON mhp.model_id = u.id AND mhp.model_type = ?
+       WHERE mhp.permission_id IN (${placeholders})
+       ORDER BY u.id ASC`,
+      [LARAVEL_USER_MODEL, ...ids],
+    );
+  } catch {
+    byDirect = [];
+  }
+
+  return [...new Map([...byRole, ...byDirect].map((user) => [user.id, user])).values()];
+}
+
+async function getAuthorizerUsers() {
+  const byPermission = await getUsersByPermission(AUTHORIZE_WITHDRAWAL_PERMISSION);
+  const byRole = await getUsersByRoles(AUTHORIZER_ROLE_NAME_ALIASES);
+  return [...new Map([...byPermission, ...byRole].map((user) => [user.id, user])).values()];
+}
+
 async function getUsersByRole(roleName) {
   const hasLastAssigned = await ensureLastAssignedAtColumn();
   const select = hasLastAssigned ? USER_SELECT_WITH_LAST_ASSIGNED : USER_SELECT_WITHOUT_LAST_ASSIGNED;
@@ -418,7 +472,10 @@ function compareLastAssignedAt(a, b) {
 export async function getCandidateExecutives(roleName) {
   await initializeShiftIfNeeded();
   const activeShift = await getActiveShiftForDate();
-  const allInRole = await getUsersByRole(roleName);
+  const allInRole =
+    roleName === 'withdrawal-authorizer'
+      ? await getAuthorizerUsers()
+      : await getUsersByRole(roleName);
 
   let shiftFiltered = allInRole.filter((user) => user.shift === activeShift);
   if (!shiftFiltered.length) {
@@ -485,9 +542,10 @@ export async function buildExecutivesForAssignment(roleName, { includeSubAdmin =
   const activeShift = await getActiveShiftForDate();
   const now = new Date();
 
-  const users = await getUsersByRoles(
-    includeSubAdmin ? [roleName, 'sub-admin'] : [roleName],
-  );
+  const users =
+    roleName === 'withdrawal-authorizer'
+      ? await getAuthorizerUsers()
+      : await getUsersByRoles(includeSubAdmin ? [roleName, 'sub-admin'] : [roleName]);
   const uniqueUsers = [...new Map(users.map((user) => [user.id, user])).values()];
 
   const executives = [];
