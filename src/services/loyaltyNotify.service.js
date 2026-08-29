@@ -6,6 +6,7 @@ import {
   getLevelIdFromThresholds,
   getMembershipTierThresholds,
 } from './loyaltyMembershipTier.service.js';
+import { fullyVerifiedAccountSql } from './accountHolder.service.js';
 
 function parseNotifyFlag(value) {
   return value === true || value === 1 || value === '1' || String(value).toLowerCase() === 'true';
@@ -62,7 +63,7 @@ async function listLoyaltyNotifyRecipients({ audienceType = 'both', tiers = [] }
      WHERE COALESCE(ah.account_status, 'ACTIVE') != 'BANNED'
        AND ah.email IS NOT NULL
        AND TRIM(ah.email) != ''
-       AND ah.email_verification = 'VERIFIED'
+       AND ${fullyVerifiedAccountSql('ah')}
        ${audienceSql}`,
     params,
   );

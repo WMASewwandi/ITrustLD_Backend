@@ -149,6 +149,7 @@ function mapDepositRow(row, adminUsers, assignedUsers, similarCounts = {}) {
     id: row.transaction_id,
     depositId: row.id,
     date: formatTimestampSl(row.updated_at),
+    createdAt: formatTimestampSl(row.created_at),
     userId: row.account_number || String(row.user_id),
     customer: row.user_name ? String(row.user_name).split(' ')[0] : 'N/A',
     platformId: row.topup_account_id || '—',

@@ -92,7 +92,7 @@ authRouter.post('/logout', requireUserAuth, async (req, res, next) => {
 
 authRouter.get('/me', requireUserAuth, async (req, res, next) => {
   try {
-    const user = await getUserSession(req.auth.userId);
+    const user = await getUserSession(req.auth.userId, { skipSummary: true });
     res.json({ ok: true, user });
   } catch (error) {
     next(error);
