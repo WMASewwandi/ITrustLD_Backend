@@ -274,6 +274,18 @@ function mapWithdrawalRow(row, adminUsers, assignedUsers, similarCounts) {
   const assignedName = row.assigned_to
     ? assignedUsers[row.assigned_to] || String(row.assigned_to)
     : '—';
+  const updatedByName = row.pendings_by_admin
+    ? adminUsers[row.pendings_by_admin] || String(row.pendings_by_admin)
+    : '—';
+  const authorizedById =
+    row.transaction_status === 'Completed'
+      ? row.approved_by_admin
+      : row.transaction_status === 'Rejected'
+        ? row.rejected_by_admin
+        : null;
+  const authorizedByName = authorizedById
+    ? adminUsers[authorizedById] || String(authorizedById)
+    : '—';
   const simKey = `${row.cashout_method_id}_${row.cashout_account_id}`;
   const todayTxCount = similarCounts[simKey] || 0;
   const accountDetails = parseAccountDetailsLog(row.account_details_log);
@@ -284,6 +296,7 @@ function mapWithdrawalRow(row, adminUsers, assignedUsers, similarCounts) {
     id: row.transaction_id,
     withdrawalId: row.id,
     date: formatTimestampSl(row.updated_at),
+    createdAt: formatTimestampSl(row.created_at),
     userId: row.account_number || String(row.user_id),
     customer: row.user_name ? String(row.user_name).split(' ')[0] : 'N/A',
     platformId: row.cashout_account_id || '—',
@@ -306,6 +319,8 @@ function mapWithdrawalRow(row, adminUsers, assignedUsers, similarCounts) {
     assigned: assignedName,
     assignedToId: row.assigned_to,
     admin: adminName,
+    updatedBy: updatedByName,
+    authorizedBy: authorizedByName,
     proof: Boolean(row.cashout_payment_proof),
     proofUrl: buildWithdrawalProofApiUrl(row.cashout_payment_proof),
     proofFileName: row.cashout_payment_proof || null,

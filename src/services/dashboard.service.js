@@ -169,15 +169,18 @@ function buildNotifications({ accountHolder, summary, documents }) {
 
 export async function getUserDashboard(userId) {
   const accountHolder = await findAccountHolderByUserId(userId);
-  const [user, documents, recentTransactions, blogPosts] = await Promise.all([
+  const userType = resolveUserType(accountHolder);
+  const [user, documents, recentTransactions, blogPosts, promotionalContent] = await Promise.all([
     getUserSession(userId, { accountHolder }),
     buildDocumentRows(accountHolder, { checkStorage: false }),
     getRecentTransactions(userId),
     listPublishedBlogPostsForUser(6),
+    getDashboardPromotionalContent(userType),
   ]);
 
   const summary = {
     trust_points: user.trust_points ?? 0,
+    earned_for_year: user.earned_for_year ?? 0,
     saved_banks_count: user.saved_banks_count ?? 0,
     pending_deposits_count: user.pending_deposits_count ?? 0,
     pending_withdrawals_count: user.pending_withdrawals_count ?? 0,
@@ -186,8 +189,6 @@ export async function getUserDashboard(userId) {
       ? user.pending_withdrawal_ids
       : [],
   };
-  const userType = resolveUserType(accountHolder);
-  const promotionalContent = await getDashboardPromotionalContent(userType);
   const notifications = buildNotifications({ accountHolder, summary, documents });
   const verificationComplete =
     accountHolder?.email_verification === 'VERIFIED' &&

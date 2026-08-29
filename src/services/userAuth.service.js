@@ -285,6 +285,7 @@ export async function loginUser({ email, password }) {
   await setUserOnline(user.id, true);
 
   const publicUser = toPublicUser(user, roles, accountHolder);
+  const summary = await getUserAccountSummary(user.id);
   const token = signAccessToken(user, roles);
   const redirect_to = resolveUserRedirect(accountHolder);
 
@@ -293,7 +294,11 @@ export async function loginUser({ email, password }) {
     message: 'Login successful.',
     redirect_to,
     token,
-    user: publicUser,
+    user: {
+      ...publicUser,
+      user_type: resolveUserType(accountHolder),
+      ...summary,
+    },
   };
 }
 
@@ -325,11 +330,11 @@ export async function getUserSession(userId, options = {}) {
   }
 
   const publicUser = toPublicUser(user, roles, accountHolder);
-  const summary = await getUserAccountSummary(userId);
+  const summary = options.skipSummary ? null : await getUserAccountSummary(userId);
 
   return {
     ...publicUser,
     user_type: resolveUserType(accountHolder),
-    ...summary,
+    ...(summary || {}),
   };
 }

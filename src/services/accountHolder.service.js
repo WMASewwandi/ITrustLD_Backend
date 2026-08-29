@@ -78,6 +78,15 @@ export function needsVerification(accountHolder) {
   );
 }
 
+/** SQL fragment: all four KYC flags verified. Pass table alias e.g. 'ah'. */
+export function fullyVerifiedAccountSql(alias = '') {
+  const col = alias ? `${alias}.` : '';
+  return `${col}email_verification = 'VERIFIED'
+       AND ${col}mobile_number_verification = 'VERIFIED'
+       AND ${col}identity_verification = 'VERIFIED'
+       AND ${col}address_verification = 'VERIFIED'`;
+}
+
 export function toPublicAccountHolder(accountHolder) {
   if (!accountHolder) return null;
   return {

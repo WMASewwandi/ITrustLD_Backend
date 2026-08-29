@@ -2,6 +2,7 @@ import { query } from '../config/database.js';
 import { env } from '../config/env.js';
 import { sendEmailAndSms } from './notification.service.js';
 import { rateChangeEmailHtml } from './mail.templates.js';
+import { fullyVerifiedAccountSql } from './accountHolder.service.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -199,7 +200,7 @@ async function listRateNotifyRecipients() {
      WHERE COALESCE(account_status, 'ACTIVE') != 'BANNED'
        AND email IS NOT NULL
        AND TRIM(email) != ''
-       AND email_verification = 'VERIFIED'`,
+       AND ${fullyVerifiedAccountSql()}`,
   );
 }
 
@@ -226,7 +227,7 @@ function buildRateChangeSmsMessage(details) {
 async function sendRateChangeNotifications(details) {
   const recipients = await listRateNotifyRecipients();
   if (!recipients.length) {
-    console.info('[rate-notify] no verified recipients');
+    console.info('[rate-notify] no fully verified recipients');
     return;
   }
 
