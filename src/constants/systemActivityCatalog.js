@@ -53,6 +53,7 @@ export const SYSTEM_ACTIVITY_CATEGORIES = [
   { id: 42, category_identifier: 'currency_config_activities', categoy_name: 'Currency Configurations', display_order: 14 },
   { id: 43, category_identifier: 'blog_post_activities', categoy_name: 'Blog Post Activities', display_order: 15 },
   { id: 45, category_identifier: 'performance_activities', categoy_name: 'Performance Activities', display_order: 16 },
+  { id: 46, category_identifier: 'master_activities', categoy_name: 'Master', display_order: 17 },
 ];
 
 export const SYSTEM_ACTIVITIES = [
@@ -119,6 +120,9 @@ export const SYSTEM_ACTIVITIES = [
 
   { activity_identifier: 'view_team_performance', activity_name: 'View Team Performance', category_id: 45, sort_order: 1 },
   { activity_identifier: 'view_my_performance', activity_name: 'View My Performance', category_id: 45, sort_order: 2 },
+
+  { activity_identifier: 'view_reject_reasons', activity_name: 'View Reject Reasons', category_id: 46, sort_order: 1 },
+  { activity_identifier: 'manage_reject_reasons', activity_name: 'Manage Reject Reasons', category_id: 46, sort_order: 2 },
 ];
 
 /** Laravel RoleAndPermissionSeeder defaults + new portal permissions for super-admin. */
@@ -185,6 +189,8 @@ export const BUILTIN_ROLE_PERMISSIONS = {
     'manage_bulk_sms',
     'view_team_performance',
     'view_my_performance',
+    'view_reject_reasons',
+    'manage_reject_reasons',
   ],
   'deposit-executive': [
     'view_admin_dashboard',

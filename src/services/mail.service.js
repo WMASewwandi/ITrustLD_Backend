@@ -1,5 +1,6 @@
 import nodemailer from 'nodemailer';
 import { env } from '../config/env.js';
+import { getEmailLogoAttachments } from './mail.templates.js';
 
 let smtpTransporter;
 let localTransporter;
@@ -47,13 +48,15 @@ async function deliver(transport, payload) {
 }
 
 export async function sendMail({ to, subject, html, text, attachments }) {
+  const logoAttachments = getEmailLogoAttachments();
+  const allAttachments = [...logoAttachments, ...(attachments || [])];
   const payload = {
     from: buildFrom(),
     to,
     subject,
     html,
     text: text || undefined,
-    attachments: attachments?.length ? attachments : undefined,
+    attachments: allAttachments.length ? allAttachments : undefined,
   };
 
   const hasSmtpCredentials = Boolean(env.mail.user && env.mail.pass);

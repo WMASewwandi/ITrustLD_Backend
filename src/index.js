@@ -4,6 +4,7 @@ import { env } from './config/env.js';
 import { runPendingMigrations } from './db/migrationRunner.js';
 import { warmAdminDashboardCache } from './services/adminDashboard.service.js';
 import { ensureSystemActivitiesCatalog } from './services/ensureSystemActivities.service.js';
+import { seedExistingRejectReasons } from './services/rejectReason.service.js';
 import { startShiftRolloverScheduler } from './services/shiftAssignment.service.js';
 
 async function main() {
@@ -16,6 +17,7 @@ async function main() {
   }
 
   await ensureSystemActivitiesCatalog();
+  await seedExistingRejectReasons();
 
   // Warm default dashboard before accepting traffic so the first admin load is fast.
   await warmAdminDashboardCache();
