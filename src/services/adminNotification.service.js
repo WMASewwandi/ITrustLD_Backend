@@ -29,7 +29,15 @@ async function getWithdrawalQueueScope(userId, roles = [], permissions = []) {
     perms = await getUserPermissions(userId);
   }
   const isAuthorizerOnly =
-    (perms.includes(AUTHORIZE_WITHDRAWAL_PERMISSION) || roles.includes('withdrawal-authorizer')) &&
+    (perms.includes(AUTHORIZE_WITHDRAWAL_PERMISSION) ||
+      roles.some((role) =>
+        ['withdrawal-authorizer', 'withdrawal-authorization'].includes(
+          String(role || '')
+            .trim()
+            .toLowerCase()
+            .replace(/[_ ]+/g, '-'),
+        ),
+      )) &&
     !isAdmin &&
     !isExec;
   return { isExec, isAuthorizerOnly };

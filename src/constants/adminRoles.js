@@ -8,4 +8,12 @@ export const ADMIN_PORTAL_ROLES = [
 
 export const AUTHORIZE_WITHDRAWAL_PERMISSION = 'authorize_withdrawal_data';
 
+/** Live vs local role name variants for withdrawal authorization. */
+export const AUTHORIZER_ROLE_NAME_ALIASES = [
+  'withdrawal-authorizer',
+  'withdrawal-authorization',
+  'Withdrawal Authorizer',
+  'Withdrawal Authorization',
+];
+
 export const LARAVEL_USER_MODEL = 'App\\Models\\User';
