@@ -1,6 +1,6 @@
 import { getDbDriver, query } from '../config/database.js';
 import { addColumnIfMissing, createTableIfMissing } from '../db/helpers.js';
-import { formatTimestampSl, parseDbDateTime } from '../utils/slTime.js';
+import { formatTimestampSl, nowSqlDateTime, parseDbDateTime } from '../utils/slTime.js';
 import { queueSmsMessage } from './notification.service.js';
 
 let schemaReady = false;
@@ -71,18 +71,12 @@ function normalizeSegment(value) {
   return SEGMENT_MAP[key] || 'all_users';
 }
 
-function formatDateTimeInput(value) {
-  if (!value) return null;
-  const date = parseDbDateTime(value);
-  if (!date) return null;
-  return formatTimestampSl(date);
-}
-
 function formatDisplayDateTime(value) {
   if (!value) return '';
-  const date = new Date(String(value).replace(' ', 'T'));
-  if (Number.isNaN(date.getTime())) return String(value);
+  const date = parseDbDateTime(value);
+  if (!date) return String(value);
   return date.toLocaleString('en-GB', {
+    timeZone: 'Asia/Colombo',
     day: '2-digit',
     month: 'short',
     year: 'numeric',
@@ -90,6 +84,11 @@ function formatDisplayDateTime(value) {
     minute: '2-digit',
     hour12: false,
   });
+}
+
+function parseScheduleInput(value) {
+  if (value == null || String(value).trim() === '') return null;
+  return parseDbDateTime(value);
 }
 
 async function ensureBulkSmsSchema() {
@@ -208,8 +207,8 @@ function affectedCount(result) {
 }
 
 async function claimCampaignProcessLock(campaignId) {
-  const now = formatDateTimeInput(new Date());
-  const stale = formatDateTimeInput(new Date(Date.now() - 3 * 60 * 1000));
+  const now = nowSqlDateTime();
+  const stale = formatTimestampSl(new Date(Date.now() - 3 * 60 * 1000));
   const result = await query(
     `UPDATE bulk_sms_campaigns
      SET processing_at = ?
@@ -372,13 +371,13 @@ export async function createBulkSmsCampaign(userId, payload = {}) {
 
   const segment = normalizeSegment(payload.recipients || payload.recipientSegment);
   const message = String(payload.message || '').trim();
-  const scheduledDate = payload.schedule || payload.scheduledAt
-    ? new Date(payload.schedule || payload.scheduledAt)
-    : new Date();
-  if (Number.isNaN(scheduledDate.getTime())) {
+  const rawSchedule = payload.schedule || payload.scheduledAt;
+  const scheduledDate = rawSchedule ? parseScheduleInput(rawSchedule) : new Date();
+  if (!scheduledDate || Number.isNaN(scheduledDate.getTime())) {
     throw validationError('Invalid schedule date.');
   }
-  const scheduledAt = formatDateTimeInput(scheduledDate);
+  const now = nowSqlDateTime();
+  const scheduledAt = rawSchedule ? formatTimestampSl(scheduledDate) : now;
   const sendNow = scheduledDate.getTime() <= Date.now();
 
   if (!message) {
@@ -415,7 +414,7 @@ export async function createBulkSmsCampaign(userId, payload = {}) {
     `INSERT INTO bulk_sms_campaigns (
       recipient_segment, recipient_emails, message, scheduled_at, status, total_recipients,
       sent_count, failed_count, created_by, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, 'queued', ?, 0, 0, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+    ) VALUES (?, ?, ?, ?, 'queued', ?, 0, 0, ?, ?, ?)`,
     [
       segment,
       segment === 'custom' ? customNumbers.join(',') : null,
@@ -423,6 +422,8 @@ export async function createBulkSmsCampaign(userId, payload = {}) {
       scheduledAt,
       totalRecipients,
       userId,
+      now,
+      now,
     ],
   );
 
@@ -446,7 +447,7 @@ function isCancellableStatus(status) {
 
 export async function processDueBulkSmsCampaigns() {
   await ensureBulkSmsSchema();
-  const now = formatDateTimeInput(new Date());
+  const now = nowSqlDateTime();
   const rows = await query(
     `SELECT id
      FROM bulk_sms_campaigns
@@ -479,15 +480,15 @@ export async function processBulkSmsCampaign(campaignId) {
     const status = String(campaign.status || '').toLowerCase();
     if (!isCancellableStatus(status)) return;
 
-    const now = formatDateTimeInput(new Date());
+    const now = nowSqlDateTime();
     if (campaign.scheduled_at && campaign.scheduled_at > now) return;
 
     if (status === 'queued') {
       await query(
         `UPDATE bulk_sms_campaigns
-         SET status = 'sending', started_at = COALESCE(started_at, CURRENT_TIMESTAMP), updated_at = CURRENT_TIMESTAMP
+         SET status = 'sending', started_at = COALESCE(started_at, ?), updated_at = ?
          WHERE id = ? AND status = 'queued'`,
-        [campaignId],
+        [now, now, campaignId],
       );
       if ((await getCampaignStatus(campaignId)) === 'cancelled') return;
     }
@@ -502,9 +503,9 @@ export async function processBulkSmsCampaign(campaignId) {
     if (processedCount >= totalRecipients || sentCount + failedCount >= totalRecipients) {
       await query(
         `UPDATE bulk_sms_campaigns
-         SET status = 'sent', completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+         SET status = 'sent', completed_at = ?, updated_at = ?
          WHERE id = ? AND status IN ('queued', 'sending')`,
-        [campaignId],
+        [now, now, campaignId],
       );
       return;
     }
@@ -513,9 +514,9 @@ export async function processBulkSmsCampaign(campaignId) {
     if (!recipients.length) {
       await query(
         `UPDATE bulk_sms_campaigns
-         SET status = 'sent', completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+         SET status = 'sent', completed_at = ?, updated_at = ?
          WHERE id = ? AND status IN ('queued', 'sending')`,
-        [campaignId],
+        [now, now, campaignId],
       );
       return;
     }
@@ -559,9 +560,9 @@ export async function processBulkSmsCampaign(campaignId) {
     if (cancelled || (await getCampaignStatus(campaignId)) === 'cancelled') {
       await query(
         `UPDATE bulk_sms_campaigns
-         SET sent_count = ?, failed_count = ?, processed_count = ?, updated_at = CURRENT_TIMESTAMP
+         SET sent_count = ?, failed_count = ?, processed_count = ?, updated_at = ?
          WHERE id = ? AND status = 'cancelled'`,
-        [nextSent, nextFailed, nextProcessed, campaignId],
+        [nextSent, nextFailed, nextProcessed, nowSqlDateTime(), campaignId],
       );
       return;
     }
@@ -569,14 +570,15 @@ export async function processBulkSmsCampaign(campaignId) {
     const isComplete = nextProcessed >= totalRecipients || nextSent + nextFailed >= totalRecipients;
     await query(
       `UPDATE bulk_sms_campaigns
-       SET sent_count = ?, failed_count = ?, processed_count = ?, status = ?, completed_at = ?, updated_at = CURRENT_TIMESTAMP
+       SET sent_count = ?, failed_count = ?, processed_count = ?, status = ?, completed_at = ?, updated_at = ?
        WHERE id = ? AND status IN ('queued', 'sending')`,
       [
         nextSent,
         nextFailed,
         nextProcessed,
         isComplete ? 'sent' : 'sending',
-        isComplete ? formatDateTimeInput(new Date()) : null,
+        isComplete ? nowSqlDateTime() : null,
+        nowSqlDateTime(),
         campaignId,
       ],
     );
@@ -605,11 +607,12 @@ export async function cancelBulkSmsCampaign(id) {
     throw validationError('Only queued or sending campaigns can be cancelled.');
   }
 
+  const now = nowSqlDateTime();
   await query(
     `UPDATE bulk_sms_campaigns
-     SET status = 'cancelled', completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+     SET status = 'cancelled', completed_at = ?, updated_at = ?
      WHERE id = ? AND status IN ('queued', 'sending')`,
-    [id],
+    [now, now, id],
   );
 
   const updated = await query(`SELECT * FROM bulk_sms_campaigns WHERE id = ? LIMIT 1`, [id]);
