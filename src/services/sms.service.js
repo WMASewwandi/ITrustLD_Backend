@@ -22,6 +22,11 @@ function toEsmsMsisdn(msisdn) {
   return local ? `94${local}` : null;
 }
 
+function persistUserId(userId) {
+  const id = Number(userId);
+  return Number.isFinite(id) && id > 0 ? id : 0;
+}
+
 function dialogApiMessage(data, fallback) {
   return data?.comment || data?.message || fallback;
 }
@@ -127,17 +132,19 @@ export async function sendDialogSms({
   paymentMethod = '0',
 }) {
   const mobile = toEsmsMsisdn(msisdn);
-  if (!mobile) return null;
+  if (!mobile) {
+    throw new Error(`Invalid mobile number: ${msisdn || ''}`);
+  }
 
   const insertResult = await query(
     `INSERT INTO sms_transactions (user_id, message, sms_type, created_at, updated_at)
      VALUES (?, ?, ?, NOW(), NOW())`,
-    [userId, message, smsType],
+    [persistUserId(userId), message, smsType],
   );
   const smsTransactionId = insertResult.insertId;
 
   if (!env.sms.enabled) {
-    console.info('[sms:log-only]', { userId, smsType, to: mobile });
+    console.info('[sms:log-only]', { userId: persistUserId(userId), smsType, to: mobile });
     return { logged: true, id: smsTransactionId };
   }
 
@@ -161,16 +168,13 @@ export async function sendDialogSms({
     const responseData = await response.json().catch(() => ({}));
     await persistSmsResponse(smsTransactionId, responseData);
     if (String(responseData?.status || '').toLowerCase() !== 'success') {
-      console.error(
-        '[sms:dialog-error]',
-        dialogApiMessage(responseData, 'Dialog SMS send failed.'),
-      );
+      throw new Error(dialogApiMessage(responseData, 'Dialog SMS send failed.'));
     }
     return responseData;
   } catch (error) {
     console.error('[sms:dialog-error]', error.message);
     await persistSmsResponse(smsTransactionId, { error: error.message });
-    return { error: error.message, id: smsTransactionId };
+    throw error;
   }
 }
 
@@ -212,7 +216,7 @@ export async function sendInternationalSms({
   const insertResult = await query(
     `INSERT INTO sms_transactions (user_id, message, sms_type, created_at, updated_at)
      VALUES (?, ?, ?, NOW(), NOW())`,
-    [userId, message, smsType],
+    [persistUserId(userId), message, smsType],
   );
   const smsTransactionId = insertResult.insertId;
 
