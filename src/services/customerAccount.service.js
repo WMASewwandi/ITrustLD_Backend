@@ -171,7 +171,7 @@ export function toCustomerRow(row) {
     mobile: row.mobile_number || '',
     mobileVerification: row.mobile_number_verification === 'VERIFIED' ? 'Verified' : 'Pending',
     partner: mapPartner(row.is_patner),
-    userType: row.is_patner === 'YES' ? 'Affluent' : 'Normal',
+    userType: row.is_patner === 'YES' ? 'Affiliate' : 'Normal',
     loyaltyTier: 'Normal',
     nic: mapKycStatus(row.identity_verification, row.identity_document_status),
     address: mapKycStatus(row.address_verification, row.address_document_status),
@@ -246,7 +246,7 @@ function resolvePartnerFlag(search = {}) {
   if (partner === 'no') fromPartner = 'NO';
 
   let fromType = null;
-  if (userType === 'affluent') fromType = 'YES';
+  if (userType === 'affiliate' || userType === 'affluent') fromType = 'YES';
   if (userType === 'normal') fromType = 'NO';
 
   if (fromPartner && fromType && fromPartner !== fromType) {
@@ -302,7 +302,7 @@ async function attachLoyaltyFields(customers = []) {
     const tier = thresholds.find((item) => item.levelId === levelId);
     return {
       ...customer,
-      userType: customer.partner === 'Yes' ? 'Affluent' : 'Normal',
+      userType: customer.partner === 'Yes' ? 'Affiliate' : 'Normal',
       loyaltyTier: tier?.name || 'Normal',
       yearlyPoints,
     };

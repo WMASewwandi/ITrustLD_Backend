@@ -458,7 +458,7 @@ export async function getLoyaltyManagementData(audience, tier) {
     ranking_criteria: {
       evaluation_period_days: 365,
       evaluation_period_label: 'Previous 12 months of Trust Points',
-      user_types: ['Normal', 'Affluent'],
+      user_types: ['Normal', 'Affiliate'],
     },
   };
 }
