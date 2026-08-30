@@ -31,7 +31,7 @@ function header() {
   return `
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
       <tr>
-        <td align="center" style="padding:8px 8px 16px 8px;text-align:center;">
+        <td class="logo-cell" align="center" style="padding:10px 12px 16px;text-align:center;">
           <img
             class="logo-light"
             src="cid:itrustld-logo-light"
@@ -40,14 +40,16 @@ function header() {
             alt="iTrustLD"
             style="display:inline-block;height:auto;max-width:180px;border:0;outline:none;text-decoration:none;"
           />
+          <!--[if !mso]><!-->
           <img
             class="logo-dark"
             src="cid:itrustld-logo-dark"
             width="180"
             height="44"
             alt="iTrustLD"
-            style="display:none;height:auto;max-width:180px;border:0;outline:none;text-decoration:none;mso-hide:all;"
+            style="display:none;height:0;width:0;max-height:0;max-width:0;overflow:hidden;border:0;outline:none;text-decoration:none;mso-hide:all;"
           />
+          <!--<![endif]-->
         </td>
       </tr>
     </table>`;
@@ -138,14 +140,14 @@ function wrap(content, footerExtra = '') {
   <style>
     :root { color-scheme: light dark; }
     .logo-light { display: inline-block !important; }
-    .logo-dark { display: none !important; max-height: 0 !important; overflow: hidden !important; }
+    .logo-dark { display: none !important; max-height: 0 !important; max-width: 0 !important; overflow: hidden !important; }
     @media (prefers-color-scheme: light) {
-      .logo-light { display: inline-block !important; max-height: none !important; overflow: visible !important; }
-      .logo-dark { display: none !important; max-height: 0 !important; overflow: hidden !important; }
+      .logo-light { display: inline-block !important; max-height: none !important; max-width: 180px !important; overflow: visible !important; }
+      .logo-dark { display: none !important; max-height: 0 !important; max-width: 0 !important; overflow: hidden !important; }
     }
     @media (prefers-color-scheme: dark) {
-      .logo-light { display: none !important; max-height: 0 !important; overflow: hidden !important; }
-      .logo-dark { display: inline-block !important; max-height: none !important; overflow: visible !important; }
+      .logo-light { display: none !important; max-height: 0 !important; max-width: 0 !important; overflow: hidden !important; }
+      .logo-dark { display: inline-block !important; height: auto !important; width: 180px !important; max-height: none !important; max-width: 180px !important; overflow: visible !important; }
       .email-bg { background-color: #111111 !important; }
       .email-card { background-color: transparent !important; }
       .email-card h1,
@@ -163,6 +165,7 @@ function wrap(content, footerExtra = '') {
       .end-heading { color: #ffffff !important; }
       .end-link { color: #86efac !important; }
       .email-card a[style*="background"] { color: #ffffff !important; }
+      .logo-cell { background-color: transparent !important; }
     }
     [data-ogsc] .email-bg { background-color: #111111 !important; }
     [data-ogsc] .email-card { background-color: transparent !important; }
@@ -172,8 +175,10 @@ function wrap(content, footerExtra = '') {
     [data-ogsc] .email-card div { color: #f3f4f6 !important; }
     [data-ogsc] .email-muted { color: #9ca3af !important; }
     [data-ogsc] .end-heading { color: #ffffff !important; }
-    [data-ogsc] .logo-light { display: none !important; }
-    [data-ogsc] .logo-dark { display: inline-block !important; }
+    [data-ogsc] .logo-light,
+    [data-ogsb] .logo-light { display: none !important; max-height: 0 !important; max-width: 0 !important; overflow: hidden !important; }
+    [data-ogsc] .logo-dark,
+    [data-ogsb] .logo-dark { display: inline-block !important; height: auto !important; width: 180px !important; max-height: none !important; max-width: 180px !important; overflow: visible !important; }
   </style>
 </head>
 <body class="email-bg" style="margin:0;padding:0;font-family:Poppins,Arial,sans-serif;background-color:#f8f8f8;">
