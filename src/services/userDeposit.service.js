@@ -14,6 +14,11 @@ import {
   nowSqlDateTime,
   resolveFilterDateRange,
 } from '../utils/slTime.js';
+import {
+  attachPendingCounts,
+  assertDepositMethodPendingLimit,
+  getOpenDepositCountsByMethod,
+} from './pendingMethodLimit.service.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -352,9 +357,10 @@ export async function getDepositBootstrap(userId) {
   }
 
   const verificationComplete = !needsVerification(accountHolder);
-  const [topupMethods, recentAmounts] = await Promise.all([
+  const [topupMethods, recentAmounts, pendingCounts] = await Promise.all([
     loadTopupMethods(),
     loadRecentDepositAmounts(userId),
+    getOpenDepositCountsByMethod(userId),
   ]);
 
   return {
@@ -364,7 +370,7 @@ export async function getDepositBootstrap(userId) {
       first_name: accountHolder.first_name,
       last_name: accountHolder.last_name,
     },
-    topup_methods: topupMethods,
+    topup_methods: attachPendingCounts(topupMethods, pendingCounts),
     recent_amounts: recentAmounts,
   };
 }
@@ -381,6 +387,8 @@ export async function getDepositMethodDetails(userId, { topupMethodId, depositAm
   if (!topupMethod) {
     throw validationError('Selected top-up method is not available.');
   }
+
+  await assertDepositMethodPendingLimit(userId, methodId, topupMethod.name);
 
   const [paymentOptions, depositRates, priorityRate] = await Promise.all([
     loadSupportedPaymentOptions(methodId, topupMethod.name),
@@ -478,6 +486,8 @@ export async function createUserDeposit(userId, payload) {
   if (!topupMethod) {
     throw validationError('Selected top-up method is not available.');
   }
+
+  await assertDepositMethodPendingLimit(userId, topupMethodId, topupMethod.name);
 
   const accountError = validateTopupAccountId(topupMethod.name, topupAccountId);
   if (accountError) throw validationError(accountError);
@@ -589,6 +599,8 @@ export async function saveDepositPaymentProof(userId, depositId, file) {
   if (deposit.payment_proof) {
     throw validationError('Payment proof has already been submitted for this deposit.');
   }
+
+  await assertDepositMethodPendingLimit(userId, deposit.topup_method_id, deposit.topup_method_name);
 
   if (!file) {
     return {

@@ -12,6 +12,10 @@ export function errorHandler(err, _req, res, _next) {
     message: err.message || 'Internal server error',
   };
 
+  if (err.code) {
+    payload.code = err.code;
+  }
+
   if (env.nodeEnv !== 'production' && err.stack) {
     payload.stack = err.stack;
   }

@@ -36,7 +36,9 @@ const SELECT_COLUMNS = `
   account_holders.identity_verification, account_holders.address_verification,
   account_holders.identity_document_status, account_holders.address_document_status,
   account_holders.account_status, account_holders.is_patner, account_holders.banned_reason,
+  account_holders.identity_verification_rejection_title,
   account_holders.identity_verification_rejection_message,
+  account_holders.address_verification_rejection_title,
   account_holders.address_verification_rejection_message,
   account_holders.identity_document_name, account_holders.identity_document_type,
   account_holders.address_document_name, account_holders.address_document_type,
@@ -179,7 +181,9 @@ export function toCustomerRow(row) {
     status: deriveStatus(row),
     banned: row.account_status === 'BANNED',
     banReason: row.banned_reason || undefined,
+    nicRejectTitle: row.identity_verification_rejection_title || undefined,
     nicRejectReason: row.identity_verification_rejection_message || undefined,
+    addressRejectTitle: row.address_verification_rejection_title || undefined,
     addressRejectReason: row.address_verification_rejection_message || undefined,
   };
 }

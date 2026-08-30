@@ -10,6 +10,11 @@ import { autoAssignWithdrawal } from './withdrawalAssignment.service.js';
 import { storeWithdrawalProof } from './withdrawalProofStorage.service.js';
 import { bumpAdminNavCounts } from './adminNavCountsRevision.service.js';
 import { formatDateTimeParts, nowSqlDateTime, resolveFilterDateRange } from '../utils/slTime.js';
+import {
+  attachPendingCounts,
+  assertWithdrawalMethodPendingLimit,
+  getOpenWithdrawalCountsByMethod,
+} from './pendingMethodLimit.service.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -589,9 +594,10 @@ export async function getWithdrawalBootstrap(userId) {
   }
 
   const verificationComplete = !needsVerification(accountHolder);
-  const [cashoutMethods, recentAmounts] = await Promise.all([
+  const [cashoutMethods, recentAmounts, pendingCounts] = await Promise.all([
     loadCashoutMethods(),
     loadRecentCashoutAmounts(userId),
+    getOpenWithdrawalCountsByMethod(userId),
   ]);
 
   return {
@@ -601,7 +607,7 @@ export async function getWithdrawalBootstrap(userId) {
       first_name: accountHolder.first_name,
       last_name: accountHolder.last_name,
     },
-    cashout_methods: cashoutMethods,
+    cashout_methods: attachPendingCounts(cashoutMethods, pendingCounts),
     recent_amounts: recentAmounts,
   };
 }
@@ -621,6 +627,8 @@ export async function getWithdrawalMethodDetails(
   if (!cashoutMethod) {
     throw validationError('Selected cash-out method is not available.');
   }
+
+  await assertWithdrawalMethodPendingLimit(userId, methodId, cashoutMethod.name);
 
   const [paymentOptions, withdrawalRates, priorityRate] = await Promise.all([
     loadSupportedReceivingOptions(methodId, cashoutMethod.name),
@@ -698,6 +706,8 @@ export async function createUserWithdrawal(userId, payload) {
   if (!cashoutMethod) {
     throw validationError('Selected cash-out method is not available.');
   }
+
+  await assertWithdrawalMethodPendingLimit(userId, cashoutMethodId, cashoutMethod.name);
 
   const accountError = validateCashoutAccountId(cashoutMethod.name, cashoutAccountId);
   if (accountError) throw validationError(accountError);
@@ -813,6 +823,12 @@ export async function saveWithdrawalPaymentProof(userId, withdrawalId, file, pay
   if (withdrawal.cashout_payment_proof) {
     throw validationError('Payment proof has already been submitted for this withdrawal.');
   }
+
+  await assertWithdrawalMethodPendingLimit(
+    userId,
+    withdrawal.cashout_method_id,
+    withdrawal.cashout_method_name,
+  );
 
   const selectedAccountType =
     payload.selected_account_type ?? payload.selectedAccountType ?? null;
