@@ -8,7 +8,7 @@ export function parseLkMobileNumber(msisdn) {
   const number = digits.slice(-9);
   const countryCode = digits.slice(0, -9);
 
-  if (!['0', '94', ''].includes(countryCode) && countryCode !== '94') {
+  if (!['0', '94', '0094', ''].includes(countryCode)) {
     return null;
   }
 
@@ -16,10 +16,21 @@ export function parseLkMobileNumber(msisdn) {
   return number;
 }
 
-/** Dialog eSMS v2 expects 94 + 9-digit local number, e.g. 94771234567. */
+/**
+ * Dialog eSMS POST /api/v2/sms wants a bare 9-digit local mobile (7XXXXXXXX).
+ * 07XXXXXXXX, 947XXXXXXXX, and +947XXXXXXXX all normalize to that form.
+ */
 function toEsmsMsisdn(msisdn) {
   const local = parseLkMobileNumber(msisdn);
-  return local ? `94${local}` : null;
+  if (!local || !local.startsWith('7')) return null;
+  return local;
+}
+
+const TOKEN_ERROR_CODES = new Set([100, 105, 106]);
+
+function dialogErrCode(data) {
+  const n = Number(data?.errCode);
+  return Number.isFinite(n) && n !== 0 ? n : 0;
 }
 
 function persistUserId(userId) {
@@ -28,7 +39,13 @@ function persistUserId(userId) {
 }
 
 function dialogApiMessage(data, fallback) {
-  return data?.comment || data?.message || fallback;
+  const comment = data?.comment || data?.message || fallback;
+  const code = dialogErrCode(data);
+  return code ? `[${code}] ${comment}` : comment;
+}
+
+function isTokenError(data) {
+  return TOKEN_ERROR_CODES.has(dialogErrCode(data));
 }
 
 /** Dialog requires a unique transaction_id per request (DB ids collide with old Laravel sends). */
@@ -93,17 +110,19 @@ async function fetchDialogToken() {
   return token;
 }
 
-async function getDialogToken() {
-  try {
-    const existing = await loadLatestToken();
-    if (existing?.token && existing?.token_expires_at) {
-      const expiresAt = new Date(existing.token_expires_at);
-      if (!Number.isNaN(expiresAt.getTime()) && expiresAt > new Date()) {
-        return existing.token;
+async function getDialogToken({ forceRefresh = false } = {}) {
+  if (!forceRefresh) {
+    try {
+      const existing = await loadLatestToken();
+      if (existing?.token && existing?.token_expires_at) {
+        const expiresAt = new Date(existing.token_expires_at);
+        if (!Number.isNaN(expiresAt.getTime()) && expiresAt > new Date()) {
+          return existing.token;
+        }
       }
+    } catch (error) {
+      console.error('[sms:token-load]', error.message);
     }
-  } catch (error) {
-    console.error('[sms:token-load]', error.message);
   }
 
   return fetchDialogToken();
@@ -149,23 +168,32 @@ export async function sendDialogSms({
   }
 
   try {
-    const token = await getDialogToken();
-    const response = await fetch(env.sms.sendUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        sourceAddress: env.sms.sourceAddress,
-        message,
-        transaction_id: uniqueDialogTransactionId(smsTransactionId),
-        payment_method: Number(paymentMethod ?? env.sms.paymentMethod) || 0,
-        msisdn: [{ mobile }],
-      }),
-    });
+    const sendOnce = async (token) => {
+      const response = await fetch(env.sms.sendUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          sourceAddress: env.sms.sourceAddress,
+          message,
+          transaction_id: uniqueDialogTransactionId(smsTransactionId),
+          payment_method: Number(paymentMethod ?? env.sms.paymentMethod) || 0,
+          msisdn: [{ mobile }],
+        }),
+      });
+      return response.json().catch(() => ({}));
+    };
 
-    const responseData = await response.json().catch(() => ({}));
+    let token = await getDialogToken();
+    let responseData = await sendOnce(token);
+
+    if (isTokenError(responseData)) {
+      token = await getDialogToken({ forceRefresh: true });
+      responseData = await sendOnce(token);
+    }
+
     await persistSmsResponse(smsTransactionId, responseData);
     if (String(responseData?.status || '').toLowerCase() !== 'success') {
       throw new Error(dialogApiMessage(responseData, 'Dialog SMS send failed.'));
