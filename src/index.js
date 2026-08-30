@@ -4,7 +4,6 @@ import { env } from './config/env.js';
 import { runPendingMigrations } from './db/migrationRunner.js';
 import { warmAdminDashboardCache } from './services/adminDashboard.service.js';
 import { ensureSystemActivitiesCatalog } from './services/ensureSystemActivities.service.js';
-import { seedExistingRejectReasons } from './services/rejectReason.service.js';
 import { startShiftRolloverScheduler } from './services/shiftAssignment.service.js';
 
 async function main() {
@@ -17,16 +16,18 @@ async function main() {
   }
 
   await ensureSystemActivitiesCatalog();
-  await seedExistingRejectReasons();
-
-  // Warm default dashboard before accepting traffic so the first admin load is fast.
-  await warmAdminDashboardCache();
 
   const app = createApp();
   startShiftRolloverScheduler();
   const server = app.listen(env.port, () => {
     console.log(`iTrustLD backend listening on http://localhost:${env.port}`);
     console.log(`Health: http://localhost:${env.port}/api/v1/health`);
+    if (typeof process.send === 'function') {
+      process.send('ready');
+    }
+    warmAdminDashboardCache().catch((error) => {
+      console.error('[dashboard-cache] warm failed', error);
+    });
   });
 
   const shutdown = async (signal) => {

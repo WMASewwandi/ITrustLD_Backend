@@ -1,7 +1,6 @@
 import { getDbDriver, query } from '../config/database.js';
 import { createTableIfMissing } from '../db/helpers.js';
 import {
-  DEFAULT_REJECT_REASONS,
   isRejectReasonCategory,
   REJECT_REASON_CATEGORIES,
 } from '../constants/rejectReasons.js';
@@ -105,34 +104,6 @@ async function nextSortOrder(category) {
     [category],
   );
   return (Number(rows[0]?.max_sort) || 0) + 1;
-}
-
-export async function seedExistingRejectReasons() {
-  await ensureRejectReasonsSchema();
-  const now = nowSqlDateTime();
-
-  for (const [category, messages] of Object.entries(DEFAULT_REJECT_REASONS)) {
-    const existing = await query(`SELECT message FROM reject_reasons WHERE category = ?`, [category]);
-    const have = new Set(existing.map((row) => String(row.message || '').trim()));
-    let sortOrder = await nextSortOrder(category);
-
-    for (const raw of messages) {
-      const message = normalizeMessage(raw);
-      if (have.has(message)) continue;
-
-      try {
-        await query(
-          `INSERT INTO reject_reasons (category, message, sort_order, created_by, created_at, updated_at)
-           VALUES (?, ?, ?, NULL, ?, ?)`,
-          [category, message, sortOrder, now, now],
-        );
-        have.add(message);
-        sortOrder += 1;
-      } catch (error) {
-        if (!isDuplicateReasonError(error)) throw error;
-      }
-    }
-  }
 }
 
 export async function listRejectReasons(category) {
