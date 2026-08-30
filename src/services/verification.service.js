@@ -20,6 +20,7 @@ import { toPublicUser } from './userAuth.service.js';
 import { getUserRoles } from './user.service.js';
 import { env } from '../config/env.js';
 import { bumpAdminNavCounts } from './adminNavCountsRevision.service.js';
+import { nowSqlDateTime } from '../utils/slTime.js';
 
 const IDENTITY_DOCUMENT_TYPES = new Set(['NIC', 'DL', 'PASSPORT']);
 const ADDRESS_DOCUMENT_TYPES = new Set([
@@ -399,9 +400,9 @@ export async function saveVerificationDocuments(
            identity_verification = 'NOT_VERIFIED',
            identity_verification_rejection_title = NULL,
            identity_verification_rejection_message = NULL,
-           updated_at = NOW()
+           updated_at = ?
        WHERE user_id = ?`,
-      [identityType, identityDocumentName, userId],
+      [identityType, identityDocumentName, nowSqlDateTime(), userId],
     );
     identityUploaded = true;
   }
@@ -422,9 +423,9 @@ export async function saveVerificationDocuments(
            address_verification = 'NOT_VERIFIED',
            address_verification_rejection_title = NULL,
            address_verification_rejection_message = NULL,
-           updated_at = NOW()
+           updated_at = ?
        WHERE user_id = ?`,
-      [addressType, addressDocumentName, userId],
+      [addressType, addressDocumentName, nowSqlDateTime(), userId],
     );
     addressUploaded = true;
   }
