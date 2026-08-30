@@ -62,7 +62,11 @@ function candidateS3Keys(filename) {
   const raw = normalizedFilename(filename);
   if (!raw) return [];
   const base = path.basename(raw);
-  return [...new Set([`documents/${base}`, raw, raw.startsWith('documents/') ? raw : `documents/${raw}`])];
+  const keys = [`documents/${base}`, `upload/${base}`, `uploads/${base}`, raw, base];
+  if (raw !== base && !raw.startsWith('documents/') && !raw.startsWith('upload')) {
+    keys.push(`documents/${raw}`, `upload/${raw}`);
+  }
+  return [...new Set(keys.filter(Boolean))];
 }
 
 function shouldUseS3Storage() {
@@ -88,7 +92,8 @@ function buildDocumentS3Key(filename) {
 async function createS3Client() {
   const { S3Client } = await import('@aws-sdk/client-s3');
   return new S3Client({
-    region: process.env.AWS_DEFAULT_REGION || 'us-east-1',
+    region: process.env.AWS_DEFAULT_REGION || process.env.AWS_REGION || 'ap-southeast-2',
+    followRegionRedirects: true,
     credentials:
       process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY
         ? {
@@ -269,6 +274,12 @@ export function validateDocumentUpload(file) {
   return null;
 }
 
+async function writeLocalDocument(buffer, filename) {
+  const dir = documentsDir();
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, filename), buffer);
+}
+
 async function uploadDocumentToS3(buffer, filename, contentType) {
   const bucket = process.env.AWS_BUCKET;
   if (!bucket) {
@@ -289,20 +300,28 @@ async function uploadDocumentToS3(buffer, filename, contentType) {
   );
 }
 
+async function persistVerificationFile(buffer, filename, contentType) {
+  await writeLocalDocument(buffer, filename);
+
+  if (!shouldUseS3Storage()) {
+    return filename;
+  }
+
+  try {
+    await uploadDocumentToS3(buffer, filename, contentType);
+  } catch (error) {
+    console.error('[kyc:s3-upload]', filename, error.message);
+  }
+
+  return filename;
+}
+
 export async function storeVerificationDocument(file, prefix) {
   const ext = path.extname(file.originalname || '').slice(1).toLowerCase();
   const safeExt = ALLOWED_EXTENSIONS.has(ext) ? ext : 'jpg';
   const filename = `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.${safeExt}`;
   const contentType = guessDocumentMimeType(filename);
-
-  if (shouldUseS3Storage()) {
-    await uploadDocumentToS3(file.buffer, filename, contentType);
-    return filename;
-  }
-
-  const dir = documentsDir();
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, filename), file.buffer);
+  await persistVerificationFile(file.buffer, filename, contentType);
   return filename;
 }
 
@@ -313,14 +332,6 @@ export async function storePairedBackDocument(file, frontFilename) {
   const baseName = frontFilename.replace(/\.[^.]+$/, '');
   const filename = `${baseName}_back.${normalizedExt}`;
   const contentType = guessDocumentMimeType(filename);
-
-  if (shouldUseS3Storage()) {
-    await uploadDocumentToS3(file.buffer, filename, contentType);
-    return filename;
-  }
-
-  const dir = documentsDir();
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, filename), file.buffer);
+  await persistVerificationFile(file.buffer, filename, contentType);
   return filename;
 }
