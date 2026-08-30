@@ -18,6 +18,7 @@ import {
   SYSTEM_USER_ACTIONS,
 } from './systemUserActionLog.service.js';
 import { findUserById } from './user.service.js';
+import { formatTimestampSl } from '../utils/slTime.js';
 import { env } from '../config/env.js';
 import { bumpAdminNavCounts } from './adminNavCountsRevision.service.js';
 import {
@@ -429,14 +430,6 @@ function formatEnumLabel(value) {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-function formatTimestamp(value) {
-  if (!value) return '—';
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return '—';
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
-}
-
 async function buildDocumentEntry(filename, kind, uploadedAt) {
   let stats = null;
   try {
@@ -450,7 +443,7 @@ async function buildDocumentEntry(filename, kind, uploadedAt) {
     kind,
     filename,
     size: stats ? formatFileSize(stats.size) : 'Unavailable',
-    uploadedAt: formatTimestamp(uploadedAt || stats?.mtime),
+    uploadedAt: formatTimestampSl(uploadedAt || stats?.mtime) || '—',
     missing: !stats,
   };
 }
