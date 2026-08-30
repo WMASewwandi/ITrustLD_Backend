@@ -443,7 +443,7 @@ async function buildDocumentEntry(filename, kind, uploadedAt) {
     kind,
     filename,
     size: stats ? formatFileSize(stats.size) : 'Unavailable',
-    uploadedAt: formatTimestampSl(uploadedAt || stats?.mtime) || '—',
+    uploadedAt: formatTimestampSl(stats?.mtime || uploadedAt) || '—',
     missing: !stats,
   };
 }
