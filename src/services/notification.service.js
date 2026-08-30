@@ -112,23 +112,21 @@ export async function queueSmsMessage({ message, msisdn, userId, smsType }) {
 }
 
 async function sendSms({ message, msisdn, userId, smsType }) {
-  if (!msisdn) return;
+  if (!msisdn) {
+    throw new Error('Mobile number is required.');
+  }
 
   const isLk = Boolean(parseLkMobileNumber(msisdn));
 
-  try {
-    if (isLk) {
-      await sendDialogSms({ message, msisdn, userId, smsType });
-      return;
-    }
-
-    if (isInternationalSmsConfigured()) {
-      await sendInternationalSms({ message, msisdn, userId, smsType });
-      return;
-    }
-
-    console.info('[sms:skip] International SMS not configured for', msisdn);
-  } catch (error) {
-    console.error('[sms:error]', error.message);
+  if (isLk) {
+    await sendDialogSms({ message, msisdn, userId, smsType });
+    return;
   }
+
+  if (isInternationalSmsConfigured()) {
+    await sendInternationalSms({ message, msisdn, userId, smsType });
+    return;
+  }
+
+  throw new Error(`International SMS is not configured for ${msisdn}`);
 }

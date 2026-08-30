@@ -181,7 +181,7 @@ function wrap(content, footerExtra = '') {
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;margin:0 auto;">
       <tr>
         <td>
-          ${header()}
+      ${header()}
         </td>
       </tr>
       <tr>
@@ -193,8 +193,8 @@ function wrap(content, footerExtra = '') {
       </tr>
       <tr>
         <td class="email-card" style="background-color:transparent;text-align:left;">
-          ${content}
-          ${footer(footerExtra)}
+        ${content}
+      ${footer(footerExtra)}
           <div style="font-size:1px;line-height:1px;color:#f8f8f8;">${ref}</div>
         </td>
       </tr>

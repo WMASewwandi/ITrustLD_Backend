@@ -1,5 +1,5 @@
 import { query } from '../config/database.js';
-import { currentColomboDaySqlRange, formatTimestampSl, formatYmdColombo } from '../utils/slTime.js';
+import { formatTimestampSl, formatYmdColombo, parseDbDateTime } from '../utils/slTime.js';
 import { findAccountHolderByUserId } from './accountHolder.service.js';
 import { listPublishedBlogPostsForUser } from './blog.service.js';
 import { getDashboardPromotionalContent } from './promotionalBanner.service.js';
@@ -191,27 +191,34 @@ function pickFirstPerMethod(rows) {
   return picked;
 }
 
-async function loadTodayDepositRates(from, to) {
+function rateDateYmd(value) {
+  const parsed = parseDbDateTime(value);
+  if (parsed) return formatYmdColombo(parsed);
+  const raw = String(value || '').trim();
+  return /^\d{4}-\d{2}-\d{2}/.test(raw) ? raw.slice(0, 10) : '';
+}
+
+async function loadAvailableTopupMethods() {
   return query(
     `SELECT tm.topup_method_name AS name,
             tm.topup_method_logo AS logo,
-            tm.wallet_id,
-            po.payment_option_name,
-            po.payment_option_currency,
-            dr.rate,
-            dr.applicable_date
-     FROM deposit_rates dr
-     INNER JOIN topup_methods tm ON tm.id = dr.topup_method_id
-     INNER JOIN payment_options po ON po.id = dr.payment_option_id
-     WHERE (dr.is_deleted = 0 OR dr.is_deleted IS NULL)
-       AND (tm.is_deleted = 0 OR tm.is_deleted IS NULL)
+            tm.wallet_id
+     FROM topup_methods tm
+     WHERE (tm.is_deleted = 0 OR tm.is_deleted IS NULL)
        AND UPPER(tm.availability) = 'AVAILABLE'
-       AND (po.is_deleted = 0 OR po.is_deleted IS NULL)
-       AND UPPER(po.availability) = 'AVAILABLE'
-       AND dr.applicable_date >= ?
-       AND dr.applicable_date < ?
-     ORDER BY CASE WHEN po.priority = 'YES' THEN 0 ELSE 1 END, dr.id DESC`,
-    [from, to],
+     ORDER BY tm.topup_method_name ASC, tm.id DESC`,
+  );
+}
+
+async function loadAvailableCashoutMethods() {
+  return query(
+    `SELECT cm.cashout_method_name AS name,
+            cm.cashout_method_logo AS logo,
+            cm.wallet_id
+     FROM cashout_methods cm
+     WHERE (cm.is_deleted = 0 OR cm.is_deleted IS NULL)
+       AND UPPER(cm.availability) = 'AVAILABLE'
+     ORDER BY cm.cashout_method_name ASC, cm.id DESC`,
   );
 }
 
@@ -232,31 +239,7 @@ async function loadLatestDepositRates() {
        AND UPPER(tm.availability) = 'AVAILABLE'
        AND (po.is_deleted = 0 OR po.is_deleted IS NULL)
        AND UPPER(po.availability) = 'AVAILABLE'
-     ORDER BY CASE WHEN po.priority = 'YES' THEN 0 ELSE 1 END, dr.id DESC`,
-  );
-}
-
-async function loadTodayWithdrawalRates(from, to) {
-  return query(
-    `SELECT cm.cashout_method_name AS name,
-            cm.cashout_method_logo AS logo,
-            cm.wallet_id,
-            po.payment_option_name,
-            po.payment_option_currency,
-            wr.rate,
-            wr.applicable_date
-     FROM withdrawal_rates wr
-     INNER JOIN cashout_methods cm ON cm.id = wr.cashout_method_id
-     INNER JOIN payment_options po ON po.id = wr.payment_option_id
-     WHERE (wr.is_deleted = 0 OR wr.is_deleted IS NULL)
-       AND (cm.is_deleted = 0 OR cm.is_deleted IS NULL)
-       AND UPPER(cm.availability) = 'AVAILABLE'
-       AND (po.is_deleted = 0 OR po.is_deleted IS NULL)
-       AND UPPER(po.availability) = 'AVAILABLE'
-       AND wr.applicable_date >= ?
-       AND wr.applicable_date < ?
-     ORDER BY CASE WHEN po.priority = 'YES' THEN 0 ELSE 1 END, wr.id DESC`,
-    [from, to],
+     ORDER BY dr.applicable_date DESC, dr.id DESC`,
   );
 }
 
@@ -277,11 +260,11 @@ async function loadLatestWithdrawalRates() {
        AND UPPER(cm.availability) = 'AVAILABLE'
        AND (po.is_deleted = 0 OR po.is_deleted IS NULL)
        AND UPPER(po.availability) = 'AVAILABLE'
-     ORDER BY CASE WHEN po.priority = 'YES' THEN 0 ELSE 1 END, wr.id DESC`,
+     ORDER BY wr.applicable_date DESC, wr.id DESC`,
   );
 }
 
-function mergeTodayRates(depositRows, withdrawalRows) {
+function mergeTodayRates(depositMethods, withdrawalMethods, depositRows, withdrawalRows) {
   const map = new Map();
 
   function ensure(row) {
@@ -292,51 +275,59 @@ function mergeTodayRates(depositRows, withdrawalRows) {
         logoUrl: resolveWalletLogoPublicUrl(row.logo),
         buyRate: null,
         sellRate: null,
-        currency: row.payment_option_currency || 'USD',
+        currency: row.payment_option_currency || '',
         paymentOption: row.payment_option_name || '',
+        updatedAt: '',
       });
     }
     return map.get(key);
   }
 
+  for (const row of pickFirstPerMethod(depositMethods)) ensure(row);
+  for (const row of pickFirstPerMethod(withdrawalMethods)) ensure(row);
+
   for (const row of pickFirstPerMethod(depositRows)) {
     const item = ensure(row);
-    item.buyRate = Number(row.rate);
-    if (!item.paymentOption) item.paymentOption = row.payment_option_name || '';
+    const rate = Number(row.rate);
+    if (Number.isFinite(rate) && rate > 0) item.buyRate = rate;
+    if (row.payment_option_name) item.paymentOption = row.payment_option_name;
     if (row.payment_option_currency) item.currency = row.payment_option_currency;
+    const updatedAt = rateDateYmd(row.applicable_date);
+    if (updatedAt && updatedAt > item.updatedAt) item.updatedAt = updatedAt;
   }
 
   for (const row of pickFirstPerMethod(withdrawalRows)) {
     const item = ensure(row);
-    item.sellRate = Number(row.rate);
-    if (!item.paymentOption) item.paymentOption = row.payment_option_name || '';
+    const rate = Number(row.rate);
+    if (Number.isFinite(rate) && rate > 0) item.sellRate = rate;
+    if (!item.paymentOption && row.payment_option_name) item.paymentOption = row.payment_option_name;
     if (!item.currency && row.payment_option_currency) item.currency = row.payment_option_currency;
+    const updatedAt = rateDateYmd(row.applicable_date);
+    if (updatedAt && updatedAt > item.updatedAt) item.updatedAt = updatedAt;
   }
 
-  return Array.from(map.values())
-    .filter((item) => item.buyRate != null || item.sellRate != null)
-    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  return Array.from(map.values()).sort((a, b) => String(a.name).localeCompare(String(b.name)));
 }
 
 export async function getDashboardTodayRates() {
-  const today = currentColomboDaySqlRange();
-  let [depositRows, withdrawalRows] = await Promise.all([
-    loadTodayDepositRates(today.from, today.to),
-    loadTodayWithdrawalRates(today.from, today.to),
+  const [depositMethods, withdrawalMethods, depositRows, withdrawalRows] = await Promise.all([
+    loadAvailableTopupMethods(),
+    loadAvailableCashoutMethods(),
+    loadLatestDepositRates(),
+    loadLatestWithdrawalRates(),
   ]);
 
-  let fromToday = depositRows.length > 0 || withdrawalRows.length > 0;
-  if (!fromToday) {
-    [depositRows, withdrawalRows] = await Promise.all([
-      loadLatestDepositRates(),
-      loadLatestWithdrawalRates(),
-    ]);
-  }
+  const methods = mergeTodayRates(depositMethods, withdrawalMethods, depositRows, withdrawalRows);
+  const latestDate = methods.reduce(
+    (max, item) => (item.updatedAt && item.updatedAt > max ? item.updatedAt : max),
+    '',
+  );
+  const today = formatYmdColombo();
 
   return {
-    date: formatYmdColombo(),
-    from_today: fromToday,
-    methods: mergeTodayRates(depositRows, withdrawalRows),
+    date: latestDate || today,
+    from_today: Boolean(latestDate) && latestDate === today,
+    methods,
   };
 }
 
