@@ -284,9 +284,9 @@ function mapWithdrawalRow(row, adminUsers, assignedUsers, similarCounts) {
   const updatedByName = lookupAdminName(adminUsers, assignedUsers, row.pendings_by_admin) || '—';
   const authorizedById =
     status === 'Completed'
-      ? row.approved_by_admin
+      ? row.approved_by_admin || row.assigned_to
       : status === 'Rejected'
-        ? row.rejected_by_admin
+        ? row.rejected_by_admin || row.assigned_to
         : status === 'Pending Authorization'
           ? row.assigned_to
           : null;
