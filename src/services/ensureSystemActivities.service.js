@@ -150,6 +150,9 @@ async function grantMobileVerificationPendingToExistingAccountReaders() {
 
 async function ensureBuiltinRolePermissions() {
   for (const [roleName, expectedPermissions] of Object.entries(BUILTIN_ROLE_PERMISSIONS)) {
+    if (roleName === 'deposit-executive' || roleName === 'withdrawal-executive') {
+      continue;
+    }
     const roleRows = await query(
       `SELECT id FROM roles WHERE name = ? AND guard_name = ? LIMIT 1`,
       [roleName, GUARD_NAME],

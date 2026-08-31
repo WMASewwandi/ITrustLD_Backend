@@ -198,6 +198,11 @@ function rateDateYmd(value) {
   return /^\d{4}-\d{2}-\d{2}/.test(raw) ? raw.slice(0, 10) : '';
 }
 
+function rateUpdatedSortMs(row) {
+  const parsed = parseDbDateTime(row.updated_at) || parseDbDateTime(row.applicable_date);
+  return parsed ? parsed.getTime() : 0;
+}
+
 async function loadAvailableTopupMethods() {
   return query(
     `SELECT tm.topup_method_name AS name,
@@ -230,7 +235,8 @@ async function loadLatestDepositRates() {
             po.payment_option_name,
             po.payment_option_currency,
             dr.rate,
-            dr.applicable_date
+            dr.applicable_date,
+            dr.updated_at
      FROM deposit_rates dr
      INNER JOIN topup_methods tm ON tm.id = dr.topup_method_id
      INNER JOIN payment_options po ON po.id = dr.payment_option_id
@@ -251,7 +257,8 @@ async function loadLatestWithdrawalRates() {
             po.payment_option_name,
             po.payment_option_currency,
             wr.rate,
-            wr.applicable_date
+            wr.applicable_date,
+            wr.updated_at
      FROM withdrawal_rates wr
      INNER JOIN cashout_methods cm ON cm.id = wr.cashout_method_id
      INNER JOIN payment_options po ON po.id = wr.payment_option_id
@@ -278,6 +285,7 @@ function mergeTodayRates(depositMethods, withdrawalMethods, depositRows, withdra
         currency: row.payment_option_currency || '',
         paymentOption: row.payment_option_name || '',
         updatedAt: '',
+        updatedSort: 0,
       });
     }
     return map.get(key);
@@ -294,6 +302,7 @@ function mergeTodayRates(depositMethods, withdrawalMethods, depositRows, withdra
     if (row.payment_option_currency) item.currency = row.payment_option_currency;
     const updatedAt = rateDateYmd(row.applicable_date);
     if (updatedAt && updatedAt > item.updatedAt) item.updatedAt = updatedAt;
+    item.updatedSort = Math.max(item.updatedSort || 0, rateUpdatedSortMs(row));
   }
 
   for (const row of pickFirstPerMethod(withdrawalRows)) {
@@ -304,9 +313,12 @@ function mergeTodayRates(depositMethods, withdrawalMethods, depositRows, withdra
     if (!item.currency && row.payment_option_currency) item.currency = row.payment_option_currency;
     const updatedAt = rateDateYmd(row.applicable_date);
     if (updatedAt && updatedAt > item.updatedAt) item.updatedAt = updatedAt;
+    item.updatedSort = Math.max(item.updatedSort || 0, rateUpdatedSortMs(row));
   }
 
-  return Array.from(map.values()).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  return Array.from(map.values())
+    .sort((a, b) => (b.updatedSort || 0) - (a.updatedSort || 0))
+    .map(({ updatedSort, ...item }) => item);
 }
 
 export async function getDashboardTodayRates() {

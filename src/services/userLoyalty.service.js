@@ -1,4 +1,5 @@
 import { query } from '../config/database.js';
+import { addColumnIfMissing } from '../db/helpers.js';
 import { env } from '../config/env.js';
 import {
   findAccountHolderByUserId,
@@ -869,6 +870,7 @@ function mapAdminWithdrawalRow(row, accountDisplay, adminUsers = {}) {
     status: mapUserStatus(row.status),
     raw_status: row.status,
     admin: resolveLoyaltyAdminName(row, adminUsers),
+    rejectReason: row.rejection_reason || null,
   };
 }
 
@@ -953,8 +955,16 @@ export async function listLoyaltyOrdersForAdmin(params = {}) {
 }
 
 export async function updateLoyaltyOrderStatus(adminUserId, payload = {}) {
+  await addColumnIfMissing('point_withdrawals', 'rejection_reason', {
+    mysql: 'rejection_reason TEXT NULL',
+    sqlite: 'rejection_reason TEXT',
+  });
+
   const transactionId = Number(payload.transaction_id ?? payload.transactionId);
   const nextStatus = mapAdminStatus(payload.withdrawal_request_status ?? payload.status);
+  const rejectionReason = String(
+    payload.rejection_reason ?? payload.rejectionReason ?? '',
+  ).trim();
 
   if (!Number.isInteger(transactionId)) {
     throw validationError('Transaction id is required.');
@@ -990,11 +1000,14 @@ export async function updateLoyaltyOrderStatus(adminUserId, payload = {}) {
     );
     await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.LOYALTY_ORDER_APPROVE);
   } else {
+    if (!rejectionReason) {
+      throw validationError('Select a rejection reason.');
+    }
     await query(
       `UPDATE point_withdrawals
-       SET status = ?, rejected_by_admin = ?, updated_at = NOW()
+       SET status = ?, rejected_by_admin = ?, rejection_reason = ?, updated_at = NOW()
        WHERE id = ?`,
-      [nextStatus, adminUserId, withdrawalId],
+      [nextStatus, adminUserId, rejectionReason, withdrawalId],
     );
     await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.LOYALTY_ORDER_REJECT);
   }

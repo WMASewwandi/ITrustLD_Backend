@@ -66,6 +66,7 @@ function resolveWithdrawalListStatus(status) {
 }
 
 let statusEnumReady = false;
+let authorizerCache = { value: null, expiresAt: 0 };
 
 export async function ensureWithdrawalAuthorizationSchema() {
   if (statusEnumReady || getDbDriver() === 'sqlite') {
@@ -84,6 +85,15 @@ export async function ensureWithdrawalAuthorizationSchema() {
 }
 
 export async function hasActiveWithdrawalAuthorizers() {
+  if (authorizerCache.value != null && Date.now() < authorizerCache.expiresAt) {
+    return authorizerCache.value;
+  }
+  const value = await loadActiveWithdrawalAuthorizers();
+  authorizerCache = { value, expiresAt: Date.now() + 60_000 };
+  return value;
+}
+
+async function loadActiveWithdrawalAuthorizers() {
   const permissionRows = await query('SELECT id, name FROM permissions');
   const ids = permissionRows
     .filter((row) => normalizeToActivityIdentifier(row.name) === AUTHORIZE_WITHDRAWAL_PERMISSION)
@@ -454,12 +464,6 @@ async function listWithdrawalsQuery({
   const { conditions, values } = buildBaseConditions(normalizedStatus, assignedToUserId, {
     requirePaymentProof,
   });
-  const joins = `
-    INNER JOIN users u ON w.user_id = u.id
-    INNER JOIN cashout_methods cm ON w.cashout_method_id = cm.id
-    LEFT JOIN payment_options po ON w.receiving_payment_option_id = po.id
-    LEFT JOIN account_holders ah ON ah.user_id = u.id
-  `;
 
   if (transactionId) {
     conditions.push('w.transaction_id = ?');
@@ -474,7 +478,10 @@ async function listWithdrawalsQuery({
     values.push(Number(amount));
   }
   if (userAccount) {
-    conditions.push('ah.account_number = ?');
+    conditions.push(`EXISTS (
+      SELECT 1 FROM account_holders ah_acc
+      WHERE ah_acc.user_id = w.user_id AND ah_acc.account_number = ?
+    )`);
     values.push(String(userAccount).trim());
   }
 
@@ -489,10 +496,13 @@ async function listWithdrawalsQuery({
     const keywordParts = [
       'w.transaction_id LIKE ? ESCAPE \'\\\\\'',
       'w.cashout_account_id LIKE ? ESCAPE \'\\\\\'',
-      'u.name LIKE ? ESCAPE \'\\\\\'',
+      `EXISTS (
+        SELECT 1 FROM users u_kw
+        WHERE u_kw.id = w.user_id AND u_kw.name LIKE ? ESCAPE '\\\\'
+      )`,
       `EXISTS (
         SELECT 1 FROM account_holders ah_kw
-        WHERE ah_kw.user_id = u.id AND ah_kw.account_number LIKE ? ESCAPE '\\\\'
+        WHERE ah_kw.user_id = w.user_id AND ah_kw.account_number LIKE ? ESCAPE '\\\\'
       )`,
     ];
     const keywordValues = [like, like, like, like];
@@ -540,32 +550,39 @@ async function listWithdrawalsQuery({
   const whereSql = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const orderSql =
     normalizedStatus === 'Pending' || normalizedStatus === 'Pending Authorization'
-      ? 'ORDER BY w.updated_at ASC'
-      : 'ORDER BY w.updated_at DESC';
+      ? 'ORDER BY w.updated_at ASC, w.id ASC'
+      : 'ORDER BY w.updated_at DESC, w.id DESC';
 
-  const countRows = await query(
-    `SELECT COUNT(*) AS total
-     FROM withdrawals w
-     ${joins}
-     ${whereSql}`,
-    values,
-  );
+  const [countRows, idRows] = await Promise.all([
+    query(`SELECT COUNT(*) AS total FROM withdrawals w ${whereSql}`, values),
+    take <= 0
+      ? Promise.resolve([])
+      : query(
+          `SELECT w.id FROM withdrawals w ${whereSql} ${orderSql} LIMIT ${take} OFFSET ${skip}`,
+          values,
+        ),
+  ]);
   const totalCount = Number(countRows[0]?.total) || 0;
   const totalPages = requestedTake > 0 ? Math.ceil(totalCount / requestedTake) : 1;
+  const pageIds = idRows.map((row) => row.id).filter(Boolean);
 
-  const rows =
-    take <= 0
-      ? []
-      : await query(
-          `SELECT w.*, u.name AS user_name, cm.cashout_method_name, po.payment_option_name AS receiving_payment_option_name,
+  const fetchedRows = pageIds.length
+    ? await query(
+        `SELECT w.*, u.name AS user_name, cm.cashout_method_name, po.payment_option_name AS receiving_payment_option_name,
             ah.account_number, ah.email AS customer_email, ah.mobile_number AS customer_mobile
-     FROM withdrawals w
-     ${joins}
-     ${whereSql}
-     ${orderSql}
-     LIMIT ${take} OFFSET ${skip}`,
-          values,
-        );
+         FROM withdrawals w
+         INNER JOIN users u ON w.user_id = u.id
+         INNER JOIN cashout_methods cm ON w.cashout_method_id = cm.id
+         LEFT JOIN payment_options po ON w.receiving_payment_option_id = po.id
+         LEFT JOIN account_holders ah ON ah.id = (
+           SELECT MIN(ah2.id) FROM account_holders ah2 WHERE ah2.user_id = w.user_id
+         )
+         WHERE w.id IN (${pageIds.map(() => '?').join(', ')})`,
+        pageIds,
+      )
+    : [];
+  const fetchedById = new Map(fetchedRows.map((row) => [row.id, row]));
+  const rows = pageIds.map((id) => fetchedById.get(id)).filter(Boolean);
 
   const adminIds = rows.flatMap((row) => [
     row.pendings_by_admin,
@@ -631,7 +648,6 @@ export async function listWithdrawalsForAdmin(auth, params = {}) {
   const isExec = isWithdrawalExecutive(roles) && !isAdmin(roles);
   const canAuthorize = canAuthorizeWithdrawals(permissions);
   const isAuthorizer = isWithdrawalAuthorizerOnly(roles, permissions);
-  const makerCheckerEnabled = await hasActiveWithdrawalAuthorizers();
 
   const statusForTotals = resolveWithdrawalListStatus(params.status);
   const restrictToAssigned =
@@ -651,22 +667,25 @@ export async function listWithdrawalsForAdmin(auth, params = {}) {
 
   const maxLoadRows = restrictToAssigned ? await getUserPendingShowCount(userId) : null;
 
-  const result = await listWithdrawalsQuery({
-    status: statusForTotals,
-    page: params.page,
-    perPage: params.perPage,
-    keyword: sanitized.keyword,
-    transactionId: sanitized.transactionId,
-    platformId: sanitized.platformId,
-    userAccount: sanitized.userAccount,
-    amount: sanitized.amount,
-    filter: sanitized.filter,
-    fromDate: sanitized.fromDate,
-    toDate: sanitized.toDate,
-    assignedToUserId,
-    requirePaymentProof: sanitized.requirePaymentProof,
-    maxLoadRows,
-  });
+  const [result, makerCheckerEnabled] = await Promise.all([
+    listWithdrawalsQuery({
+      status: statusForTotals,
+      page: params.page,
+      perPage: params.perPage,
+      keyword: sanitized.keyword,
+      transactionId: sanitized.transactionId,
+      platformId: sanitized.platformId,
+      userAccount: sanitized.userAccount,
+      amount: sanitized.amount,
+      filter: sanitized.filter,
+      fromDate: sanitized.fromDate,
+      toDate: sanitized.toDate,
+      assignedToUserId,
+      requirePaymentProof: sanitized.requirePaymentProof,
+      maxLoadRows,
+    }),
+    hasActiveWithdrawalAuthorizers(),
+  ]);
 
   const searchActive = isWithdrawalSearchActive(statusForTotals, {
     keyword: sanitized.keyword,
