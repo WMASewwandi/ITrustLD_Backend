@@ -267,35 +267,37 @@ async function batchSimilarWithdrawals(rows, status) {
   return result;
 }
 
+function lookupAdminName(adminUsers, assignedUsers, userId) {
+  if (!userId) return null;
+  return (
+    adminUsers[Number(userId)] ||
+    assignedUsers[Number(userId)] ||
+    String(userId)
+  );
+}
+
 function mapWithdrawalRow(row, adminUsers, assignedUsers, similarCounts) {
   const cashoutAmount = Number(row.cashout_amount) || 0;
   const receivingAmount = Number(row.receiving_amount) || 0;
-  const adminId =
-    row.transaction_status === 'Pending' || row.transaction_status === 'Pending Authorization'
-      ? row.pendings_by_admin
-      : row.transaction_status === 'Completed'
-        ? row.approved_by_admin
-        : row.rejected_by_admin;
-  const adminName = adminId ? adminUsers[Number(adminId)] || String(adminId) : 'NA';
-  const assignedName = row.assigned_to
-    ? assignedUsers[Number(row.assigned_to)] || String(row.assigned_to)
-    : '—';
-  const updatedByName = row.pendings_by_admin
-    ? adminUsers[Number(row.pendings_by_admin)] || String(row.pendings_by_admin)
-    : '—';
+  const status = String(row.transaction_status || '').trim();
+  const assignedName = lookupAdminName(adminUsers, assignedUsers, row.assigned_to) || '—';
+  const updatedByName = lookupAdminName(adminUsers, assignedUsers, row.pendings_by_admin) || '—';
   const authorizedById =
-    row.transaction_status === 'Completed'
+    status === 'Completed'
       ? row.approved_by_admin
-      : row.transaction_status === 'Rejected'
+      : status === 'Rejected'
         ? row.rejected_by_admin
-        : row.transaction_status === 'Pending Authorization'
+        : status === 'Pending Authorization'
           ? row.assigned_to
           : null;
-  const authorizedByName = authorizedById
-    ? adminUsers[Number(authorizedById)] ||
-      assignedUsers[Number(authorizedById)] ||
-      String(authorizedById)
-    : '—';
+  const authorizedByName = lookupAdminName(adminUsers, assignedUsers, authorizedById) || '—';
+  const adminId =
+    status === 'Completed' || status === 'Rejected'
+      ? authorizedById
+      : status === 'Pending' || status === 'Pending Authorization'
+        ? row.pendings_by_admin
+        : null;
+  const adminName = lookupAdminName(adminUsers, assignedUsers, adminId) || 'NA';
   const simKey = `${row.cashout_method_id}_${row.cashout_account_id}`;
   const todayTxCount = similarCounts[simKey] || 0;
   const accountDetails = parseAccountDetailsLog(row.account_details_log);
@@ -319,7 +321,7 @@ function mapWithdrawalRow(row, adminUsers, assignedUsers, similarCounts) {
     receiving: formatMoney(row.receiving_amount_currency, receivingAmount),
     payout: formatMoney(row.receiving_amount_currency, receivingAmount),
     platform: row.cashout_method_name || '—',
-    status: row.transaction_status,
+    status,
     account: formatWithdrawalAccount(row),
     selectedAccountType,
     bankName: accountDetails?.bank_name || null,
