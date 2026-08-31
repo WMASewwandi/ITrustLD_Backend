@@ -15,6 +15,12 @@ export function errorHandler(err, _req, res, _next) {
   if (err.code) {
     payload.code = err.code;
   }
+  if (err.activeShift) {
+    payload.active_shift = err.activeShift;
+  }
+  if (err.userShift) {
+    payload.user_shift = err.userShift;
+  }
 
   if (env.nodeEnv !== 'production' && err.stack) {
     payload.stack = err.stack;

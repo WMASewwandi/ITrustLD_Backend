@@ -212,13 +212,19 @@ function buildBaseConditions(status, assignedToUserId, { requirePaymentProof = t
 }
 
 async function fetchAdminNames(adminIds) {
-  const ids = [...new Set(adminIds.filter(Boolean))];
+  const ids = [
+    ...new Set(
+      adminIds
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && id > 0),
+    ),
+  ];
   if (!ids.length) return {};
   const rows = await query(
     `SELECT id, name FROM users WHERE id IN (${ids.map(() => '?').join(', ')})`,
     ids,
   );
-  return Object.fromEntries(rows.map((row) => [row.id, row.name]));
+  return Object.fromEntries(rows.map((row) => [Number(row.id), row.name]));
 }
 
 async function batchSimilarWithdrawals(rows, status) {
@@ -270,21 +276,25 @@ function mapWithdrawalRow(row, adminUsers, assignedUsers, similarCounts) {
       : row.transaction_status === 'Completed'
         ? row.approved_by_admin
         : row.rejected_by_admin;
-  const adminName = adminId ? adminUsers[adminId] || String(adminId) : 'NA';
+  const adminName = adminId ? adminUsers[Number(adminId)] || String(adminId) : 'NA';
   const assignedName = row.assigned_to
-    ? assignedUsers[row.assigned_to] || String(row.assigned_to)
+    ? assignedUsers[Number(row.assigned_to)] || String(row.assigned_to)
     : '—';
   const updatedByName = row.pendings_by_admin
-    ? adminUsers[row.pendings_by_admin] || String(row.pendings_by_admin)
+    ? adminUsers[Number(row.pendings_by_admin)] || String(row.pendings_by_admin)
     : '—';
   const authorizedById =
     row.transaction_status === 'Completed'
       ? row.approved_by_admin
       : row.transaction_status === 'Rejected'
         ? row.rejected_by_admin
-        : null;
+        : row.transaction_status === 'Pending Authorization'
+          ? row.assigned_to
+          : null;
   const authorizedByName = authorizedById
-    ? adminUsers[authorizedById] || String(authorizedById)
+    ? adminUsers[Number(authorizedById)] ||
+      assignedUsers[Number(authorizedById)] ||
+      String(authorizedById)
     : '—';
   const simKey = `${row.cashout_method_id}_${row.cashout_account_id}`;
   const todayTxCount = similarCounts[simKey] || 0;
@@ -554,6 +564,7 @@ async function listWithdrawalsQuery({
     row.pendings_by_admin,
     row.approved_by_admin,
     row.rejected_by_admin,
+    row.assigned_to,
   ]);
   const assignedIds = rows.map((row) => row.assigned_to).filter(Boolean);
   const [adminUsers, assignedUsers] = await Promise.all([
@@ -764,6 +775,7 @@ export async function listSimilarWithdrawalsToday(auth, { withdrawalId, transact
     row.pendings_by_admin,
     row.approved_by_admin,
     row.rejected_by_admin,
+    row.assigned_to,
   ]);
   const assignedIds = rows.map((row) => row.assigned_to).filter(Boolean);
   const [adminUsers, assignedUsers, scammerFlags] = await Promise.all([
