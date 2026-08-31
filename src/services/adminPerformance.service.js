@@ -135,7 +135,11 @@ function sqlDate(column) {
 }
 
 function emptyTypeStats() {
-  return { completed: 0, rejected: 0, handleSeconds: 0, buckets: {} };
+  return { completed: 0, rejected: 0, pendingAuth: 0, handleSeconds: 0, buckets: {} };
+}
+
+function typeHandled(stats = emptyTypeStats()) {
+  return (Number(stats.completed) || 0) + (Number(stats.pendingAuth) || 0);
 }
 
 function sqlHandleSeconds(decisionColumn = null) {
@@ -172,18 +176,24 @@ function buildMetrics(typeStats) {
 
   const completed = deposits.completed + withdrawals.completed + loyalty.completed;
   const rejected = deposits.rejected + withdrawals.rejected + loyalty.rejected;
-  const handled = completed + rejected;
+  const pendingAuth =
+    (Number(deposits.pendingAuth) || 0) +
+    (Number(withdrawals.pendingAuth) || 0) +
+    (Number(loyalty.pendingAuth) || 0);
+  const handled = completed + pendingAuth;
+  const decided = completed + rejected;
   const handleSeconds =
     (Number(deposits.handleSeconds) || 0) +
     (Number(withdrawals.handleSeconds) || 0) +
     (Number(loyalty.handleSeconds) || 0);
   const avgHandleSeconds = handled ? handleSeconds / handled : 0;
-  const successRate = handled ? (completed / handled) * 100 : 0;
+  const successRate = decided ? (completed / decided) * 100 : 0;
   const commission = calculateCommission(handled);
 
   return {
     handled,
     completed,
+    pendingAuth,
     rejected,
     handleSeconds,
     avgHandleSeconds,
@@ -245,7 +255,7 @@ function buildBreakdown(metrics) {
   const totalHandled = metrics.handled || 1;
   const totalCommission = metrics.commission || 0;
   return rows.map((row) => {
-    const count = row.stats.completed + row.stats.rejected;
+    const count = typeHandled(row.stats);
     const pct = Math.round((count / totalHandled) * 100);
     const share = metrics.handled ? (count / metrics.handled) * totalCommission : 0;
     return {
@@ -340,21 +350,21 @@ function buildTrend(period, bucketMaps, window) {
   };
 }
 
-function bucketExpr(period) {
-  if (period === 'daily') return sqlHour('updated_at');
-  return sqlDate('updated_at');
+function bucketExpr(period, column = 'updated_at') {
+  if (period === 'daily') return sqlHour(column);
+  return sqlDate(column);
 }
 
 function completedActorExpr(hasAssigned) {
   return hasAssigned
-    ? 'COALESCE(NULLIF(approved_by_admin, 0), NULLIF(assigned_to, 0), NULLIF(pendings_by_admin, 0))'
-    : 'COALESCE(NULLIF(approved_by_admin, 0), NULLIF(pendings_by_admin, 0))';
+    ? 'COALESCE(NULLIF(approved_by_admin, 0), NULLIF(assigned_to, 0))'
+    : 'NULLIF(approved_by_admin, 0)';
 }
 
 function rejectedActorExpr(hasAssigned) {
   return hasAssigned
-    ? 'COALESCE(NULLIF(rejected_by_admin, 0), NULLIF(assigned_to, 0), NULLIF(pendings_by_admin, 0))'
-    : 'COALESCE(NULLIF(rejected_by_admin, 0), NULLIF(pendings_by_admin, 0))';
+    ? 'COALESCE(NULLIF(rejected_by_admin, 0), NULLIF(assigned_to, 0))'
+    : 'NULLIF(rejected_by_admin, 0)';
 }
 
 async function fetchGroupedActions({ adminId, start, end, period }) {
@@ -373,6 +383,10 @@ async function fetchGroupedActions({ adminId, start, end, period }) {
   const withdrawalRejectedFilter = adminId ? `AND ${withdrawalRejected} = ?` : '';
   const loyaltyCompletedFilter = adminId ? `AND ${loyaltyCompleted} = ?` : '';
   const loyaltyRejectedFilter = adminId ? `AND ${loyaltyRejected} = ?` : '';
+  const pendingAuthActor = 'NULLIF(pendings_by_admin, 0)';
+  const pendingAuthAt = 'COALESCE(pending_date, updated_at)';
+  const pendingAuthBucket = bucketExpr(period, pendingAuthAt);
+  const pendingAuthFilter = adminId ? `AND ${pendingAuthActor} = ?` : '';
 
   const sql = `
     SELECT source, outcome, admin_id, bucket_key,
@@ -459,12 +473,22 @@ async function fetchGroupedActions({ adminId, start, end, period }) {
         AND ${loyaltyRejected} IS NOT NULL
         AND updated_at >= ? AND updated_at < ?
         ${loyaltyRejectedFilter}
+
+      UNION ALL
+
+      SELECT 'withdrawals', 'pending_auth', ${pendingAuthActor}, ${pendingAuthBucket},
+             ${sqlHandleSeconds('pending_date')}
+      FROM withdrawals
+      WHERE ${pendingAuthActor} IS NOT NULL
+        AND transaction_status IN ('Pending Authorization', 'Completed', 'Rejected')
+        AND ${pendingAuthAt} >= ? AND ${pendingAuthAt} < ?
+        ${pendingAuthFilter}
     ) actions
     WHERE admin_id IS NOT NULL
     GROUP BY source, outcome, admin_id, bucket_key`;
 
   const fullParams = [];
-  for (let i = 0; i < 8; i += 1) {
+  for (let i = 0; i < 9; i += 1) {
     fullParams.push(startSql, endSql);
     if (adminId) fullParams.push(adminId);
   }
@@ -504,6 +528,8 @@ function aggregateRows(rows, { adminId = null } = {}) {
 
     if (row.outcome === 'completed') {
       stats[source].completed += count;
+    } else if (row.outcome === 'pending_auth') {
+      stats[source].pendingAuth += count;
     } else {
       stats[source].rejected += count;
     }
@@ -639,12 +665,15 @@ export async function getTeamPerformance(periodInput, range = {}) {
   for (const stats of currentByAdmin.values()) {
     aggregateCurrent.deposits.completed += stats.deposits.completed;
     aggregateCurrent.deposits.rejected += stats.deposits.rejected;
+    aggregateCurrent.deposits.pendingAuth += stats.deposits.pendingAuth;
     aggregateCurrent.deposits.handleSeconds += stats.deposits.handleSeconds;
     aggregateCurrent.withdrawals.completed += stats.withdrawals.completed;
     aggregateCurrent.withdrawals.rejected += stats.withdrawals.rejected;
+    aggregateCurrent.withdrawals.pendingAuth += stats.withdrawals.pendingAuth;
     aggregateCurrent.withdrawals.handleSeconds += stats.withdrawals.handleSeconds;
     aggregateCurrent.loyalty.completed += stats.loyalty.completed;
     aggregateCurrent.loyalty.rejected += stats.loyalty.rejected;
+    aggregateCurrent.loyalty.pendingAuth += stats.loyalty.pendingAuth;
     aggregateCurrent.loyalty.handleSeconds += stats.loyalty.handleSeconds;
     mergeBucketMaps(aggregateCurrent.buckets, stats.buckets);
   }
@@ -652,12 +681,15 @@ export async function getTeamPerformance(periodInput, range = {}) {
   for (const stats of previousByAdmin.values()) {
     aggregatePrevious.deposits.completed += stats.deposits.completed;
     aggregatePrevious.deposits.rejected += stats.deposits.rejected;
+    aggregatePrevious.deposits.pendingAuth += stats.deposits.pendingAuth;
     aggregatePrevious.deposits.handleSeconds += stats.deposits.handleSeconds;
     aggregatePrevious.withdrawals.completed += stats.withdrawals.completed;
     aggregatePrevious.withdrawals.rejected += stats.withdrawals.rejected;
+    aggregatePrevious.withdrawals.pendingAuth += stats.withdrawals.pendingAuth;
     aggregatePrevious.withdrawals.handleSeconds += stats.withdrawals.handleSeconds;
     aggregatePrevious.loyalty.completed += stats.loyalty.completed;
     aggregatePrevious.loyalty.rejected += stats.loyalty.rejected;
+    aggregatePrevious.loyalty.pendingAuth += stats.loyalty.pendingAuth;
     aggregatePrevious.loyalty.handleSeconds += stats.loyalty.handleSeconds;
   }
 
@@ -682,9 +714,9 @@ export async function getTeamPerformance(periodInput, range = {}) {
       };
       const metrics = buildMetrics(stats);
       const handledByType = {
-        deposits: stats.deposits.completed + stats.deposits.rejected,
-        withdrawals: stats.withdrawals.completed + stats.withdrawals.rejected,
-        loyalty: stats.loyalty.completed + stats.loyalty.rejected,
+        deposits: typeHandled(stats.deposits),
+        withdrawals: typeHandled(stats.withdrawals),
+        loyalty: typeHandled(stats.loyalty),
       };
       const typeTotal = metrics.handled || 1;
 
