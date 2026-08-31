@@ -330,6 +330,11 @@ export async function replyToHelpTicket(id, payload = {}) {
   if (!replySubject) throw validationError('Reply subject is required.');
   if (!replyMessage) throw validationError('Reply message is required.');
 
+  const email = String(ticket.email || '').trim();
+  if (!email.includes('@') || email === '—') {
+    throw validationError('This ticket has no valid email address.', 422);
+  }
+
   const html = helpTicketReplyEmailHtml({
     firstName: ticket.firstName,
     originalSubject: ticket.subject,
@@ -338,17 +343,18 @@ export async function replyToHelpTicket(id, payload = {}) {
   });
 
   await sendMail({
-    to: ticket.email,
+    to: email,
     subject: replySubject,
     html,
     text: replyMessage,
+    requireDelivery: true,
   });
 
   await markHelpTicketRead(ticketId);
 
   return {
     ok: true,
-    message: `Reply sent to ${ticket.email}.`,
+    message: `Reply sent to ${email}.`,
     ticket: (await getHelpTicketById(ticketId)).ticket,
     unread: await countUnreadHelpTickets(),
   };

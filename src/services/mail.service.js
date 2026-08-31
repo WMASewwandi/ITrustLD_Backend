@@ -47,7 +47,14 @@ async function deliver(transport, payload) {
   await transport.sendMail(payload);
 }
 
-export async function sendMail({ to, subject, html, text, attachments }) {
+function mailDeliveryError(message, cause) {
+  const error = new Error(message);
+  error.status = 502;
+  if (cause) error.cause = cause;
+  return error;
+}
+
+export async function sendMail({ to, subject, html, text, attachments, requireDelivery = false }) {
   const logoAttachments = getEmailLogoAttachments();
   const allAttachments = [...logoAttachments, ...(attachments || [])];
   const payload = {
@@ -69,8 +76,8 @@ export async function sendMail({ to, subject, html, text, attachments }) {
       return { ok: true, delivered: true, via: 'smtp' };
     } catch (error) {
       console.error('[mail:smtp failed]', error.message);
-      if (!env.mail.logOnly) {
-        throw error;
+      if (requireDelivery || !env.mail.logOnly) {
+        throw mailDeliveryError(`Failed to send email: ${error.message}`, error);
       }
     }
   }
@@ -95,6 +102,12 @@ export async function sendMail({ to, subject, html, text, attachments }) {
       text: text || undefined,
       hint: 'Start Mailpit/MailHog on port 2525, or set MAIL_MAILER=smtp with real credentials in ITrustLD_Existing/.env',
     });
+    if (requireDelivery) {
+      throw mailDeliveryError(
+        'Failed to send email. Set MAIL_MAILER=smtp with a working MAIL_HOST, MAIL_USERNAME, and MAIL_PASSWORD.',
+        error,
+      );
+    }
     return { ok: true, logged: true, code, via: 'console' };
   }
 }
