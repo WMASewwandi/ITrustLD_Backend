@@ -345,12 +345,34 @@ function bucketExpr(period) {
   return sqlDate('updated_at');
 }
 
+function completedActorExpr(hasAssigned) {
+  return hasAssigned
+    ? 'COALESCE(NULLIF(approved_by_admin, 0), NULLIF(assigned_to, 0), NULLIF(pendings_by_admin, 0))'
+    : 'COALESCE(NULLIF(approved_by_admin, 0), NULLIF(pendings_by_admin, 0))';
+}
+
+function rejectedActorExpr(hasAssigned) {
+  return hasAssigned
+    ? 'COALESCE(NULLIF(rejected_by_admin, 0), NULLIF(assigned_to, 0), NULLIF(pendings_by_admin, 0))'
+    : 'COALESCE(NULLIF(rejected_by_admin, 0), NULLIF(pendings_by_admin, 0))';
+}
+
 async function fetchGroupedActions({ adminId, start, end, period }) {
   const startSql = toSqlDate(start);
   const endSql = toSqlDate(end);
   const bucket = bucketExpr(period);
-  const adminCompletedFilter = adminId ? 'AND approved_by_admin = ?' : '';
-  const adminRejectedFilter = adminId ? 'AND rejected_by_admin = ?' : '';
+  const depositCompleted = completedActorExpr(true);
+  const depositRejected = rejectedActorExpr(true);
+  const withdrawalCompleted = completedActorExpr(true);
+  const withdrawalRejected = rejectedActorExpr(true);
+  const loyaltyCompleted = completedActorExpr(false);
+  const loyaltyRejected = rejectedActorExpr(false);
+  const depositCompletedFilter = adminId ? `AND ${depositCompleted} = ?` : '';
+  const depositRejectedFilter = adminId ? `AND ${depositRejected} = ?` : '';
+  const withdrawalCompletedFilter = adminId ? `AND ${withdrawalCompleted} = ?` : '';
+  const withdrawalRejectedFilter = adminId ? `AND ${withdrawalRejected} = ?` : '';
+  const loyaltyCompletedFilter = adminId ? `AND ${loyaltyCompleted} = ?` : '';
+  const loyaltyRejectedFilter = adminId ? `AND ${loyaltyRejected} = ?` : '';
 
   const sql = `
     SELECT source, outcome, admin_id, bucket_key,
@@ -359,84 +381,84 @@ async function fetchGroupedActions({ adminId, start, end, period }) {
     FROM (
       SELECT 'deposits' AS source,
              'completed' AS outcome,
-             approved_by_admin AS admin_id,
+             ${depositCompleted} AS admin_id,
              ${bucket} AS bucket_key,
              ${sqlHandleSeconds('approved_date')} AS handle_seconds
       FROM deposits
       WHERE transaction_status = 'Completed'
-        AND approved_by_admin IS NOT NULL
+        AND ${depositCompleted} IS NOT NULL
         AND updated_at >= ? AND updated_at < ?
-        ${adminCompletedFilter}
+        ${depositCompletedFilter}
 
       UNION ALL
 
-      SELECT 'deposits', 'rejected', rejected_by_admin, ${bucket},
+      SELECT 'deposits', 'rejected', ${depositRejected}, ${bucket},
              ${sqlHandleSeconds('rejected_date')}
       FROM deposits
       WHERE transaction_status = 'Rejected'
-        AND rejected_by_admin IS NOT NULL
+        AND ${depositRejected} IS NOT NULL
         AND updated_at >= ? AND updated_at < ?
-        ${adminRejectedFilter}
+        ${depositRejectedFilter}
 
       UNION ALL
 
-      SELECT 'withdrawals', 'completed', approved_by_admin, ${bucket},
+      SELECT 'withdrawals', 'completed', ${withdrawalCompleted}, ${bucket},
              ${sqlHandleSeconds('approved_date')}
       FROM withdrawals
       WHERE transaction_status = 'Completed'
-        AND approved_by_admin IS NOT NULL
+        AND ${withdrawalCompleted} IS NOT NULL
         AND updated_at >= ? AND updated_at < ?
-        ${adminCompletedFilter}
+        ${withdrawalCompletedFilter}
 
       UNION ALL
 
-      SELECT 'withdrawals', 'rejected', rejected_by_admin, ${bucket},
+      SELECT 'withdrawals', 'rejected', ${withdrawalRejected}, ${bucket},
              ${sqlHandleSeconds('rejected_date')}
       FROM withdrawals
       WHERE transaction_status = 'Rejected'
-        AND rejected_by_admin IS NOT NULL
+        AND ${withdrawalRejected} IS NOT NULL
         AND updated_at >= ? AND updated_at < ?
-        ${adminRejectedFilter}
+        ${withdrawalRejectedFilter}
 
       UNION ALL
 
-      SELECT 'loyalty', 'completed', approved_by_admin, ${bucket},
+      SELECT 'loyalty', 'completed', ${loyaltyCompleted}, ${bucket},
              ${sqlHandleSeconds()}
       FROM point_withdrawals
       WHERE status = 'Approved'
-        AND approved_by_admin IS NOT NULL
+        AND ${loyaltyCompleted} IS NOT NULL
         AND updated_at >= ? AND updated_at < ?
-        ${adminCompletedFilter}
+        ${loyaltyCompletedFilter}
 
       UNION ALL
 
-      SELECT 'loyalty', 'rejected', rejected_by_admin, ${bucket},
+      SELECT 'loyalty', 'rejected', ${loyaltyRejected}, ${bucket},
              ${sqlHandleSeconds()}
       FROM point_withdrawals
       WHERE status = 'Rejected'
-        AND rejected_by_admin IS NOT NULL
+        AND ${loyaltyRejected} IS NOT NULL
         AND updated_at >= ? AND updated_at < ?
-        ${adminRejectedFilter}
+        ${loyaltyRejectedFilter}
 
       UNION ALL
 
-      SELECT 'loyalty', 'completed', approved_by_admin, ${bucket},
+      SELECT 'loyalty', 'completed', ${loyaltyCompleted}, ${bucket},
              ${sqlHandleSeconds()}
       FROM loyalty_bonus_collects
       WHERE status = 'Approved'
-        AND approved_by_admin IS NOT NULL
+        AND ${loyaltyCompleted} IS NOT NULL
         AND updated_at >= ? AND updated_at < ?
-        ${adminCompletedFilter}
+        ${loyaltyCompletedFilter}
 
       UNION ALL
 
-      SELECT 'loyalty', 'rejected', rejected_by_admin, ${bucket},
+      SELECT 'loyalty', 'rejected', ${loyaltyRejected}, ${bucket},
              ${sqlHandleSeconds()}
       FROM loyalty_bonus_collects
       WHERE status = 'Rejected'
-        AND rejected_by_admin IS NOT NULL
+        AND ${loyaltyRejected} IS NOT NULL
         AND updated_at >= ? AND updated_at < ?
-        ${adminRejectedFilter}
+        ${loyaltyRejectedFilter}
     ) actions
     WHERE admin_id IS NOT NULL
     GROUP BY source, outcome, admin_id, bucket_key`;
