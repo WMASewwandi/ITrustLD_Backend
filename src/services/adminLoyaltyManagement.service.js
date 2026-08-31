@@ -119,6 +119,23 @@ export async function ensurePointCollectionTierSchema() {
     }
   }
 
+  if (getDbDriver() !== 'sqlite') {
+    const typeRows = await query(
+      `SELECT DATA_TYPE FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE()
+         AND TABLE_NAME = 'loyalty_management_point_collections'
+         AND COLUMN_NAME = 'cal_amount'
+       LIMIT 1`,
+    );
+    const dataType = String(typeRows[0]?.DATA_TYPE || '').toLowerCase();
+    if (dataType && dataType !== 'decimal' && dataType !== 'numeric') {
+      await query(
+        `ALTER TABLE loyalty_management_point_collections
+         MODIFY cal_amount DECIMAL(12,4) NOT NULL`,
+      );
+    }
+  }
+
   pointCollectionTierSchemaReady = true;
 }
 
@@ -543,12 +560,17 @@ async function getNextDisplayId(table, extraWhere = '', params = []) {
   return rows[0] ? Number(rows[0].display_id) + 1 : 1;
 }
 
+function requireCalAmount(calAmount) {
+  const amount = Number(calAmount);
+  if (!Number.isFinite(amount) || amount < 0) {
+    throw validationError('Cal amount must be a valid number.');
+  }
+  return amount;
+}
+
 export async function createPointCollection(adminUserId, { calAmount, isAffiliate, membershipTier }) {
   await ensurePointCollectionTierSchema();
-  const amount = Number(calAmount);
-  if (!Number.isInteger(amount) || amount < 0) {
-    throw validationError('Cal amount must be a valid integer.');
-  }
+  const amount = requireCalAmount(calAmount);
   const tier = requirePointCollectionTier(membershipTier);
 
   const affiliate = Boolean(isAffiliate);
@@ -589,12 +611,9 @@ export async function createPointCollection(adminUserId, { calAmount, isAffiliat
 export async function updatePointCollectionAmount({ pointCollectionId, calAmount, membershipTier }) {
   await ensurePointCollectionTierSchema();
   const id = Number(pointCollectionId);
-  const amount = Number(calAmount);
+  const amount = requireCalAmount(calAmount);
   if (!Number.isInteger(id) || id <= 0) {
     throw validationError('Invalid loyalty management point collection id.');
-  }
-  if (!Number.isInteger(amount) || amount < 0) {
-    throw validationError('Cal amount must be a valid integer.');
   }
   const tier = requirePointCollectionTier(membershipTier);
 
