@@ -11,7 +11,8 @@
     "migrate": "node src/db/migrate.js up",
     "migrate:status": "node src/db/migrate.js status",
     "migrate:baseline": "node src/db/migrate.js baseline",
-    "migrate:sync-laravel": "node scripts/sync-laravel-migrations.mjs"
+    "migrate:sync-laravel": "node scripts/sync-laravel-migrations.mjs",
+    "backfill:tx-admins": "node scripts/backfill-transaction-admins.mjs"
   },
   "engines": {
     "node": ">=20"

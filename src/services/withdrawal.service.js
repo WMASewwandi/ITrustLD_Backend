@@ -267,13 +267,18 @@ async function batchSimilarWithdrawals(rows, status) {
   return result;
 }
 
+function firstAdminId(...ids) {
+  for (const id of ids) {
+    const value = Number(id);
+    if (Number.isFinite(value) && value > 0) return value;
+  }
+  return null;
+}
+
 function lookupAdminName(adminUsers, assignedUsers, userId) {
-  if (!userId) return null;
-  return (
-    adminUsers[Number(userId)] ||
-    assignedUsers[Number(userId)] ||
-    String(userId)
-  );
+  const id = firstAdminId(userId);
+  if (!id) return null;
+  return adminUsers[id] || assignedUsers[id] || String(id);
 }
 
 function mapWithdrawalRow(row, adminUsers, assignedUsers, similarCounts) {
@@ -284,11 +289,11 @@ function mapWithdrawalRow(row, adminUsers, assignedUsers, similarCounts) {
   const updatedByName = lookupAdminName(adminUsers, assignedUsers, row.pendings_by_admin) || '—';
   const authorizedById =
     status === 'Completed'
-      ? row.approved_by_admin || row.assigned_to
+      ? firstAdminId(row.approved_by_admin, row.assigned_to, row.pendings_by_admin)
       : status === 'Rejected'
-        ? row.rejected_by_admin || row.assigned_to
+        ? firstAdminId(row.rejected_by_admin, row.assigned_to, row.pendings_by_admin)
         : status === 'Pending Authorization'
-          ? row.assigned_to
+          ? firstAdminId(row.assigned_to, row.pendings_by_admin)
           : null;
   const authorizedByName = lookupAdminName(adminUsers, assignedUsers, authorizedById) || '—';
   const adminId =
