@@ -649,6 +649,38 @@ export function isShiftManagedRole(roles = []) {
   return roles.some((role) => SHIFT_ROLES.includes(role));
 }
 
+const ADMIN_SHIFT_EXEMPT_ROLES = ['super-admin', 'sub-admin'];
+
+export function isAdminExemptFromShiftRestriction(roles = []) {
+  return roles.some((role) => ADMIN_SHIFT_EXEMPT_ROLES.includes(role));
+}
+
+export function getAssignedShift(user) {
+  const shift = String(user?.shift || '').trim().toUpperCase();
+  return shift === 'A' || shift === 'B' ? shift : null;
+}
+
+/** System users on the opposite shift cannot sign in. Super/sub admins are exempt. */
+export async function assertCanLoginForActiveShift(user, roles = []) {
+  if (isAdminExemptFromShiftRestriction(roles)) return null;
+  const userShift = getAssignedShift(user);
+  if (!userShift) return null;
+
+  const activeShift = await getActiveShiftForDate();
+  if (userShift === activeShift) {
+    return { activeShift, userShift };
+  }
+
+  const error = new Error(
+    `Today is Shift ${activeShift}. You are assigned to Shift ${userShift} and cannot sign in.`,
+  );
+  error.status = 403;
+  error.code = 'SHIFT_MISMATCH';
+  error.activeShift = activeShift;
+  error.userShift = userShift;
+  throw error;
+}
+
 let lastShiftRolloverDate = null;
 
 export function startShiftRolloverScheduler() {

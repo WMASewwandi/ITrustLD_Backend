@@ -11,6 +11,7 @@ import {
 } from './user.service.js';
 import { getUserStatusUpdateScope } from './statusUpdateScope.service.js';
 import { verifyLaravelPassword } from '../utils/laravelPassword.js';
+import { assertCanLoginForActiveShift } from './shiftAssignment.service.js';
 
 /**
  * Post-login path in the Next.js admin app.
@@ -96,6 +97,8 @@ export async function loginAdmin({ email, password }) {
     throw error;
   }
 
+  await assertCanLoginForActiveShift(user, roles);
+
   const permissions = await getUserPermissions(user.id);
   const statusScope = await getUserStatusUpdateScope(user.id);
 
@@ -141,6 +144,8 @@ export async function getAdminSession(userId) {
     error.status = 403;
     throw error;
   }
+
+  await assertCanLoginForActiveShift(user, roles);
 
   const permissions = await getUserPermissions(userId);
   const statusScope = await getUserStatusUpdateScope(userId);
