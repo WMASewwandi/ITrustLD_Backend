@@ -1106,6 +1106,7 @@ function mapAdminBonusRow(row, accountDisplay, adminUsers) {
     status: mapBonusUserStatus(row.status),
     raw_status: row.status,
     admin: resolveLoyaltyAdminName(row, adminUsers),
+    rejectReason: row.rejection_reason || null,
   };
 }
 
@@ -1190,7 +1191,7 @@ export async function listBonusClaimsForAdmin(params = {}) {
   };
 }
 
-async function notifyBonusClaimStatus(userId, approved) {
+async function notifyBonusClaimStatus(userId, approved, rejectionReason = '') {
   const rows = await query(
     `SELECT u.email, ah.mobile_number, ah.first_name
      FROM users u
@@ -1202,13 +1203,16 @@ async function notifyBonusClaimStatus(userId, approved) {
   const account = rows[0];
   if (!account?.email) return;
 
+  const reason = String(rejectionReason || '').trim();
   const balanceUrl = `${env.userAppUrl}/dashboard/loyalty`;
   const subject = approved
     ? 'Loyalty point redemption approved'
     : 'Loyalty point redemption rejected';
   const smsMessage = approved
     ? 'Congratulations! Your loyalty points have been successfully redeemed.'
-    : 'Your loyalty points redemption request has been rejected.';
+    : reason
+      ? `Your loyalty bonus claim has been rejected. Reason: ${reason}`
+      : 'Your loyalty points redemption request has been rejected.';
 
   try {
     await sendEmailAndSms({
@@ -1216,7 +1220,11 @@ async function notifyBonusClaimStatus(userId, approved) {
       subject,
       html: approved
         ? loyaltyRedemptionApprovedEmailHtml({ firstName: account.first_name, balanceUrl })
-        : loyaltyRedemptionRejectedEmailHtml({ firstName: account.first_name, balanceUrl }),
+        : loyaltyRedemptionRejectedEmailHtml({
+            firstName: account.first_name,
+            balanceUrl,
+            reason,
+          }),
       text: smsMessage,
       smsMessage,
       msisdn: account.mobile_number,
@@ -1229,8 +1237,16 @@ async function notifyBonusClaimStatus(userId, approved) {
 }
 
 export async function updateBonusClaimStatus(adminUserId, payload = {}) {
+  await addColumnIfMissing('loyalty_bonus_collects', 'rejection_reason', {
+    mysql: 'rejection_reason TEXT NULL',
+    sqlite: 'rejection_reason TEXT',
+  });
+
   const transactionId = Number(payload.transaction_id ?? payload.transactionId);
   const nextStatus = mapBonusAdminStatus(payload.bonus_request_status ?? payload.status);
+  const rejectionReason = String(
+    payload.rejection_reason ?? payload.rejectionReason ?? '',
+  ).trim();
 
   if (!Number.isInteger(transactionId)) {
     throw validationError('Transaction id is required.');
@@ -1267,14 +1283,20 @@ export async function updateBonusClaimStatus(adminUserId, payload = {}) {
     await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.LOYALTY_BONUS_APPROVE);
     await notifyBonusClaimStatus(bonusClaim.user_id, true);
   } else {
+    if (!rejectionReason) {
+      throw validationError('Select a rejection reason.');
+    }
+    if (rejectionReason.length > 500) {
+      throw validationError('Rejection reason must be 500 characters or less.');
+    }
     await query(
       `UPDATE loyalty_bonus_collects
-       SET status = ?, rejected_by_admin = ?, updated_at = NOW()
+       SET status = ?, rejected_by_admin = ?, rejection_reason = ?, updated_at = NOW()
        WHERE id = ?`,
-      [nextStatus, adminUserId, bonusId],
+      [nextStatus, adminUserId, rejectionReason, bonusId],
     );
     await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.LOYALTY_BONUS_REJECT);
-    await notifyBonusClaimStatus(bonusClaim.user_id, false);
+    await notifyBonusClaimStatus(bonusClaim.user_id, false, rejectionReason);
   }
 
   return {
@@ -1453,6 +1475,9 @@ export async function createUserBonusClaim(userId, payload = {}) {
   if (!accountType) {
     throw validationError('Payment option is required.');
   }
+  if (accountType !== 'XM') {
+    throw validationError('Bonus claims can only be paid to an XM account.');
+  }
 
   const totals = await getPointTotals(userId);
   const eligibility = await isBonusCollectAvailable(userId, isPartner, totals.remaining);
@@ -1520,6 +1545,8 @@ function mapUserBonusClaimRow(row) {
     received: formatBonusReceivedAmount(row.payment_option, row.account_currency_amount),
     status: mapBonusUserStatus(row.status),
     raw_status: row.status,
+    rejectReason: row.rejection_reason || null,
+    rejection_reason: row.rejection_reason || '',
   };
 }
 

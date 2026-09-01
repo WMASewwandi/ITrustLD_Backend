@@ -34,6 +34,39 @@ const POINT_COLLECTION_TIER_LABELS = {
 
 let pointCollectionTierSchemaReady = false;
 let bonusTierSchemaReady = false;
+let loyaltyManagementConfigsReady = false;
+
+async function ensureLoyaltyManagementConfigs() {
+  if (loyaltyManagementConfigsReady) return;
+
+  if (getDbDriver() !== 'sqlite') {
+    const columns = await query(`SHOW COLUMNS FROM loyalty_management_configs LIKE 'identifier'`);
+    const type = String(columns[0]?.Type || '').toLowerCase();
+    const missingVip =
+      type.startsWith('enum') &&
+      (!type.includes('vip-bonus') || !type.includes('vvip-bonus'));
+    if (missingVip) {
+      await query(
+        `ALTER TABLE loyalty_management_configs
+         MODIFY identifier VARCHAR(64) NOT NULL`,
+      );
+    }
+  }
+
+  const existing = await query(`SELECT identifier FROM loyalty_management_configs`);
+  const have = new Set(existing.map((row) => String(row.identifier || '').trim()));
+  for (const identifier of VALID_IDENTIFIERS) {
+    if (have.has(identifier)) continue;
+    await query(
+      `INSERT INTO loyalty_management_configs
+        (identifier, is_active, date_activated, date_deactivated, created_at, updated_at)
+       VALUES (?, 0, NOW(), NOW(), NOW(), NOW())`,
+      [identifier],
+    );
+  }
+
+  loyaltyManagementConfigsReady = true;
+}
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -367,6 +400,7 @@ async function fetchTopPointEarners(isPartner, tierSlug) {
 }
 
 export async function getLoyaltyManagementData(audience, tier) {
+  await ensureLoyaltyManagementConfigs();
   const normalizedAudience = normalizeAudience(audience);
   const isAffiliate = normalizedAudience === 'partner';
   const thresholds = await getMembershipTierThresholds();
@@ -481,6 +515,7 @@ export async function getLoyaltyManagementData(audience, tier) {
 }
 
 export async function updateMasterConfigActivationState({ identifier, activationState }) {
+  await ensureLoyaltyManagementConfigs();
   const configIdentifier = String(identifier || '').trim();
   if (!VALID_IDENTIFIERS.includes(configIdentifier)) {
     throw validationError('Invalid loyalty management config identifier.');
