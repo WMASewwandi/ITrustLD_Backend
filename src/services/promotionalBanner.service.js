@@ -1,4 +1,5 @@
 import { getDbDriver, query } from '../config/database.js';
+import { formatDateSl, formatYmdColombo, parseDbDateTime } from '../utils/slTime.js';
 import {
   deletePromotionalMediaFile,
   resolvePromotionalMediaPublicUrl,
@@ -52,20 +53,22 @@ function normalizeAudience(value) {
 
 function formatDateInput(value) {
   if (value == null || value === '') return null;
+  if (value instanceof Date) return formatYmdColombo(value);
   const raw = String(value).trim();
   if (!raw) return null;
-  const date = value instanceof Date ? value : new Date(raw);
-  if (Number.isNaN(date.getTime())) return null;
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
+  const date = parseDbDateTime(raw);
+  if (!date) return null;
+  return formatYmdColombo(date);
 }
 
 function formatDisplayDate(value) {
   if (!value) return '';
   const parts = String(value).slice(0, 10);
-  const date = new Date(`${parts}T00:00:00`);
-  if (Number.isNaN(date.getTime())) return parts;
-  return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+  if (/^\d{4}-\d{2}-\d{2}$/.test(parts)) {
+    return formatDateSl(`${parts} 00:00:00`);
+  }
+  return formatDateSl(value) || parts;
 }
 
 async function tableExists() {

@@ -1,16 +1,11 @@
 import { query } from '../config/database.js';
-import { formatTimestampSl, formatYmdColombo, parseDbDateTime } from '../utils/slTime.js';
+import { formatTimestampSl, formatYmdColombo, nowSqlDateTime, parseDbDateTime } from '../utils/slTime.js';
 import {
   logSystemUserAction,
   SYSTEM_USER_ACTIONS,
 } from './systemUserActionLog.service.js';
 import { assertCanUpdateRecordStatus } from './statusUpdateScope.service.js';
-import {
-  ensureLoyaltyAssignedToColumn,
-  isLoyaltySystemAdmin,
-  loyaltyAssignedToUserId,
-  refillLoyaltyVoucherPending,
-} from './loyaltyAssignment.service.js';
+import { isLoyaltySystemAdmin } from './loyaltyAssignment.service.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -95,8 +90,8 @@ function mapVoucherStatus(row) {
 
 function isAutoRejected(row) {
   if (Number(row.is_claimed) === 1 || row.rejection_reason) return false;
-  const created = new Date(row.created_at);
-  if (Number.isNaN(created.getTime())) return false;
+  const created = parseDbDateTime(row.created_at);
+  if (!created) return false;
   const days = (Date.now() - created.getTime()) / (1000 * 60 * 60 * 24);
   return days >= 30;
 }
@@ -126,14 +121,16 @@ const DUPLICATE_VOUCHER_SCOPE = `
 `;
 
 async function processExpiredVoucherAutoRejection() {
+  const nowSl = nowSqlDateTime();
   await query(
     `UPDATE loyalty_client_bonus_vouchers
      SET rejection_reason = 'Auto-rejected: Voucher expired after 30 days',
-         rejected_at = NOW(),
-         updated_at = NOW()
+         rejected_at = ?,
+         updated_at = ?
      WHERE is_claimed = 0
        AND rejection_reason IS NULL
        AND DATEDIFF(NOW(), created_at) >= 30`,
+    [nowSl, nowSl],
   );
 }
 
@@ -237,7 +234,6 @@ function resolveAssignedName(row, users = {}) {
 }
 
 export async function listVoucherClaimsForAdmin(params = {}, auth = null) {
-  await ensureLoyaltyAssignedToColumn('loyalty_client_bonus_vouchers');
   await processExpiredVoucherAutoRejection();
 
   const page = Math.max(1, Number(params.page) || 1);
@@ -259,13 +255,6 @@ export async function listVoucherClaimsForAdmin(params = {}, auth = null) {
   const values = [];
 
   sql = applyVoucherStatusFilter(sql, values, statusInput);
-
-  const assignedToUserId = loyaltyAssignedToUserId(auth, statusInput);
-  if (assignedToUserId) {
-    await ensureLoyaltyAssignedToColumn('loyalty_client_bonus_vouchers');
-    sql += ` AND v.assigned_to = ?`;
-    values.push(assignedToUserId);
-  }
 
   if (fromDate) {
     sql += ` AND DATE(v.created_at) >= ?`;
@@ -350,20 +339,15 @@ export async function completeVoucherClaim(adminUserId, payload = {}) {
     throw validationError('Voucher has been rejected.', 400);
   }
 
+  const nowSl = nowSqlDateTime();
   await query(
     `UPDATE loyalty_client_bonus_vouchers
-     SET is_claimed = 1, claimed_at = NOW(), claimed_by_admin = ?, updated_at = NOW()
+     SET is_claimed = 1, claimed_at = ?, claimed_by_admin = ?, updated_at = ?
      WHERE id = ?`,
-    [adminUserId, voucherId],
+    [nowSl, adminUserId, nowSl, voucherId],
   );
 
   await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.VOUCHER_CLAIM_APPROVE);
-
-  try {
-    await refillLoyaltyVoucherPending(voucher.assigned_to || adminUserId);
-  } catch (error) {
-    console.error('[loyalty-voucher:refill]', error.message);
-  }
 
   return {
     ok: true,
@@ -400,20 +384,15 @@ export async function rejectVoucherClaim(adminUserId, payload = {}) {
     throw validationError('Voucher already claimed.', 400);
   }
 
+  const nowSl = nowSqlDateTime();
   await query(
     `UPDATE loyalty_client_bonus_vouchers
-     SET rejection_reason = ?, rejected_at = NOW(), rejected_by_admin = ?, is_claimed = 0, updated_at = NOW()
+     SET rejection_reason = ?, rejected_at = ?, rejected_by_admin = ?, is_claimed = 0, updated_at = ?
      WHERE id = ?`,
-    [rejectionReason, adminUserId, voucherId],
+    [rejectionReason, nowSl, adminUserId, nowSl, voucherId],
   );
 
   await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.VOUCHER_CLAIM_REJECT);
-
-  try {
-    await refillLoyaltyVoucherPending(voucher.assigned_to || adminUserId);
-  } catch (error) {
-    console.error('[loyalty-voucher:refill]', error.message);
-  }
 
   return {
     ok: true,

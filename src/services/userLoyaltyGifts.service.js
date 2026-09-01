@@ -6,7 +6,7 @@ import {
   getMembershipTierThresholds,
 } from './loyaltyMembershipTier.service.js';
 import { ensureLoyaltyGiftSchema } from './loyaltyGiftSchema.service.js';
-import { formatTimestampSl, parseDbDateTime } from '../utils/slTime.js';
+import { formatTimestampSl, nowSqlDateTime, parseDbDateTime } from '../utils/slTime.js';
 
 function giftMatchesUserAudience(audienceType, isPartner) {
   const type = normalizeAudienceType(audienceType);
@@ -216,10 +216,11 @@ export async function createGiftClaim(userId, payload = {}) {
     throw validationError('You have already claimed this gift.');
   }
 
+  const claimedAtSl = nowSqlDateTime();
   const result = await query(
     `INSERT INTO loyalty_gift_claims (gift_id, user_id, delivery_address, contact_phone, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'Pending', NOW(), NOW())`,
-    [giftId, userId, deliveryAddress, contactPhone || null],
+     VALUES (?, ?, ?, ?, 'Pending', ?, ?)`,
+    [giftId, userId, deliveryAddress, contactPhone || null, claimedAtSl, claimedAtSl],
   );
 
   return {

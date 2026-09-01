@@ -4,12 +4,13 @@ import {
   LEGACY_LOYALTY_UPDATE,
   LOYALTY_BONUS_UPDATE,
   LOYALTY_ORDERS_UPDATE,
-  LOYALTY_VOUCHER_UPDATE,
 } from '../constants/loyaltyPermissions.js';
 import { nowSqlDateTime } from '../utils/slTime.js';
 import { notifyAssignedSystemUser } from './assignedUserNotify.service.js';
 import {
+  buildExecutivesForAssignment,
   buildUsersForAssignmentByPermissions,
+  findBestExecutive,
   findBestUserWithPermissions,
   getPendingCountForRole,
   touchExecutiveLastAssigned,
@@ -22,12 +23,16 @@ const ASSIGNED_TO_DDL = {
   sqlite: 'assigned_to INTEGER',
 };
 
+const BANK_TRANSFER = 'BANK TRANSFER';
+const BANK_TRANSFER_SQL = `UPPER(TRIM(payment_option)) = 'BANK TRANSFER'`;
+const NON_BANK_TRANSFER_SQL = `UPPER(TRIM(COALESCE(payment_option, ''))) <> 'BANK TRANSFER'`;
+
 const QUEUES = {
   order: {
     kind: 'loyalty-order',
     permissions: [LOYALTY_ORDERS_UPDATE, LEGACY_LOYALTY_UPDATE],
     table: 'point_withdrawals',
-    pendingSql: `status = 'Pending' AND (assigned_to IS NULL OR assigned_to = 0)`,
+    pendingSql: `status = 'Pending' AND (assigned_to IS NULL OR assigned_to = 0) AND ${NON_BANK_TRANSFER_SQL}`,
     smsType: 'LOYALTY_ORDER_PENDING',
     label: 'loyalty order',
   },
@@ -39,14 +44,11 @@ const QUEUES = {
     smsType: 'LOYALTY_BONUS_PENDING',
     label: 'loyalty bonus claim',
   },
-  voucher: {
-    kind: 'loyalty-voucher',
-    permissions: [LOYALTY_VOUCHER_UPDATE, LEGACY_LOYALTY_UPDATE],
-    table: 'loyalty_client_bonus_vouchers',
-    pendingSql: `is_claimed = 0 AND (rejection_reason IS NULL OR rejection_reason = '') AND (assigned_to IS NULL OR assigned_to = 0)`,
-    smsType: 'LOYALTY_VOUCHER_PENDING',
-    label: 'loyalty voucher claim',
-  },
+};
+
+const BANK_TRANSFER_ORDER_QUEUE = {
+  ...QUEUES.order,
+  pendingSql: `status = 'Pending' AND (assigned_to IS NULL OR assigned_to = 0) AND ${BANK_TRANSFER_SQL}`,
 };
 
 export async function ensureLoyaltyAssignedToColumn(table) {
@@ -55,6 +57,10 @@ export async function ensureLoyaltyAssignedToColumn(table) {
 
 export function isLoyaltySystemAdmin(roles = []) {
   return roles.includes('super-admin') || roles.includes('sub-admin');
+}
+
+export function isLoyaltyBankTransfer(paymentOption) {
+  return String(paymentOption || '').trim().toUpperCase() === BANK_TRANSFER;
 }
 
 function isSystemAdmin(roles = []) {
@@ -83,10 +89,9 @@ export function loyaltyAssignedToUserId(auth, status) {
   return userId;
 }
 
-async function assignRow(queue, rowId, displayId) {
-  await ensureLoyaltyAssignedToColumn(queue.table);
-  const executive = await findBestUserWithPermissions(queue.permissions, queue.kind);
+async function assignRow(queue, rowId, displayId, executive) {
   if (!executive) return null;
+  await ensureLoyaltyAssignedToColumn(queue.table);
 
   await query(
     `UPDATE ${queue.table}
@@ -105,7 +110,7 @@ async function assignRow(queue, rowId, displayId) {
   return executive.id;
 }
 
-async function refillQueue(queue, userId) {
+async function refillQueue(queue, userId, pendingKind = queue.kind) {
   const executiveId = Number(userId);
   if (!executiveId) return 0;
 
@@ -115,7 +120,7 @@ async function refillQueue(queue, userId) {
   if (!showCount) return 0;
 
   const roles = await getUserRoles(executiveId);
-  const current = await getPendingCountForRole(executiveId, roles, queue.kind);
+  const current = await getPendingCountForRole(executiveId, roles, pendingKind);
   const need = showCount - current;
   if (need <= 0) return 0;
 
@@ -144,31 +149,58 @@ async function refillQueue(queue, userId) {
   return ids.length;
 }
 
+async function loadOrderPaymentOption(orderId) {
+  const rows = await query(
+    `SELECT payment_option FROM point_withdrawals WHERE id = ? LIMIT 1`,
+    [orderId],
+  );
+  return rows[0]?.payment_option || '';
+}
+
 export async function autoAssignLoyaltyOrder(row) {
   if (!row?.id) return null;
-  return assignRow(QUEUES.order, row.id, row.transaction_id || row.id);
+  const paymentOption = row.payment_option ?? row.paymentOption ?? (await loadOrderPaymentOption(row.id));
+  const displayId = row.transaction_id || row.id;
+  if (isLoyaltyBankTransfer(paymentOption)) {
+    const executive = await findBestExecutive('withdrawal-executive');
+    return assignRow(QUEUES.order, row.id, displayId, executive);
+  }
+  const executive = await findBestUserWithPermissions(QUEUES.order.permissions, QUEUES.order.kind);
+  return assignRow(QUEUES.order, row.id, displayId, executive);
 }
 
 export async function autoAssignLoyaltyBonus(row) {
   if (!row?.id) return null;
-  return assignRow(QUEUES.bonus, row.id, row.transaction_id || row.id);
-}
-
-export async function autoAssignLoyaltyVoucher(row) {
-  if (!row?.id) return null;
-  return assignRow(QUEUES.voucher, row.id, row.voucher_token || row.id);
+  const executive = await findBestUserWithPermissions(QUEUES.bonus.permissions, QUEUES.bonus.kind);
+  return assignRow(QUEUES.bonus, row.id, row.transaction_id || row.id, executive);
 }
 
 export async function refillLoyaltyOrderPending(userId) {
-  return refillQueue(QUEUES.order, userId);
+  const executiveId = Number(userId);
+  if (!executiveId) return 0;
+  const roles = await getUserRoles(executiveId);
+  if (isSystemAdmin(roles)) return 0;
+  if (roles.includes('withdrawal-executive')) {
+    return refillQueue(BANK_TRANSFER_ORDER_QUEUE, executiveId, 'withdrawal-executive');
+  }
+  return refillQueue(QUEUES.order, executiveId);
 }
 
 export async function refillLoyaltyBonusPending(userId) {
   return refillQueue(QUEUES.bonus, userId);
 }
 
-export async function refillLoyaltyVoucherPending(userId) {
-  return refillQueue(QUEUES.voucher, userId);
+function mergeAssigneeLists(primary = {}, extra = {}) {
+  const byId = new Map();
+  for (const executive of [...(primary.executives || []), ...(extra.executives || [])]) {
+    if (!byId.has(Number(executive.id))) {
+      byId.set(Number(executive.id), executive);
+    }
+  }
+  return {
+    active_shift: primary.active_shift || extra.active_shift || null,
+    executives: [...byId.values()],
+  };
 }
 
 export async function listLoyaltyAssignees(kind) {
@@ -176,7 +208,14 @@ export async function listLoyaltyAssignees(kind) {
   if (!queue) {
     throw validationError('Invalid loyalty queue.');
   }
-  return buildUsersForAssignmentByPermissions(queue.permissions, queue.kind);
+  const loyaltyUsers = await buildUsersForAssignmentByPermissions(queue.permissions, queue.kind);
+  if (kind !== 'order') {
+    return loyaltyUsers;
+  }
+  const withdrawalExecs = await buildExecutivesForAssignment('withdrawal-executive', {
+    includeSubAdmin: false,
+  });
+  return mergeAssigneeLists(withdrawalExecs, loyaltyUsers);
 }
 
 export async function assignLoyaltyRecords(auth, kind, { ids, executiveId }) {
@@ -196,29 +235,39 @@ export async function assignLoyaltyRecords(auth, kind, { ids, executiveId }) {
   const execId =
     executiveId == null || executiveId === '' ? null : Number(executiveId);
 
+  let execRoles = [];
   if (execId != null) {
     const execRows = await query(`SELECT id FROM users WHERE id = ? LIMIT 1`, [execId]);
     if (!execRows[0]) {
       throw validationError('User not found.');
     }
-    const roles = await getUserRoles(execId);
-    if (isSystemAdmin(roles)) {
+    execRoles = await getUserRoles(execId);
+    if (isSystemAdmin(execRoles)) {
       throw validationError('Cannot assign to an admin. Select a user with update permission.');
     }
   }
 
   const placeholders = recordIds.map(() => '?').join(', ');
-  const pendingSql =
-    kind === 'voucher'
-      ? `id IN (${placeholders}) AND is_claimed = 0 AND (rejection_reason IS NULL OR rejection_reason = '')`
-      : `id IN (${placeholders}) AND status = 'Pending'`;
+  const pendingSql = `id IN (${placeholders}) AND status = 'Pending'`;
   const pendingRows = await query(
-    `SELECT id FROM ${queue.table} WHERE ${pendingSql}`,
+    `SELECT id${kind === 'order' ? ', payment_option' : ''} FROM ${queue.table} WHERE ${pendingSql}`,
     recordIds,
   );
   const pendingIds = pendingRows.map((row) => Number(row.id)).filter(Boolean);
   if (!pendingIds.length) {
     throw validationError(`Only pending ${queue.label}s can be assigned.`);
+  }
+
+  if (kind === 'order' && execId != null) {
+    const isWithdrawalExec = execRoles.includes('withdrawal-executive');
+    const bankTransferIds = pendingRows.filter((row) => isLoyaltyBankTransfer(row.payment_option));
+    const otherIds = pendingRows.filter((row) => !isLoyaltyBankTransfer(row.payment_option));
+    if (isWithdrawalExec && otherIds.length) {
+      throw validationError('Withdrawal executives can only be assigned Bank Transfer loyalty orders.');
+    }
+    if (!isWithdrawalExec && bankTransferIds.length) {
+      throw validationError('Bank Transfer loyalty orders must be assigned to a withdrawal executive.');
+    }
   }
 
   const pendingPlaceholders = pendingIds.map(() => '?').join(', ');

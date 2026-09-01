@@ -1,4 +1,5 @@
 import { query } from '../config/database.js';
+import { formatTimestampSl } from '../utils/slTime.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -8,10 +9,7 @@ function validationError(message, status = 422) {
 
 function formatTimestamp(value) {
   if (!value) return '';
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  return formatTimestampSl(value) || String(value);
 }
 
 function escapeLike(value) {

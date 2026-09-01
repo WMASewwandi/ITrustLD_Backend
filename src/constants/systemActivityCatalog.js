@@ -204,6 +204,8 @@ export const BUILTIN_ROLE_PERMISSIONS = {
     'view_admin_dashboard',
     'read_withdrawal_data',
     'status_update_withdrawal_data',
+    LOYALTY_ORDERS_READ,
+    LOYALTY_ORDERS_UPDATE,
     'comunicatte_to_customer',
     'view_my_performance',
   ],

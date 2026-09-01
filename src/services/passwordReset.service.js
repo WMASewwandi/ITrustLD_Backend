@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { query } from '../config/database.js';
 import { env } from '../config/env.js';
 import { hashLaravelPassword, verifyLaravelPassword } from '../utils/laravelPassword.js';
+import { parseDbDateTime } from '../utils/slTime.js';
 import { isStrongPassword, STRONG_PASSWORD_MESSAGE } from '../utils/passwordPolicy.js';
 import { sendMail } from './mail.service.js';
 import { passwordResetEmailHtml } from './mail.templates.js';
@@ -33,7 +34,9 @@ async function assertNotThrottled(normalizedEmail) {
   const record = rows[0];
   if (!record?.created_at) return;
 
-  const ageSeconds = (Date.now() - new Date(record.created_at).getTime()) / 1000;
+  const createdAt = parseDbDateTime(record.created_at);
+  if (!createdAt) return;
+  const ageSeconds = (Date.now() - createdAt.getTime()) / 1000;
   if (ageSeconds < REQUEST_THROTTLE_SECONDS) {
     throw validationError(
       'Too many password reset attempts. Please wait before trying again.',
@@ -117,8 +120,8 @@ export async function resetPassword({ email, token, password, password_confirmat
     throw validationError('This password reset token is invalid.');
   }
 
-  const createdAt = new Date(record.created_at);
-  const ageMinutes = (Date.now() - createdAt.getTime()) / 60000;
+  const createdAt = parseDbDateTime(record.created_at);
+  const ageMinutes = createdAt ? (Date.now() - createdAt.getTime()) / 60000 : Infinity;
   if (ageMinutes > TOKEN_EXPIRY_MINUTES) {
     await query(`DELETE FROM password_reset_tokens WHERE email = ?`, [normalizedEmail]);
     throw validationError('This password reset token is invalid.');

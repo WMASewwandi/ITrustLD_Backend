@@ -50,6 +50,7 @@ import {
   formatTimestampSl,
   formatYmdColombo,
   getColomboDateParts,
+  nowSqlDateTime,
   parseDbDateTime,
 } from '../utils/slTime.js';
 
@@ -170,12 +171,12 @@ async function getPointsDroppingToday(userId) {
 
 function formatDisplayDate(value) {
   if (!value) return '—';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '—';
-  const d = String(date.getDate()).padStart(2, '0');
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const y = date.getFullYear();
-  return `${d}/${m}/${y}`;
+  const date = parseDbDateTime(value);
+  if (!date) return '—';
+  const parts = getColomboDateParts(date);
+  const d = String(parts.day).padStart(2, '0');
+  const m = String(parts.month).padStart(2, '0');
+  return `${d}/${m}/${parts.year}`;
 }
 
 async function getPointsBreakdownForYear(userId) {
@@ -257,7 +258,7 @@ async function getPartnerLevelOverviewRows(userId, level, earnedForYear, tiers =
       row.event_type === 'PROMOTED'
         ? getLevelDisplayName(Math.max(1, levelId - 1))
         : getLevelDisplayName(Math.min(6, levelId + 1));
-    const createdAt = row.created_at ? new Date(row.created_at) : null;
+    const createdAt = row.created_at ? parseDbDateTime(row.created_at) : null;
     const reviewDate = createdAt ? new Date(createdAt) : null;
     if (reviewDate) reviewDate.setMonth(reviewDate.getMonth() + 1);
 
@@ -697,11 +698,12 @@ export async function createUserLoyaltyWithdrawal(userId, payload = {}) {
   const cashoutAmount = (points / POINT_DIVIDER) * usdPerBlock;
   const accountCurrencyAmount = cashoutAmount * rate;
 
+  const issuedAtSl = nowSqlDateTime();
   const insert = await query(
     `INSERT INTO point_withdrawals
       (user_id, point_withdrawal_amount, cashout_amount, account_currency_amount, point_divider,
        payment_option, account_id, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending', NOW(), NOW())`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending', ?, ?)`,
     [
       userId,
       points,
@@ -710,6 +712,8 @@ export async function createUserLoyaltyWithdrawal(userId, payload = {}) {
       POINT_DIVIDER,
       accountType,
       accountId,
+      issuedAtSl,
+      issuedAtSl,
     ],
   );
 
@@ -725,7 +729,11 @@ export async function createUserLoyaltyWithdrawal(userId, payload = {}) {
   const updatedTotals = await getPointTotals(userId);
 
   try {
-    await autoAssignLoyaltyOrder({ id: withdrawalId, transaction_id: transactionId });
+    await autoAssignLoyaltyOrder({
+      id: withdrawalId,
+      transaction_id: transactionId,
+      payment_option: accountType,
+    });
   } catch (error) {
     console.error('[loyalty-order:auto-assign]', error.message);
   }
@@ -745,8 +753,8 @@ export async function createUserLoyaltyWithdrawal(userId, payload = {}) {
       payment_option: accountType,
       account_id: accountId,
       status: 'Pending',
-      created_at: new Date(),
-      updated_at: new Date(),
+      created_at: issuedAtSl,
+      updated_at: issuedAtSl,
     }),
   };
 }
@@ -1104,20 +1112,21 @@ export async function updateLoyaltyOrderStatus(adminUserId, payload = {}) {
   const currentStatus = mapUserStatus(withdrawal.status);
   await assertCanUpdateRecordStatus(adminUserId, 'loyalty_order', currentStatus);
 
+  const nowSl = nowSqlDateTime();
   if (nextStatus === 'Pending') {
     await query(
       `UPDATE point_withdrawals
-       SET status = ?, pendings_by_admin = ?, updated_at = NOW()
+       SET status = ?, pendings_by_admin = ?, updated_at = ?
        WHERE id = ?`,
-      [nextStatus, adminUserId, withdrawalId],
+      [nextStatus, adminUserId, nowSl, withdrawalId],
     );
     await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.LOYALTY_ORDER_PENDING);
   } else if (nextStatus === 'Approved') {
     await query(
       `UPDATE point_withdrawals
-       SET status = ?, approved_by_admin = ?, withdrawn_at = NOW(), updated_at = NOW()
+       SET status = ?, approved_by_admin = ?, withdrawn_at = ?, updated_at = ?
        WHERE id = ?`,
-      [nextStatus, adminUserId, withdrawalId],
+      [nextStatus, adminUserId, nowSl, nowSl, withdrawalId],
     );
     await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.LOYALTY_ORDER_APPROVE);
   } else {
@@ -1126,9 +1135,9 @@ export async function updateLoyaltyOrderStatus(adminUserId, payload = {}) {
     }
     await query(
       `UPDATE point_withdrawals
-       SET status = ?, rejected_by_admin = ?, rejection_reason = ?, updated_at = NOW()
+       SET status = ?, rejected_by_admin = ?, rejection_reason = ?, updated_at = ?
        WHERE id = ?`,
-      [nextStatus, adminUserId, rejectionReason, withdrawalId],
+      [nextStatus, adminUserId, rejectionReason, nowSl, withdrawalId],
     );
     await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.LOYALTY_ORDER_REJECT);
   }
@@ -1411,20 +1420,21 @@ export async function updateBonusClaimStatus(adminUserId, payload = {}) {
   const currentStatus = mapBonusUserStatus(bonusClaim.status);
   await assertCanUpdateRecordStatus(adminUserId, 'loyalty_bonus', currentStatus);
 
+  const nowSl = nowSqlDateTime();
   if (nextStatus === 'Pending') {
     await query(
       `UPDATE loyalty_bonus_collects
-       SET status = ?, pendings_by_admin = ?, updated_at = NOW()
+       SET status = ?, pendings_by_admin = ?, updated_at = ?
        WHERE id = ?`,
-      [nextStatus, adminUserId, bonusId],
+      [nextStatus, adminUserId, nowSl, bonusId],
     );
     await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.LOYALTY_BONUS_PENDING);
   } else if (nextStatus === 'Approved') {
     await query(
       `UPDATE loyalty_bonus_collects
-       SET status = ?, approved_by_admin = ?, updated_at = NOW()
+       SET status = ?, approved_by_admin = ?, updated_at = ?
        WHERE id = ?`,
-      [nextStatus, adminUserId, bonusId],
+      [nextStatus, adminUserId, nowSl, bonusId],
     );
     await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.LOYALTY_BONUS_APPROVE);
     await notifyBonusClaimStatus(bonusClaim.user_id, true);
@@ -1437,9 +1447,9 @@ export async function updateBonusClaimStatus(adminUserId, payload = {}) {
     }
     await query(
       `UPDATE loyalty_bonus_collects
-       SET status = ?, rejected_by_admin = ?, rejection_reason = ?, updated_at = NOW()
+       SET status = ?, rejected_by_admin = ?, rejection_reason = ?, updated_at = ?
        WHERE id = ?`,
-      [nextStatus, adminUserId, rejectionReason, bonusId],
+      [nextStatus, adminUserId, rejectionReason, nowSl, bonusId],
     );
     await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.LOYALTY_BONUS_REJECT);
     await notifyBonusClaimStatus(bonusClaim.user_id, false, rejectionReason);
@@ -1545,9 +1555,9 @@ async function isBonusCollectAvailable(userId, isPartner, pointsRemaining) {
     return { available: true, bonus: activeBonus, bonusType: isPartner ? 'partner' : 'standard' };
   }
 
-  const activatedAt = masterConfig.date_activated ? new Date(masterConfig.date_activated) : null;
-  const lastCreatedAt = new Date(lastCollect.created_at);
-  if (activatedAt && !Number.isNaN(activatedAt.getTime()) && lastCreatedAt < activatedAt) {
+  const activatedAt = masterConfig.date_activated ? parseDbDateTime(masterConfig.date_activated) : null;
+  const lastCreatedAt = parseDbDateTime(lastCollect.created_at);
+  if (activatedAt && lastCreatedAt && lastCreatedAt < activatedAt) {
     return { available: true, bonus: activeBonus, bonusType: isPartner ? 'partner' : 'standard' };
   }
 
@@ -1666,10 +1676,11 @@ export async function createUserBonusClaim(userId, payload = {}) {
   }
   const accountCurrencyAmount = bonusAmount * rate;
 
+  const issuedAtSl = nowSqlDateTime();
   const insert = await query(
     `INSERT INTO loyalty_bonus_collects
       (user_id, loyalty_management_bonus_id, amount, account_currency_amount, payment_option, account_id, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'Pending', NOW(), NOW())`,
+     VALUES (?, ?, ?, ?, ?, ?, 'Pending', ?, ?)`,
     [
       userId,
       eligibility.bonus.id,
@@ -1677,6 +1688,8 @@ export async function createUserBonusClaim(userId, payload = {}) {
       accountCurrencyAmount,
       accountType,
       accountId,
+      issuedAtSl,
+      issuedAtSl,
     ],
   );
 
@@ -1705,7 +1718,7 @@ export async function createUserBonusClaim(userId, payload = {}) {
       account_currency_amount: accountCurrencyAmount,
       payment_option: accountType,
       status: 'Pending',
-      created_at: new Date(),
+      created_at: issuedAtSl,
     }),
   };
 }

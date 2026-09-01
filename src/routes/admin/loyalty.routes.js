@@ -189,36 +189,6 @@ adminLoyaltyRouter.get(
 );
 
 adminLoyaltyRouter.get(
-  '/voucher-claims/executives',
-  requirePermission(LOYALTY_VOUCHER_READ),
-  async (req, res, next) => {
-    try {
-      const data = await listLoyaltyAssignees('voucher');
-      res.json(data);
-    } catch (error) {
-      next(error);
-    }
-  },
-);
-
-adminLoyaltyRouter.post(
-  '/voucher-claims/assign',
-  requirePermission(LOYALTY_VOUCHER_UPDATE),
-  async (req, res, next) => {
-    try {
-      const body = req.body ?? {};
-      const data = await assignLoyaltyRecords(req.auth, 'voucher', {
-        ids: body.voucher_ids || body.ids,
-        executiveId: body.executive_id ?? body.executiveId ?? null,
-      });
-      res.json(data);
-    } catch (error) {
-      next(error);
-    }
-  },
-);
-
-adminLoyaltyRouter.get(
   '/voucher-claims/duplicate-stats',
   requirePermission(LOYALTY_VOUCHER_READ),
   async (req, res, next) => {

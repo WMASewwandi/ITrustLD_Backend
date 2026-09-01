@@ -1,4 +1,5 @@
 import { getDbDriver, query } from '../config/database.js';
+import { formatDateSl, formatYmdColombo, parseDbDateTime } from '../utils/slTime.js';
 import {
   DEFAULT_ICON_LOGO_URL,
   DEFAULT_WIDE_LOGO_URL,
@@ -18,22 +19,25 @@ function validationError(message, status = 422) {
 
 function formatDateInput(value) {
   if (!value) return null;
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  if (value instanceof Date) return formatYmdColombo(value);
+  const raw = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
+  const date = parseDbDateTime(raw);
+  if (!date) return null;
+  return formatYmdColombo(date);
 }
 
 function formatDisplayDate(value) {
   if (!value) return '';
   const parts = String(value).slice(0, 10);
-  const date = new Date(`${parts}T00:00:00`);
-  if (Number.isNaN(date.getTime())) return parts;
-  return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+  if (/^\d{4}-\d{2}-\d{2}$/.test(parts)) {
+    return formatDateSl(`${parts} 00:00:00`);
+  }
+  return formatDateSl(value) || parts;
 }
 
 function todayDateString() {
-  return formatDateInput(new Date());
+  return formatYmdColombo(new Date());
 }
 
 function rangesOverlap(fromA, toA, fromB, toB) {
@@ -41,9 +45,7 @@ function rangesOverlap(fromA, toA, fromB, toB) {
 }
 
 function yesterdayDateString() {
-  const date = new Date();
-  date.setDate(date.getDate() - 1);
-  return formatDateInput(date);
+  return formatYmdColombo(new Date(Date.now() - 24 * 60 * 60 * 1000));
 }
 
 async function endCurrentlyActiveSchedules(excludeId = null) {

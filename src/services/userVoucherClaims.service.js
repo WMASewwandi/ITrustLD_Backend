@@ -6,7 +6,6 @@ import {
   needsVerification,
 } from './accountHolder.service.js';
 import { clientBonusVoucherEmailHtml } from './mail.templates.js';
-import { autoAssignLoyaltyVoucher } from './loyaltyAssignment.service.js';
 import { sendEmailAndSms } from './notification.service.js';
 import { getUserPointLevel } from './pointEarning.service.js';
 import { ensureTopupWalletVoucherFlagSchema } from './wallet.service.js';
@@ -260,7 +259,7 @@ export async function getClientBonusSummaryForUser(userId, isPartner) {
     Number(activeSummary.issued || 0) < Number(activeSummary.total_slots || 0)
   ) {
     const promotedAt = lastPromotion?.created_at
-      ? new Date(lastPromotion.created_at)
+      ? parseDbDateTime(lastPromotion.created_at)
       : null;
     const neverIssuedForTier = Number(activeSummary.issued || 0) === 0;
     const recentlyPromoted =
@@ -515,11 +514,6 @@ export async function createUserClientBonusVoucher(userId, payload = {}) {
   );
 
   const voucherId = insert.insertId;
-  try {
-    await autoAssignLoyaltyVoucher({ id: voucherId, voucher_token: token });
-  } catch (error) {
-    console.error('[loyalty-voucher:auto-assign]', error.message);
-  }
   const voucherUrl = `${env.userAppUrl}/dashboard/earnings/vouchers/${token}`;
 
   await notifyClientBonusVoucherIssued({

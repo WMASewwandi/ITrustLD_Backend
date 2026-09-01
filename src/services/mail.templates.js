@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { formatCustomerRejectReason } from '../constants/rejectReasons.js';
 import { env } from '../config/env.js';
+import { getColomboDateParts, parseDbDateTime } from '../utils/slTime.js';
 
 const EMAIL_ASSET_DIR = path.join(env.projectRoot, 'assets/email');
 const EMAIL_INLINE_ASSETS = [
@@ -380,12 +381,13 @@ export function helpTicketReplyEmailHtml({
 
 function formatDepositDate(value) {
   if (!value) return '—';
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
+  const date = parseDbDateTime(value);
+  if (!date) return String(value);
   const pad = (n) => String(n).padStart(2, '0');
+  const parts = getColomboDateParts(date);
   return {
-    date: `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`,
-    time: `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`,
+    date: `${parts.year}-${pad(parts.month)}-${pad(parts.day)}`,
+    time: `${pad(parts.hour)}:${pad(parts.minute)}:${pad(parts.second)}`,
   };
 }
 
