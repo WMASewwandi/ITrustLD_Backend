@@ -2,6 +2,7 @@ import fs from 'fs/promises';
 import path from 'node:path';
 import { env } from '../config/env.js';
 import { getApiBaseUrl } from './blogStorage.service.js';
+import { fetchFirstRemoteBuffer } from './proofRemoteFetch.js';
 
 function withdrawalsDir() {
   return path.resolve(env.projectRoot, '../ITrustLD_Existing/storage/app/withdrawals');
@@ -83,12 +84,6 @@ async function readLocalFile(filePath) {
   }
 }
 
-async function fetchRemoteBuffer(url) {
-  const response = await fetch(url);
-  if (!response.ok) return null;
-  return Buffer.from(await response.arrayBuffer());
-}
-
 export async function readWithdrawalProofBuffer(proofKey) {
   const normalized = normalizeWithdrawalProofKey(proofKey);
   const localCandidates = [
@@ -109,18 +104,11 @@ export async function readWithdrawalProofBuffer(proofKey) {
     if (buffer) return buffer;
   }
 
-  const remoteCandidates = [buildLaravelProofUrl(normalized), buildS3ProofUrl(normalized)].filter(
-    Boolean,
-  );
-
-  for (const url of remoteCandidates) {
-    try {
-      const buffer = await fetchRemoteBuffer(url);
-      if (buffer) return buffer;
-    } catch {
-      // try next source
-    }
-  }
+  const remoteBuffer = await fetchFirstRemoteBuffer([
+    buildS3ProofUrl(normalized),
+    buildLaravelProofUrl(normalized),
+  ]);
+  if (remoteBuffer) return remoteBuffer;
 
   const notFound = new Error('Withdrawal proof not found.');
   notFound.status = 404;

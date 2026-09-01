@@ -55,6 +55,11 @@ function mailDeliveryError(message, cause) {
 }
 
 export async function sendMail({ to, subject, html, text, attachments, requireDelivery = false }) {
+  if (!env.mail.enabled) {
+    console.info('[mail:skipped]', { to, subject, reason: 'local MAIL_* is commented or not configured' });
+    return { ok: true, skipped: true, via: 'disabled' };
+  }
+
   const logoAttachments = getEmailLogoAttachments();
   const allAttachments = [...logoAttachments, ...(attachments || [])];
   const payload = {

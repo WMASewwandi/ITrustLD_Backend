@@ -17,6 +17,24 @@ function parseCorsOrigins(value) {
     .filter(Boolean);
 }
 
+const isProduction = (process.env.NODE_ENV || 'development') === 'production';
+const mailer = process.env.MAIL_MAILER || (isProduction ? 'smtp' : '');
+const mailUser =
+  process.env.MAIL_USERNAME && process.env.MAIL_USERNAME !== 'null'
+    ? process.env.MAIL_USERNAME
+    : undefined;
+const smsUsername =
+  process.env.SMS_API_USERNAME ||
+  process.env.DIALOG_SMS_USERNAME ||
+  process.env.SMS_DIALOG_USERNAME ||
+  '';
+const smsPassword =
+  process.env.SMS_API_PASSWORD ||
+  process.env.DIALOG_SMS_PASSWORD ||
+  process.env.SMS_DIALOG_PASSWORD ||
+  '';
+const smsCredentialsReady = Boolean(smsUsername && smsPassword);
+
 export const env = {
   nodeEnv: process.env.NODE_ENV || 'development',
   port: Number(process.env.PORT) || 4000,
@@ -39,12 +57,16 @@ export const env = {
     port: Number(process.env.MAIL_PORT) || 587,
     secure: process.env.MAIL_ENCRYPTION === 'ssl',
     requireTls: process.env.MAIL_ENCRYPTION === 'tls',
-    user: process.env.MAIL_USERNAME && process.env.MAIL_USERNAME !== 'null' ? process.env.MAIL_USERNAME : undefined,
+    user: mailUser,
     pass: process.env.MAIL_PASSWORD && process.env.MAIL_PASSWORD !== 'null' ? process.env.MAIL_PASSWORD : undefined,
     fromAddress: (process.env.MAIL_FROM_ADDRESS || 'hello@example.com').replace(/"/g, ''),
     fromName: (process.env.MAIL_FROM_NAME || 'iTrustLD').replace(/"/g, ''),
-    logOnly: (process.env.MAIL_MAILER || 'smtp') === 'log',
+    logOnly: mailer === 'log',
     forceSmtp: process.env.MAIL_FORCE_SMTP === 'true',
+    // Local only: skip when MAIL_* is commented. Production keeps the previous send path.
+    enabled: isProduction
+      ? true
+      : Boolean(mailer && mailer !== 'log' && process.env.MAIL_HOST && mailUser),
   },
   projectRoot,
   turnstile: {
@@ -62,31 +84,16 @@ export const env = {
   },
   sms: {
     // Dialog eSMS v2 (esms.dialog.lk). SMS_API_* preferred; DIALOG_SMS_* still accepted.
-    username:
-      process.env.SMS_API_USERNAME ||
-      process.env.DIALOG_SMS_USERNAME ||
-      process.env.SMS_DIALOG_USERNAME ||
-      '',
-    password:
-      process.env.SMS_API_PASSWORD ||
-      process.env.DIALOG_SMS_PASSWORD ||
-      process.env.SMS_DIALOG_PASSWORD ||
-      '',
+    username: smsUsername,
+    password: smsPassword,
     loginUrl:
       process.env.SMS_API_LOGIN_URL || 'https://esms.dialog.lk/api/v2/user/login',
     sendUrl: process.env.SMS_API_SEND_URL || 'https://esms.dialog.lk/api/v2/sms',
     sourceAddress: process.env.SMS_SOURCE_ADDRESS || 'ITrustLD',
     paymentMethod: process.env.SMS_PAYMENT_METHOD || '0',
-    enabled:
-      process.env.SMS_ENABLED !== 'false' &&
-      Boolean(
-        (process.env.SMS_API_USERNAME ||
-          process.env.DIALOG_SMS_USERNAME ||
-          process.env.SMS_DIALOG_USERNAME) &&
-          (process.env.SMS_API_PASSWORD ||
-            process.env.DIALOG_SMS_PASSWORD ||
-            process.env.SMS_DIALOG_PASSWORD),
-      ),
+    enabled: isProduction
+      ? process.env.SMS_ENABLED !== 'false' && smsCredentialsReady
+      : process.env.SMS_ENABLED === 'true' && smsCredentialsReady,
     twilioAccountSid: process.env.TWILIO_ACCOUNT_SID || '',
     twilioAuthToken: process.env.TWILIO_AUTH_TOKEN || '',
     twilioFrom: process.env.TWILIO_FROM_NUMBER || process.env.TWILIO_FROM || '',

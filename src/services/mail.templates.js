@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { formatCustomerRejectReason } from '../constants/rejectReasons.js';
 import { env } from '../config/env.js';
 
 const EMAIL_ASSET_DIR = path.join(env.projectRoot, 'assets/email');
@@ -446,7 +447,7 @@ function depositDetailsTable({ firstName, deposit }) {
   if (status === 'Rejected' && (deposit.rejected_reason_message || deposit.rejected_reason)) {
     rows.push([
       'Rejected Reason',
-      [deposit.rejected_reason_message, deposit.rejected_reason].filter(Boolean).join(' — '),
+      formatCustomerRejectReason(deposit.rejected_reason, deposit.rejected_reason_message),
     ]);
   }
   return `
@@ -498,7 +499,7 @@ function withdrawalDetailsTable({ firstName, withdrawal }) {
   if (status === 'Rejected' && (withdrawal.rejected_reason_message || withdrawal.rejected_reason)) {
     rows.push([
       'Rejected Reason',
-      [withdrawal.rejected_reason_message, withdrawal.rejected_reason].filter(Boolean).join(' — '),
+      formatCustomerRejectReason(withdrawal.rejected_reason, withdrawal.rejected_reason_message),
     ]);
   }
   return `

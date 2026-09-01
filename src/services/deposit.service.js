@@ -4,11 +4,11 @@ import { batchScammerCheck, isScammerMatch } from './scammer.service.js';
 import { getUserPendingShowCount } from './systemUser.service.js';
 import { getUserStatusUpdateScope } from './statusUpdateScope.service.js';
 import {
-  currentColomboDaySqlRange,
   formatTimestampSl,
-  getBusinessDayStart,
+  laravelSimilarCountSinceSql,
   parseDateWindow,
 } from '../utils/slTime.js';
+import { formatCustomerRejectReason } from '../constants/rejectReasons.js';
 import { pushAmountKeywordClauses } from '../utils/searchAmount.js';
 
 const EXCLUDED_USER_IDS = [4, 16405];
@@ -101,7 +101,7 @@ async function batchSimilarDeposits(rows, status) {
     ).values(),
   ];
 
-  const today = currentColomboDaySqlRange();
+  const since = laravelSimilarCountSinceSql();
   const statusSql =
     status === 'Completed'
       ? `transaction_status = 'Completed'`
@@ -115,11 +115,10 @@ async function batchSimilarDeposits(rows, status) {
      FROM deposits
      WHERE payment_proof IS NOT NULL
        AND created_at >= ?
-       AND created_at < ?
        AND ${statusSql}
        AND (${pairClauses})
      GROUP BY topup_method_id, topup_account_id`,
-    [today.from, today.to, ...pairValues],
+    [since, ...pairValues],
   );
 
   const result = {};
@@ -171,7 +170,7 @@ function mapDepositRow(row, adminUsers, assignedUsers, similarCounts = {}) {
     proofFileName: row.payment_proof || null,
     rejectReason:
       row.transaction_status === 'Rejected'
-        ? [row.rejected_reason, row.rejected_reason_message].filter(Boolean).join(' — ') || null
+        ? formatCustomerRejectReason(row.rejected_reason, row.rejected_reason_message) || null
         : null,
     rejectReasonMessage:
       row.transaction_status === 'Rejected' ? row.rejected_reason_message || null : null,
@@ -209,6 +208,17 @@ function isDepositSearchActive(status, params) {
   const normalizedStatus = normalizeStatus(status);
   if (params.keyword?.trim()) return true;
   if (normalizedStatus === 'Pending') return false;
+  if (normalizedStatus === 'All') {
+    return Boolean(
+      params.transactionId ||
+        params.platformId ||
+        params.userAccount ||
+        (params.amount != null && params.amount !== '') ||
+        params.filter ||
+        params.fromDate ||
+        params.toDate,
+    );
+  }
 
   return Boolean(
     params.transactionId ||
@@ -325,7 +335,7 @@ async function listDepositsQuery({
     ];
     const keywordValues = [like, like, like, like];
 
-    if (normalizedStatus === 'Pending') {
+    if (normalizedStatus === 'Pending' || normalizedStatus === 'All') {
       keywordParts.push(
         `EXISTS (
           SELECT 1 FROM users exec
@@ -335,13 +345,23 @@ async function listDepositsQuery({
       keywordValues.push(like);
     }
 
-    keywordParts.push(
-      `EXISTS (
-        SELECT 1 FROM users admin_user
-        WHERE admin_user.id = ${adminColumn}
-          AND admin_user.name LIKE ? ESCAPE '\\\\'
-      )`,
-    );
+    if (normalizedStatus === 'All') {
+      keywordParts.push(
+        `EXISTS (
+          SELECT 1 FROM users admin_user
+          WHERE admin_user.id IN (d.pendings_by_admin, d.approved_by_admin, d.rejected_by_admin)
+            AND admin_user.name LIKE ? ESCAPE '\\\\'
+        )`,
+      );
+    } else {
+      keywordParts.push(
+        `EXISTS (
+          SELECT 1 FROM users admin_user
+          WHERE admin_user.id = ${adminColumn}
+            AND admin_user.name LIKE ? ESCAPE '\\\\'
+        )`,
+      );
+    }
     keywordValues.push(like);
 
     pushAmountKeywordClauses(
@@ -569,7 +589,7 @@ export async function listSimilarDepositsToday(auth, { depositId, transactionId 
     source.transaction_status === 'Completed'
       ? `d.transaction_status = 'Completed'`
       : `d.transaction_status != 'Rejected'`;
-  const today = currentColomboDaySqlRange();
+  const since = laravelSimilarCountSinceSql();
   const joins = `
     INNER JOIN users u ON d.user_id = u.id
     INNER JOIN topup_methods tm ON d.topup_method_id = tm.id
@@ -584,12 +604,11 @@ export async function listSimilarDepositsToday(auth, { depositId, transactionId 
      ${joins}
      WHERE d.payment_proof IS NOT NULL
        AND d.created_at >= ?
-       AND d.created_at < ?
        AND d.topup_method_id = ?
        AND d.topup_account_id = ?
        AND ${statusSql}
      ORDER BY d.created_at DESC`,
-    [today.from, today.to, source.topup_method_id, source.topup_account_id],
+    [since, source.topup_method_id, source.topup_account_id],
   );
 
   const adminIds = rows.flatMap((row) => [

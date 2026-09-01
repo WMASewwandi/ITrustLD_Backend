@@ -94,30 +94,64 @@ async function countPendingAuthorizationWithdrawals(userId, { isAdmin } = {}) {
   return Number(rows[0]?.total ?? 0);
 }
 
-async function countPendingLoyaltyOrders() {
-  const rows = await query(
-    `SELECT COUNT(*) AS total FROM point_withdrawals WHERE status = 'Pending'`,
-    [],
-  );
-  return Number(rows[0]?.total ?? 0);
+function isSystemAdminRole(roles = []) {
+  return roles.includes('super-admin') || roles.includes('sub-admin');
 }
 
-async function countPendingBonusClaims() {
-  const rows = await query(
-    `SELECT COUNT(*) AS total FROM loyalty_bonus_collects WHERE status = 'Pending'`,
-    [],
-  );
-  return Number(rows[0]?.total ?? 0);
+async function countPendingLoyaltyOrders(userId, roles) {
+  const conditions = ["status = 'Pending'"];
+  const values = [];
+  if (!isSystemAdminRole(roles) && userId) {
+    conditions.push('assigned_to = ?');
+    values.push(userId);
+  }
+  try {
+    const rows = await query(
+      `SELECT COUNT(*) AS total FROM point_withdrawals WHERE ${conditions.join(' AND ')}`,
+      values,
+    );
+    return Number(rows[0]?.total ?? 0);
+  } catch {
+    return 0;
+  }
 }
 
-async function countPendingVoucherClaims() {
-  const rows = await query(
-    `SELECT COUNT(*) AS total
-     FROM loyalty_client_bonus_vouchers
-     WHERE is_claimed = 0 AND rejection_reason IS NULL`,
-    [],
-  );
-  return Number(rows[0]?.total ?? 0);
+async function countPendingBonusClaims(userId, roles) {
+  const conditions = ["status = 'Pending'"];
+  const values = [];
+  if (!isSystemAdminRole(roles) && userId) {
+    conditions.push('assigned_to = ?');
+    values.push(userId);
+  }
+  try {
+    const rows = await query(
+      `SELECT COUNT(*) AS total FROM loyalty_bonus_collects WHERE ${conditions.join(' AND ')}`,
+      values,
+    );
+    return Number(rows[0]?.total ?? 0);
+  } catch {
+    return 0;
+  }
+}
+
+async function countPendingVoucherClaims(userId, roles) {
+  const conditions = ['is_claimed = 0', 'rejection_reason IS NULL'];
+  const values = [];
+  if (!isSystemAdminRole(roles) && userId) {
+    conditions.push('assigned_to = ?');
+    values.push(userId);
+  }
+  try {
+    const rows = await query(
+      `SELECT COUNT(*) AS total
+       FROM loyalty_client_bonus_vouchers
+       WHERE ${conditions.join(' AND ')}`,
+      values,
+    );
+    return Number(rows[0]?.total ?? 0);
+  } catch {
+    return 0;
+  }
 }
 
 export async function getAdminNavCounts(roles = [], userId = null) {
@@ -142,9 +176,9 @@ export async function getAdminNavCounts(roles = [], userId = null) {
     countPendingDeposits(userId, roles),
     countPendingWithdrawals(userId, withdrawalScope),
     countPendingAuthorizationWithdrawals(userId, withdrawalScope),
-    countPendingLoyaltyOrders(),
-    countPendingBonusClaims(),
-    countPendingVoucherClaims(),
+    countPendingLoyaltyOrders(userId, roles),
+    countPendingBonusClaims(userId, roles),
+    countPendingVoucherClaims(userId, roles),
     countPendingGiftClaims(),
     countHelpTickets(),
     countUnreadHelpTickets(),

@@ -6,11 +6,11 @@ import { batchScammerCheck, isScammerMatch } from './scammer.service.js';
 import { getUserPendingShowCount } from './systemUser.service.js';
 import { getUserStatusUpdateScope } from './statusUpdateScope.service.js';
 import {
-  currentColomboDaySqlRange,
   formatTimestampSl,
-  getBusinessDayStart,
+  laravelSimilarCountSinceSql,
   parseDateWindow,
 } from '../utils/slTime.js';
+import { formatCustomerRejectReason } from '../constants/rejectReasons.js';
 import { pushAmountKeywordClauses } from '../utils/searchAmount.js';
 import { normalizeToActivityIdentifier } from './role.service.js';
 
@@ -249,7 +249,7 @@ async function batchSimilarWithdrawals(rows, status) {
     ).values(),
   ];
 
-  const today = currentColomboDaySqlRange();
+  const since = laravelSimilarCountSinceSql();
   const statusSql =
     status === 'Completed'
       ? `transaction_status = 'Completed'`
@@ -263,11 +263,10 @@ async function batchSimilarWithdrawals(rows, status) {
      FROM withdrawals
      WHERE cashout_payment_proof IS NOT NULL
        AND created_at >= ?
-       AND created_at < ?
        AND ${statusSql}
        AND (${pairClauses})
      GROUP BY cashout_method_id, cashout_account_id`,
-    [today.from, today.to, ...pairValues],
+    [since, ...pairValues],
   );
 
   const result = {};
@@ -353,7 +352,7 @@ function mapWithdrawalRow(row, adminUsers, assignedUsers, similarCounts) {
     proofFileName: row.cashout_payment_proof || null,
     rejectReason:
       row.transaction_status === 'Rejected'
-        ? [row.rejected_reason, row.rejected_reason_message].filter(Boolean).join(' — ') || null
+        ? formatCustomerRejectReason(row.rejected_reason, row.rejected_reason_message) || null
         : null,
     rejectReasonMessage:
       row.transaction_status === 'Rejected' ? row.rejected_reason_message || null : null,
@@ -391,6 +390,17 @@ function isWithdrawalSearchActive(status, params) {
   if (params.keyword?.trim()) return true;
   if (normalizedStatus === 'Pending') return false;
   if (normalizedStatus === 'Pending Authorization') return false;
+  if (normalizedStatus === 'All') {
+    return Boolean(
+      params.transactionId ||
+        params.platformId ||
+        params.userAccount ||
+        (params.amount != null && params.amount !== '') ||
+        params.filter ||
+        params.fromDate ||
+        params.toDate,
+    );
+  }
 
   return Boolean(
     params.transactionId ||
@@ -507,7 +517,11 @@ async function listWithdrawalsQuery({
     ];
     const keywordValues = [like, like, like, like];
 
-    if (normalizedStatus === 'Pending' || normalizedStatus === 'Pending Authorization') {
+    if (
+      normalizedStatus === 'Pending' ||
+      normalizedStatus === 'Pending Authorization' ||
+      normalizedStatus === 'All'
+    ) {
       keywordParts.push(
         `EXISTS (
           SELECT 1 FROM users exec
@@ -517,13 +531,23 @@ async function listWithdrawalsQuery({
       keywordValues.push(like);
     }
 
-    keywordParts.push(
-      `EXISTS (
-        SELECT 1 FROM users admin_user
-        WHERE admin_user.id = ${adminColumn}
-          AND admin_user.name LIKE ? ESCAPE '\\\\'
-      )`,
-    );
+    if (normalizedStatus === 'All') {
+      keywordParts.push(
+        `EXISTS (
+          SELECT 1 FROM users admin_user
+          WHERE admin_user.id IN (w.pendings_by_admin, w.approved_by_admin, w.rejected_by_admin)
+            AND admin_user.name LIKE ? ESCAPE '\\\\'
+        )`,
+      );
+    } else {
+      keywordParts.push(
+        `EXISTS (
+          SELECT 1 FROM users admin_user
+          WHERE admin_user.id = ${adminColumn}
+            AND admin_user.name LIKE ? ESCAPE '\\\\'
+        )`,
+      );
+    }
     keywordValues.push(like);
 
     pushAmountKeywordClauses(
@@ -780,7 +804,7 @@ export async function listSimilarWithdrawalsToday(auth, { withdrawalId, transact
     source.transaction_status === 'Completed'
       ? `w.transaction_status = 'Completed'`
       : `w.transaction_status != 'Rejected'`;
-  const today = currentColomboDaySqlRange();
+  const since = laravelSimilarCountSinceSql();
 
   const rows = await query(
     `SELECT w.*, u.name AS user_name, cm.cashout_method_name, po.payment_option_name AS receiving_payment_option_name,
@@ -789,12 +813,11 @@ export async function listSimilarWithdrawalsToday(auth, { withdrawalId, transact
      ${WITHDRAWAL_LIST_JOINS}
      WHERE w.cashout_payment_proof IS NOT NULL
        AND w.created_at >= ?
-       AND w.created_at < ?
        AND w.cashout_method_id = ?
        AND w.cashout_account_id = ?
        AND ${statusSql}
      ORDER BY w.created_at DESC`,
-    [today.from, today.to, source.cashout_method_id, source.cashout_account_id],
+    [since, source.cashout_method_id, source.cashout_account_id],
   );
 
   const adminIds = rows.flatMap((row) => [

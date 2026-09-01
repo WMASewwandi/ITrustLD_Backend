@@ -1,3 +1,4 @@
+import { env } from '../config/env.js';
 import { sendMail } from './mail.service.js';
 import { isInternationalSmsConfigured, parseLkMobileNumber, sendDialogSms, sendInternationalSms } from './sms.service.js';
 import { resolveEmailContent, resolveSmsContent } from './messageTemplateRuntime.service.js';
@@ -112,6 +113,10 @@ export async function queueSmsMessage({ message, msisdn, userId, smsType }) {
 }
 
 async function sendSms({ message, msisdn, userId, smsType }) {
+  if (!env.sms.enabled) {
+    console.info('[sms:skipped]', { userId, smsType, reason: 'local SMS_* is commented or not enabled' });
+    return { ok: true, skipped: true };
+  }
   if (!msisdn) {
     throw new Error('Mobile number is required.');
   }

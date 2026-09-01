@@ -464,6 +464,34 @@ export async function getPendingCountForRole(userId, roles, roleName) {
     return Number(rows[0]?.total) || 0;
   }
 
+  if (roleName === 'loyalty-order') {
+    const rows = await query(
+      `SELECT COUNT(*) AS total FROM point_withdrawals WHERE assigned_to = ? AND status = 'Pending'`,
+      [userId],
+    );
+    return Number(rows[0]?.total) || 0;
+  }
+
+  if (roleName === 'loyalty-bonus') {
+    const rows = await query(
+      `SELECT COUNT(*) AS total FROM loyalty_bonus_collects WHERE assigned_to = ? AND status = 'Pending'`,
+      [userId],
+    );
+    return Number(rows[0]?.total) || 0;
+  }
+
+  if (roleName === 'loyalty-voucher') {
+    const rows = await query(
+      `SELECT COUNT(*) AS total
+       FROM loyalty_client_bonus_vouchers
+       WHERE assigned_to = ?
+         AND is_claimed = 0
+         AND (rejection_reason IS NULL OR rejection_reason = '')`,
+      [userId],
+    );
+    return Number(rows[0]?.total) || 0;
+  }
+
   const rows = await query(
     `SELECT COUNT(*) AS total
      FROM withdrawals
@@ -531,6 +559,60 @@ export async function findExecutiveAmongCandidates(roleName, executiveIds) {
   return null;
 }
 
+async function getUsersByAnyPermission(permissionNames) {
+  const names = [...new Set((permissionNames || []).map((name) => String(name || '').trim()).filter(Boolean))];
+  const lists = await Promise.all(names.map((name) => getUsersByPermission(name)));
+  return [...new Map(lists.flat().map((user) => [user.id, user])).values()];
+}
+
+export async function getCandidateUsersByPermissions(permissionNames) {
+  await initializeShiftIfNeeded();
+  const activeShift = await getActiveShiftForDate();
+  const allWithPermission = await getUsersByAnyPermission(permissionNames);
+  const eligible = await withoutSystemAdmins(allWithPermission);
+  if (!eligible.length) return [];
+
+  let shiftFiltered = eligible.filter((user) => user.shift === activeShift);
+  if (!shiftFiltered.length) {
+    shiftFiltered = eligible;
+  }
+
+  const now = new Date();
+  let timeFiltered = shiftFiltered.filter((user) => isUserInShiftTime(user, activeShift, now));
+  if (!timeFiltered.length) {
+    timeFiltered = shiftFiltered;
+  }
+
+  const onlineUsers = timeFiltered.filter((user) => Boolean(user.is_online));
+  return onlineUsers.length ? onlineUsers : timeFiltered;
+}
+
+export async function findBestUserWithPermissions(permissionNames, pendingKind) {
+  const candidates = await getCandidateUsersByPermissions(permissionNames);
+  if (!candidates.length) return null;
+
+  const scored = [];
+  for (const user of candidates) {
+    const roles = await getUserRoles(user.id);
+    const pendingCount = await getPendingCountForRole(user.id, roles, pendingKind);
+    const showCount = await getUserPendingShowCount(user.id);
+    const atCapacity = showCount != null && pendingCount >= showCount;
+    scored.push({ user, pendingCount, atCapacity });
+  }
+
+  scored.sort((a, b) => {
+    if (a.atCapacity !== b.atCapacity) {
+      return a.atCapacity ? 1 : -1;
+    }
+    if (a.pendingCount !== b.pendingCount) {
+      return a.pendingCount - b.pendingCount;
+    }
+    return compareLastAssignedAt(a.user, b.user);
+  });
+
+  return scored[0]?.user || null;
+}
+
 export async function findBestExecutive(roleName) {
   const candidates = await getCandidateExecutives(roleName);
   if (!candidates.length) {
@@ -575,6 +657,58 @@ export async function buildExecutivesForAssignment(roleName, { includeSubAdmin =
   for (const user of uniqueUsers) {
     const roles = await getUserRoles(user.id);
     const pendingCount = await getPendingCountForRole(user.id, roles, roleName);
+    const isInActiveShift = user.shift === activeShift;
+    const isInShiftTime = isUserInShiftTime(user, activeShift, now);
+
+    executives.push({
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: roleDisplayName(roles),
+      shift: user.shift,
+      shift_start_time: user.shift_start_time,
+      shift_end_time: user.shift_end_time,
+      shift_time_label: formatShiftTimeLabel(user),
+      is_online: Boolean(user.is_online),
+      is_in_active_shift: isInActiveShift,
+      is_in_shift_time: isInShiftTime,
+      pending_count: pendingCount,
+      sort_key: [
+        !isInActiveShift,
+        !isInShiftTime,
+        !user.is_online,
+        pendingCount,
+        user.id,
+      ],
+    });
+  }
+
+  executives.sort((a, b) => {
+    for (let i = 0; i < a.sort_key.length; i += 1) {
+      if (a.sort_key[i] !== b.sort_key[i]) {
+        return a.sort_key[i] < b.sort_key[i] ? -1 : 1;
+      }
+    }
+    return 0;
+  });
+
+  return {
+    active_shift: activeShift,
+    executives: executives.map(({ sort_key: _sort, ...rest }) => rest),
+  };
+}
+
+export async function buildUsersForAssignmentByPermissions(permissionNames, pendingKind) {
+  await initializeShiftIfNeeded();
+  const activeShift = await getActiveShiftForDate();
+  const now = new Date();
+  const users = await withoutSystemAdmins(await getUsersByAnyPermission(permissionNames));
+  const uniqueUsers = [...new Map(users.map((user) => [user.id, user])).values()];
+
+  const executives = [];
+  for (const user of uniqueUsers) {
+    const roles = await getUserRoles(user.id);
+    const pendingCount = await getPendingCountForRole(user.id, roles, pendingKind);
     const isInActiveShift = user.shift === activeShift;
     const isInShiftTime = isUserInShiftTime(user, activeShift, now);
 

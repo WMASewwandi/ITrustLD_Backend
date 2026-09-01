@@ -190,6 +190,14 @@ export function currentColomboDaySqlRange(date = new Date()) {
   };
 }
 
+/**
+ * Laravel similar/duplicate window: `now()->startOfDay()->addMinutes(10)`
+ * with APP_TIMEZONE=UTC. Same SQL literal Eloquent sends; no end bound.
+ */
+export function laravelSimilarCountSinceSql(date = new Date()) {
+  return `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())} 00:10:00`;
+}
+
 export function startOfColomboWeek(date = new Date()) {
   const parts = getColomboDateParts(date);
   const anchor = colomboLocalToDate({ year: parts.year, month: parts.month, day: parts.day });

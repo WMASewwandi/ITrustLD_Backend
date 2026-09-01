@@ -54,6 +54,10 @@ import {
   updateBonusClaimStatus,
   updateLoyaltyOrderStatus,
 } from '../../services/userLoyalty.service.js';
+import {
+  assignLoyaltyRecords,
+  listLoyaltyAssignees,
+} from '../../services/loyaltyAssignment.service.js';
 
 export const adminLoyaltyRouter = Router();
 
@@ -64,8 +68,38 @@ adminLoyaltyRouter.get(
   requirePermission(LOYALTY_ORDERS_READ),
   async (req, res, next) => {
     try {
-      const data = await listLoyaltyOrdersForAdmin(req.query ?? {});
+      const data = await listLoyaltyOrdersForAdmin(req.query ?? {}, req.auth);
       res.json({ ok: true, ...data });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminLoyaltyRouter.get(
+  '/orders/executives',
+  requirePermission(LOYALTY_ORDERS_READ),
+  async (req, res, next) => {
+    try {
+      const data = await listLoyaltyAssignees('order');
+      res.json(data);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminLoyaltyRouter.post(
+  '/orders/assign',
+  requirePermission(LOYALTY_ORDERS_UPDATE),
+  async (req, res, next) => {
+    try {
+      const body = req.body ?? {};
+      const data = await assignLoyaltyRecords(req.auth, 'order', {
+        ids: body.order_ids || body.withdrawal_ids || body.ids,
+        executiveId: body.executive_id ?? body.executiveId ?? null,
+      });
+      res.json(data);
     } catch (error) {
       next(error);
     }
@@ -90,8 +124,38 @@ adminLoyaltyRouter.get(
   requirePermission(LOYALTY_BONUS_READ),
   async (req, res, next) => {
     try {
-      const data = await listBonusClaimsForAdmin(req.query ?? {});
+      const data = await listBonusClaimsForAdmin(req.query ?? {}, req.auth);
       res.json({ ok: true, ...data });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminLoyaltyRouter.get(
+  '/bonus-claims/executives',
+  requirePermission(LOYALTY_BONUS_READ),
+  async (req, res, next) => {
+    try {
+      const data = await listLoyaltyAssignees('bonus');
+      res.json(data);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminLoyaltyRouter.post(
+  '/bonus-claims/assign',
+  requirePermission(LOYALTY_BONUS_UPDATE),
+  async (req, res, next) => {
+    try {
+      const body = req.body ?? {};
+      const data = await assignLoyaltyRecords(req.auth, 'bonus', {
+        ids: body.bonus_ids || body.claim_ids || body.ids,
+        executiveId: body.executive_id ?? body.executiveId ?? null,
+      });
+      res.json(data);
     } catch (error) {
       next(error);
     }
@@ -116,8 +180,38 @@ adminLoyaltyRouter.get(
   requirePermission(LOYALTY_VOUCHER_READ),
   async (req, res, next) => {
     try {
-      const data = await listVoucherClaimsForAdmin(req.query ?? {});
+      const data = await listVoucherClaimsForAdmin(req.query ?? {}, req.auth);
       res.json({ ok: true, ...data });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminLoyaltyRouter.get(
+  '/voucher-claims/executives',
+  requirePermission(LOYALTY_VOUCHER_READ),
+  async (req, res, next) => {
+    try {
+      const data = await listLoyaltyAssignees('voucher');
+      res.json(data);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminLoyaltyRouter.post(
+  '/voucher-claims/assign',
+  requirePermission(LOYALTY_VOUCHER_UPDATE),
+  async (req, res, next) => {
+    try {
+      const body = req.body ?? {};
+      const data = await assignLoyaltyRecords(req.auth, 'voucher', {
+        ids: body.voucher_ids || body.ids,
+        executiveId: body.executive_id ?? body.executiveId ?? null,
+      });
+      res.json(data);
     } catch (error) {
       next(error);
     }
