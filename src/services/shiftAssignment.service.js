@@ -466,7 +466,11 @@ export async function getPendingCountForRole(userId, roles, roleName) {
 
   if (roleName === 'loyalty-order') {
     const rows = await query(
-      `SELECT COUNT(*) AS total FROM point_withdrawals WHERE assigned_to = ? AND status = 'Pending'`,
+      `SELECT COUNT(*) AS total
+       FROM point_withdrawals
+       WHERE assigned_to = ?
+         AND status = 'Pending'
+         AND UPPER(TRIM(COALESCE(payment_option, ''))) <> 'BANK TRANSFER'`,
       [userId],
     );
     return Number(rows[0]?.total) || 0;
@@ -493,12 +497,20 @@ export async function getPendingCountForRole(userId, roles, roleName) {
   }
 
   const rows = await query(
-    `SELECT COUNT(*) AS total
-     FROM withdrawals
-     WHERE assigned_to = ?
-       AND transaction_status = 'Pending'
-       AND cashout_payment_proof IS NOT NULL`,
-    [userId],
+    `SELECT
+       (SELECT COUNT(*)
+        FROM withdrawals
+        WHERE assigned_to = ?
+          AND transaction_status = 'Pending'
+          AND cashout_payment_proof IS NOT NULL)
+       +
+       (SELECT COUNT(*)
+        FROM point_withdrawals
+        WHERE assigned_to = ?
+          AND status = 'Pending'
+          AND UPPER(TRIM(payment_option)) = 'BANK TRANSFER')
+       AS total`,
+    [userId, userId],
   );
   return Number(rows[0]?.total) || 0;
 }

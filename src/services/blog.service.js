@@ -1,4 +1,5 @@
 import { query } from '../config/database.js';
+import { formatTimestampSl, formatYmdColombo, parseDbDateTime } from '../utils/slTime.js';
 import {
   resolveBlogBannerPublicUrl,
   storeBlogBanner,
@@ -13,10 +14,7 @@ function validationError(message, status = 422) {
 
 function formatTimestamp(value) {
   if (!value) return '';
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  return formatTimestampSl(value) || String(value);
 }
 
 export function mapPublishedState(isPublished) {
@@ -49,10 +47,9 @@ async function withBannerUrl(blog) {
 
 function formatDashboardPostDate(value) {
   if (!value) return '';
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value).slice(0, 10);
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  const date = parseDbDateTime(value);
+  if (!date) return String(value).slice(0, 10);
+  return formatYmdColombo(date);
 }
 
 async function mapPublishedBlogPostForUser(row) {

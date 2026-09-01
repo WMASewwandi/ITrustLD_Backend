@@ -1,5 +1,5 @@
 import { query } from '../config/database.js';
-import { formatTimestampSl, formatYmdColombo, parseDbDateTime } from '../utils/slTime.js';
+import { formatTimestampSl, formatYmdColombo, nowSqlDateTime, parseDbDateTime } from '../utils/slTime.js';
 import { ensureLoyaltyGiftSchema } from './loyaltyGiftSchema.service.js';
 import { scheduleGiftNotify } from './loyaltyNotify.service.js';
 import {
@@ -444,11 +444,12 @@ export async function approveGiftClaim(adminUserId, payload = {}) {
   if (!claim) throw validationError('Gift claim not found.', 404);
   if (claim.status !== 'Pending') throw validationError('Only pending claims can be approved.');
 
+  const processedAtSl = nowSqlDateTime();
   await query(
     `UPDATE loyalty_gift_claims
-     SET status = 'Approved', processed_by = ?, processed_at = NOW(), updated_at = NOW()
+     SET status = 'Approved', processed_by = ?, processed_at = ?, updated_at = ?
      WHERE id = ?`,
-    [adminUserId, claimId],
+    [adminUserId, processedAtSl, processedAtSl, claimId],
   );
 
   await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.VOUCHER_CLAIM_APPROVE);
@@ -470,11 +471,12 @@ export async function rejectGiftClaim(adminUserId, payload = {}) {
   if (!claim) throw validationError('Gift claim not found.', 404);
   if (claim.status !== 'Pending') throw validationError('Only pending claims can be rejected.');
 
+  const processedAtSl = nowSqlDateTime();
   await query(
     `UPDATE loyalty_gift_claims
-     SET status = 'Rejected', rejection_reason = ?, processed_by = ?, processed_at = NOW(), updated_at = NOW()
+     SET status = 'Rejected', rejection_reason = ?, processed_by = ?, processed_at = ?, updated_at = ?
      WHERE id = ?`,
-    [reason, adminUserId, claimId],
+    [reason, adminUserId, processedAtSl, processedAtSl, claimId],
   );
 
   await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.VOUCHER_CLAIM_REJECT);
@@ -493,11 +495,12 @@ export async function markGiftClaimDelivered(adminUserId, payload = {}) {
   if (!claim) throw validationError('Gift claim not found.', 404);
   if (claim.status !== 'Approved') throw validationError('Only approved claims can be marked delivered.');
 
+  const processedAtSl = nowSqlDateTime();
   await query(
     `UPDATE loyalty_gift_claims
-     SET status = 'Delivered', processed_by = ?, processed_at = NOW(), updated_at = NOW()
+     SET status = 'Delivered', processed_by = ?, processed_at = ?, updated_at = ?
      WHERE id = ?`,
-    [adminUserId, claimId],
+    [adminUserId, processedAtSl, processedAtSl, claimId],
   );
 
   return { ok: true };

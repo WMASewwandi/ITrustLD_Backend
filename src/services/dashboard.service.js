@@ -75,7 +75,11 @@ async function getRecentTransactions(userId, limit = 5) {
   ]);
 
   return [...deposits.map(mapDepositRow), ...withdrawals.map(mapWithdrawalRow)]
-    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    .sort((a, b) => {
+      const bMs = parseDbDateTime(b.created_at)?.getTime() || 0;
+      const aMs = parseDbDateTime(a.created_at)?.getTime() || 0;
+      return bMs - aMs;
+    })
     .slice(0, limit)
     .map(({ created_at: _createdAt, ...tx }) => tx);
 }

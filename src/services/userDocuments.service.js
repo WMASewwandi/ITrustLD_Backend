@@ -2,6 +2,7 @@ import {
   ADDRESS_TYPE_FROM_API,
   IDENTITY_TYPE_FROM_API,
 } from '../shared/verificationDocumentTypes.js';
+import { formatYmdColombo, parseDbDateTime } from '../utils/slTime.js';
 import { getVerificationStep } from './verification.service.js';
 import {
   deriveBackDocumentFilename,
@@ -10,12 +11,9 @@ import {
 
 function formatYmd(value) {
   if (!value) return '—';
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return '—';
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
+  const date = parseDbDateTime(value);
+  if (!date) return '—';
+  return formatYmdColombo(date);
 }
 
 export function mapVerificationStatus(verification, documentStatus) {

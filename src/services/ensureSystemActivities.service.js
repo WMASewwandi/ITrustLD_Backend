@@ -4,6 +4,7 @@ import {
   SYSTEM_ACTIVITIES,
   SYSTEM_ACTIVITY_CATEGORIES,
 } from '../constants/systemActivityCatalog.js';
+import { LOYALTY_ORDERS_READ, LOYALTY_ORDERS_UPDATE } from '../constants/loyaltyPermissions.js';
 import { nowSqlDateTime } from '../utils/slTime.js';
 import { syncRolePermissions, normalizeToActivityIdentifier } from './role.service.js';
 
@@ -98,6 +99,7 @@ export async function ensureSystemActivitiesCatalog() {
   await ensureBuiltinRolePermissions();
   await grantAuthorizePermissionToExistingAuthorizerRole();
   await grantMobileVerificationPendingToExistingAccountReaders();
+  await grantLoyaltyOrderAccessToWithdrawalExecutives();
 
   syncReady = true;
 }
@@ -146,6 +148,29 @@ async function grantMobileVerificationPendingToExistingAccountReaders() {
     if (current.includes('read_mobile_verification_pending')) continue;
     await syncRolePermissions(role.name, [...current, 'read_mobile_verification_pending']);
   }
+}
+
+async function grantLoyaltyOrderAccessToWithdrawalExecutives() {
+  const roleRows = await query(
+    `SELECT id FROM roles WHERE name = 'withdrawal-executive' AND guard_name = ? LIMIT 1`,
+    [GUARD_NAME],
+  );
+  if (!roleRows[0]) return;
+
+  const currentRows = await query(
+    `SELECT p.name
+     FROM permissions p
+     INNER JOIN role_has_permissions rhp ON rhp.permission_id = p.id
+     WHERE rhp.role_id = ?`,
+    [roleRows[0].id],
+  );
+  const current = currentRows.map((row) => normalizeToActivityIdentifier(row.name));
+  const missing = [LOYALTY_ORDERS_READ, LOYALTY_ORDERS_UPDATE].filter(
+    (permission) => !current.includes(permission),
+  );
+  if (!missing.length) return;
+
+  await syncRolePermissions('withdrawal-executive', [...current, ...missing]);
 }
 
 async function ensureBuiltinRolePermissions() {

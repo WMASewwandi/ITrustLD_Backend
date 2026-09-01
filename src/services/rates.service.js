@@ -1,5 +1,6 @@
 import { query } from '../config/database.js';
 import { env } from '../config/env.js';
+import { formatTimestampSl, formatYmdColombo, parseDbDateTime } from '../utils/slTime.js';
 import { sendEmailAndSms } from './notification.service.js';
 import { rateChangeEmailHtml } from './mail.templates.js';
 import { fullyVerifiedAccountSql } from './accountHolder.service.js';
@@ -28,20 +29,16 @@ function parseRate(value, label) {
 
 function formatTimestamp(value) {
   if (!value) return '';
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  return formatTimestampSl(value) || String(value);
 }
 
 function formatDateOnly(value) {
   if (!value) return '';
   const raw = String(value);
   if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return raw.slice(0, 10);
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  const date = parseDbDateTime(value);
+  if (!date) return raw.slice(0, 10);
+  return formatYmdColombo(date);
 }
 
 async function resolvePaymentOptionByName(methodName) {
