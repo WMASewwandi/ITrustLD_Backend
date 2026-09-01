@@ -6,6 +6,15 @@ import {
   isAccountBanned,
   needsVerification,
 } from './accountHolder.service.js';
+import {
+  autoAssignLoyaltyBonus,
+  autoAssignLoyaltyOrder,
+  ensureLoyaltyAssignedToColumn,
+  isLoyaltySystemAdmin,
+  loyaltyAssignedToUserId,
+  refillLoyaltyBonusPending,
+  refillLoyaltyOrderPending,
+} from './loyaltyAssignment.service.js';
 import { sendEmailAndSms } from './notification.service.js';
 import {
   loyaltyRedemptionApprovedEmailHtml,
@@ -391,6 +400,81 @@ async function accountExistsForUser(userId, accountType, accountId) {
   return Boolean(rows[0]);
 }
 
+const PLATFORM_REUSE_DAYS = 30;
+
+const ACCOUNT_PLATFORM_LOOKUPS = [
+  { option: 'XM', table: 'user_xm_accounts', column: 'xm_account_id' },
+  { option: 'SKRILL', table: 'user_skrill_accounts', column: 'skrill_email' },
+  { option: 'NETELLER', table: 'user_neteller_accounts', column: 'neteller_email' },
+  { option: 'PERFECT MONEY', table: 'user_perfect_money_accounts', column: 'pm_account_id' },
+  { option: 'BANK TRANSFER', table: 'user_bank_accounts', column: 'account_number' },
+  { option: 'CARD PAYMENT', table: 'user_card_payment_accounts', column: 'bank_account_number' },
+  { option: 'CRYPTO', table: 'user_crypto_accounts', column: 'crypto_account_id' },
+];
+
+async function resolveAccountPlatformId(userId, paymentOption, accountId) {
+  const display = await loadAccountDisplay(userId, paymentOption, accountId);
+  const platformId = String(display.platformId || '').trim();
+  if (!platformId || platformId === '—') return null;
+  return platformId;
+}
+
+async function findRecentLoyaltyRequestByPlatformId(requestTable, platformId) {
+  const unions = ACCOUNT_PLATFORM_LOOKUPS.map(
+    (lookup) => `
+      SELECT r.id
+      FROM ${requestTable} r
+      INNER JOIN ${lookup.table} a ON a.id = r.account_id AND a.user_id = r.user_id
+      WHERE UPPER(TRIM(r.payment_option)) = ?
+        AND a.${lookup.column} = ?
+        AND r.status != 'Rejected'
+        AND r.created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+    `,
+  );
+  const values = ACCOUNT_PLATFORM_LOOKUPS.flatMap((lookup) => [
+    lookup.option,
+    platformId,
+    PLATFORM_REUSE_DAYS,
+  ]);
+  const rows = await query(`${unions.join(' UNION ALL ')} LIMIT 1`, values);
+  return rows[0] || null;
+}
+
+async function assertPlatformIdUnusedForLoyaltyRequest({
+  userId,
+  accountType,
+  accountId,
+  table,
+  label,
+}) {
+  const platformId = await resolveAccountPlatformId(userId, accountType, accountId);
+  if (platformId) {
+    const used = await findRecentLoyaltyRequestByPlatformId(table, platformId);
+    if (used) {
+      throw validationError(
+        `This Platform ID was already used for a ${label} in the last 30 days. Please use a different Platform ID.`,
+      );
+    }
+    return;
+  }
+
+  const rows = await query(
+    `SELECT id
+     FROM ${table}
+     WHERE account_id = ?
+       AND UPPER(TRIM(payment_option)) = ?
+       AND status != 'Rejected'
+       AND created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+     LIMIT 1`,
+    [accountId, accountType, PLATFORM_REUSE_DAYS],
+  );
+  if (rows[0]) {
+    throw validationError(
+      `This Platform ID was already used for a ${label} in the last 30 days. Please use a different Platform ID.`,
+    );
+  }
+}
+
 function allocateAffiliateCode(length = 8) {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
   let code = '';
@@ -599,6 +683,14 @@ export async function createUserLoyaltyWithdrawal(userId, payload = {}) {
     throw validationError('Selected receiving account was not found.');
   }
 
+  await assertPlatformIdUnusedForLoyaltyRequest({
+    userId,
+    accountType,
+    accountId,
+    table: 'point_withdrawals',
+    label: 'loyalty order',
+  });
+
   const rate = await getLatestPointWithdrawalRate(accountType);
   const isPartner = accountHolder.is_patner === 'YES';
   const usdPerBlock = isPartner ? PARTNER_USD : STANDARD_USD;
@@ -631,6 +723,12 @@ export async function createUserLoyaltyWithdrawal(userId, payload = {}) {
   }
 
   const updatedTotals = await getPointTotals(userId);
+
+  try {
+    await autoAssignLoyaltyOrder({ id: withdrawalId, transaction_id: transactionId });
+  } catch (error) {
+    console.error('[loyalty-order:auto-assign]', error.message);
+  }
 
   return {
     ok: true,
@@ -846,6 +944,12 @@ async function loadAccountDisplay(userId, paymentOption, accountId) {
   };
 }
 
+function resolveAssignedName(row, users = {}) {
+  const assignedId = Number(row.assigned_to) || 0;
+  if (!assignedId) return '—';
+  return users[assignedId] || String(assignedId);
+}
+
 function mapAdminWithdrawalRow(row, accountDisplay, adminUsers = {}) {
   const points = Number(row.point_withdrawal_amount || 0);
   const cashout = Number(row.cashout_amount || 0);
@@ -870,11 +974,14 @@ function mapAdminWithdrawalRow(row, accountDisplay, adminUsers = {}) {
     status: mapUserStatus(row.status),
     raw_status: row.status,
     admin: resolveLoyaltyAdminName(row, adminUsers),
+    assigned: resolveAssignedName(row, adminUsers),
+    assignedToId: row.assigned_to || null,
     rejectReason: row.rejection_reason || null,
   };
 }
 
-export async function listLoyaltyOrdersForAdmin(params = {}) {
+export async function listLoyaltyOrdersForAdmin(params = {}, auth = null) {
+  await ensureLoyaltyAssignedToColumn('point_withdrawals');
   const page = Math.max(1, Number(params.page) || 1);
   const perPage = Math.min(50, Math.max(1, Number(params.per_page) || 20));
   const offset = (page - 1) * perPage;
@@ -897,6 +1004,13 @@ export async function listLoyaltyOrdersForAdmin(params = {}) {
   if (status !== 'All') {
     sql += ` AND pw.status = ?`;
     values.push(status);
+  }
+
+  const assignedToUserId = loyaltyAssignedToUserId(auth, mapUserStatus(status));
+  if (assignedToUserId) {
+    await ensureLoyaltyAssignedToColumn('point_withdrawals');
+    sql += ` AND pw.assigned_to = ?`;
+    values.push(assignedToUserId);
   }
 
   if (fromDate) {
@@ -923,7 +1037,12 @@ export async function listLoyaltyOrdersForAdmin(params = {}) {
   const countRows = await query(`SELECT COUNT(*) AS total FROM (${sql}) AS loyalty_orders`, values);
   const total = Number(countRows[0]?.total || 0);
 
-  const rows = await query(`${sql} ORDER BY pw.created_at DESC LIMIT ? OFFSET ?`, [
+  const orderBy =
+    status === 'Pending'
+      ? 'pw.updated_at ASC, pw.id ASC'
+      : 'pw.updated_at DESC, pw.id DESC';
+
+  const rows = await query(`${sql} ORDER BY ${orderBy} LIMIT ? OFFSET ?`, [
     ...values,
     perPage,
     offset,
@@ -933,6 +1052,7 @@ export async function listLoyaltyOrdersForAdmin(params = {}) {
     row.pendings_by_admin,
     row.approved_by_admin,
     row.rejected_by_admin,
+    row.assigned_to,
   ]);
   const adminUsers = await fetchAdminNames(adminIds);
 
@@ -951,6 +1071,7 @@ export async function listLoyaltyOrdersForAdmin(params = {}) {
       total_pages: Math.max(1, Math.ceil(total / perPage)),
     },
     starter_transaction_id: STARTER_TX_ID,
+    isAdmin: isLoyaltySystemAdmin(auth?.roles || []),
   };
 }
 
@@ -1010,6 +1131,14 @@ export async function updateLoyaltyOrderStatus(adminUserId, payload = {}) {
       [nextStatus, adminUserId, rejectionReason, withdrawalId],
     );
     await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.LOYALTY_ORDER_REJECT);
+  }
+
+  if (nextStatus !== 'Pending') {
+    try {
+      await refillLoyaltyOrderPending(withdrawal.assigned_to || adminUserId);
+    } catch (error) {
+      console.error('[loyalty-order:refill]', error.message);
+    }
   }
 
   return {
@@ -1106,11 +1235,14 @@ function mapAdminBonusRow(row, accountDisplay, adminUsers) {
     status: mapBonusUserStatus(row.status),
     raw_status: row.status,
     admin: resolveLoyaltyAdminName(row, adminUsers),
+    assigned: resolveAssignedName(row, adminUsers),
+    assignedToId: row.assigned_to || null,
     rejectReason: row.rejection_reason || null,
   };
 }
 
-export async function listBonusClaimsForAdmin(params = {}) {
+export async function listBonusClaimsForAdmin(params = {}, auth = null) {
+  await ensureLoyaltyAssignedToColumn('loyalty_bonus_collects');
   const page = Math.max(1, Number(params.page) || 1);
   const perPage = Math.min(50, Math.max(1, Number(params.per_page) || 20));
   const offset = (page - 1) * perPage;
@@ -1133,6 +1265,13 @@ export async function listBonusClaimsForAdmin(params = {}) {
   if (status !== 'All') {
     sql += ` AND lbc.status = ?`;
     values.push(status);
+  }
+
+  const assignedToUserId = loyaltyAssignedToUserId(auth, mapBonusUserStatus(status));
+  if (assignedToUserId) {
+    await ensureLoyaltyAssignedToColumn('loyalty_bonus_collects');
+    sql += ` AND lbc.assigned_to = ?`;
+    values.push(assignedToUserId);
   }
 
   if (fromDate) {
@@ -1160,7 +1299,12 @@ export async function listBonusClaimsForAdmin(params = {}) {
   const countRows = await query(`SELECT COUNT(*) AS total FROM (${sql}) AS bonus_claims`, values);
   const total = Number(countRows[0]?.total || 0);
 
-  const rows = await query(`${sql} ORDER BY lbc.created_at DESC LIMIT ? OFFSET ?`, [
+  const orderBy =
+    status === 'Pending'
+      ? 'lbc.updated_at ASC, lbc.id ASC'
+      : 'lbc.updated_at DESC, lbc.id DESC';
+
+  const rows = await query(`${sql} ORDER BY ${orderBy} LIMIT ? OFFSET ?`, [
     ...values,
     perPage,
     offset,
@@ -1170,6 +1314,7 @@ export async function listBonusClaimsForAdmin(params = {}) {
     row.pendings_by_admin,
     row.approved_by_admin,
     row.rejected_by_admin,
+    row.assigned_to,
   ]);
   const adminUsers = await fetchAdminNames(adminIds);
 
@@ -1188,6 +1333,7 @@ export async function listBonusClaimsForAdmin(params = {}) {
       total_pages: Math.max(1, Math.ceil(total / perPage)),
     },
     starter_transaction_id: STARTER_BONUS_TX_ID,
+    isAdmin: isLoyaltySystemAdmin(auth?.roles || []),
   };
 }
 
@@ -1299,6 +1445,14 @@ export async function updateBonusClaimStatus(adminUserId, payload = {}) {
     await notifyBonusClaimStatus(bonusClaim.user_id, false, rejectionReason);
   }
 
+  if (nextStatus !== 'Pending') {
+    try {
+      await refillLoyaltyBonusPending(bonusClaim.assigned_to || adminUserId);
+    } catch (error) {
+      console.error('[loyalty-bonus:refill]', error.message);
+    }
+  }
+
   return {
     ok: true,
     error: false,
@@ -1347,19 +1501,12 @@ async function getActiveLoyaltyBonus(isAffiliate, userId) {
     [isAffiliate ? 1 : 0, tier],
   );
 
-  if (rows[0]) {
-    const amount = Number(rows[0].bonus_amount);
-    return {
-      ...rows[0],
-      bonus_amount: Number.isFinite(amount) ? amount : 1,
-    };
-  }
+  if (!rows[0]) return null;
 
+  const amount = Number(rows[0].bonus_amount);
   return {
-    id: 0,
-    bonus_amount: 1,
-    is_active: 1,
-    membership_tier: tier,
+    ...rows[0],
+    bonus_amount: Number.isFinite(amount) ? amount : 0,
   };
 }
 
@@ -1378,14 +1525,17 @@ async function isBonusCollectAvailable(userId, isPartner, pointsRemaining) {
   if (Number(pointsRemaining) <= BONUS_MIN_POINTS_REMAINING) {
     return {
       available: false,
-      reason: `You need more than ${BONUS_MIN_POINTS_REMAINING} Trust Points to claim a bonus.`,
+      reason: `You need more than ${BONUS_MIN_POINTS_REMAINING} Trust Points available balance to claim a bonus.`,
+      bonus: activeBonus,
+      bonusType: isPartner ? 'partner' : 'standard',
     };
   }
 
   const lastRows = await query(
-    `SELECT created_at
+    `SELECT created_at, status
      FROM loyalty_bonus_collects
      WHERE user_id = ?
+       AND status != 'Rejected'
      ORDER BY id DESC
      LIMIT 1`,
     [userId],
@@ -1401,26 +1551,34 @@ async function isBonusCollectAvailable(userId, isPartner, pointsRemaining) {
     return { available: true, bonus: activeBonus, bonusType: isPartner ? 'partner' : 'standard' };
   }
 
-  return { available: false, reason: 'Bonus is not available at the moment.' };
+  const lastStatus = String(lastCollect.status || '');
+  const reason =
+    lastStatus === 'Pending'
+      ? 'Your bonus claim is pending approval.'
+      : 'You have already claimed this bonus.';
+
+  return {
+    available: false,
+    reason,
+    alreadyClaimed: true,
+    bonusType: isPartner ? 'partner' : 'standard',
+  };
 }
 
 export async function getBonusSummaryForUser(userId, isPartner, pointsRemaining) {
   const eligibility = await isBonusCollectAvailable(userId, isPartner, pointsRemaining);
   const rawAmount = Number(eligibility.bonus?.bonus_amount);
-  const amount = eligibility.available
-    ? Number.isFinite(rawAmount) && rawAmount > 0
-      ? rawAmount
-      : 1
-    : Number.isFinite(rawAmount)
-      ? rawAmount
-      : 0;
+  const hasOffer = Boolean(eligibility.bonus?.id);
+  const amount = Number.isFinite(rawAmount) ? rawAmount : 0;
 
   return {
     available: Boolean(eligibility.available),
+    has_offer: hasOffer,
     amount,
     amount_display: amount.toFixed(2),
     bonus_type: eligibility.bonusType || (isPartner ? 'partner' : 'standard'),
     reason: eligibility.reason || null,
+    already_claimed: Boolean(eligibility.alreadyClaimed),
     min_points_required: BONUS_MIN_POINTS_REMAINING + 1,
   };
 }
@@ -1493,10 +1651,20 @@ export async function createUserBonusClaim(userId, payload = {}) {
     throw validationError('Selected receiving account was not found.');
   }
 
+  await assertPlatformIdUnusedForLoyaltyRequest({
+    userId,
+    accountType,
+    accountId,
+    table: 'loyalty_bonus_collects',
+    label: 'loyalty bonus claim',
+  });
+
   const rate = await getLatestPointWithdrawalRate(accountType);
   const bonusAmount = Number(eligibility.bonus.bonus_amount);
-  const resolvedBonusAmount = Number.isFinite(bonusAmount) && bonusAmount > 0 ? bonusAmount : 1;
-  const accountCurrencyAmount = resolvedBonusAmount * rate;
+  if (!eligibility.bonus.id || !Number.isFinite(bonusAmount) || bonusAmount <= 0) {
+    throw validationError('No active bonus offer at the moment.');
+  }
+  const accountCurrencyAmount = bonusAmount * rate;
 
   const insert = await query(
     `INSERT INTO loyalty_bonus_collects
@@ -1504,8 +1672,8 @@ export async function createUserBonusClaim(userId, payload = {}) {
      VALUES (?, ?, ?, ?, ?, ?, 'Pending', NOW(), NOW())`,
     [
       userId,
-      eligibility.bonus.id || 0,
-      resolvedBonusAmount,
+      eligibility.bonus.id,
+      bonusAmount,
       accountCurrencyAmount,
       accountType,
       accountId,
@@ -1515,17 +1683,25 @@ export async function createUserBonusClaim(userId, payload = {}) {
   await notifyBonusClaimPending(userId);
 
   const claimId = insert.insertId;
+  try {
+    await autoAssignLoyaltyBonus({
+      id: claimId,
+      transaction_id: displayBonusTransactionId(claimId),
+    });
+  } catch (error) {
+    console.error('[loyalty-bonus:auto-assign]', error.message);
+  }
   return {
     ok: true,
     error: false,
     message: isPartner
       ? 'Successfully redeemed your affiliate bonus'
       : 'Successfully redeemed your bonus',
-    amount: resolvedBonusAmount,
+    amount: bonusAmount,
     transaction_id: displayBonusTransactionId(claimId),
     claim: mapUserBonusClaimRow({
       id: claimId,
-      amount: resolvedBonusAmount,
+      amount: bonusAmount,
       account_currency_amount: accountCurrencyAmount,
       payment_option: accountType,
       status: 'Pending',

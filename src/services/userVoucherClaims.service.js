@@ -6,6 +6,7 @@ import {
   needsVerification,
 } from './accountHolder.service.js';
 import { clientBonusVoucherEmailHtml } from './mail.templates.js';
+import { autoAssignLoyaltyVoucher } from './loyaltyAssignment.service.js';
 import { sendEmailAndSms } from './notification.service.js';
 import { getUserPointLevel } from './pointEarning.service.js';
 import { ensureTopupWalletVoucherFlagSchema } from './wallet.service.js';
@@ -102,7 +103,8 @@ async function getIssuedVoucherCount(userId, lmcbId) {
     `SELECT COUNT(*) AS total
      FROM loyalty_client_bonus_vouchers
      WHERE loyalty_management_client_bonus_id = ?
-       AND user_id = ?`,
+       AND user_id = ?
+       AND (rejection_reason IS NULL OR rejection_reason = '')`,
     [lmcbId, userId],
   );
   return Number(rows[0]?.total || 0);
@@ -487,6 +489,7 @@ export async function createUserClientBonusVoucher(userId, payload = {}) {
      FROM loyalty_client_bonus_vouchers
      WHERE platform_id = ?
        AND created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+       AND (rejection_reason IS NULL OR rejection_reason = '')
      ORDER BY created_at DESC
      LIMIT 1`,
     [platformId, VOUCHER_VALIDITY_DAYS],
@@ -512,6 +515,11 @@ export async function createUserClientBonusVoucher(userId, payload = {}) {
   );
 
   const voucherId = insert.insertId;
+  try {
+    await autoAssignLoyaltyVoucher({ id: voucherId, voucher_token: token });
+  } catch (error) {
+    console.error('[loyalty-voucher:auto-assign]', error.message);
+  }
   const voucherUrl = `${env.userAppUrl}/dashboard/earnings/vouchers/${token}`;
 
   await notifyClientBonusVoucherIssued({

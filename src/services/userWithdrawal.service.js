@@ -8,6 +8,7 @@ import { resolveWalletLogoPublicUrl } from './walletLogoStorage.service.js';
 import { ensureWalletNavigateSchema } from './wallet.service.js';
 import { autoAssignWithdrawal } from './withdrawalAssignment.service.js';
 import { storeWithdrawalProof } from './withdrawalProofStorage.service.js';
+import { formatCustomerRejectReason } from '../constants/rejectReasons.js';
 import { bumpAdminNavCounts } from './adminNavCountsRevision.service.js';
 import { formatDateTimeParts, nowSqlDateTime, resolveFilterDateRange } from '../utils/slTime.js';
 import {
@@ -940,7 +941,7 @@ function mapUserWithdrawalTransaction(row) {
     note: row.message || '',
     rejectedReason:
       row.transaction_status === 'Rejected'
-        ? [row.rejected_reason_message, row.rejected_reason].filter(Boolean).join(' — ') || ''
+        ? formatCustomerRejectReason(row.rejected_reason, row.rejected_reason_message)
         : '',
   };
 }

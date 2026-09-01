@@ -6,6 +6,7 @@ import {
 } from './accountHolder.service.js';
 import { autoAssignDeposit } from './depositAssignment.service.js';
 import { storeDepositProof } from './depositProofStorage.service.js';
+import { formatCustomerRejectReason } from '../constants/rejectReasons.js';
 import { bumpAdminNavCounts } from './adminNavCountsRevision.service.js';
 import { resolveWalletLogoPublicUrl } from './walletLogoStorage.service.js';
 import { ensureWalletNavigateSchema } from './wallet.service.js';
@@ -666,7 +667,7 @@ function mapUserDepositTransaction(row) {
     note: row.message || '',
     rejectedReason:
       row.transaction_status === 'Rejected'
-        ? [row.rejected_reason_message, row.rejected_reason].filter(Boolean).join(' — ') || ''
+        ? formatCustomerRejectReason(row.rejected_reason, row.rejected_reason_message)
         : '',
   };
 }

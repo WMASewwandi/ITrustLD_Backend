@@ -5,6 +5,12 @@ import {
   SYSTEM_USER_ACTIONS,
 } from './systemUserActionLog.service.js';
 import { assertCanUpdateRecordStatus } from './statusUpdateScope.service.js';
+import {
+  ensureLoyaltyAssignedToColumn,
+  isLoyaltySystemAdmin,
+  loyaltyAssignedToUserId,
+  refillLoyaltyVoucherPending,
+} from './loyaltyAssignment.service.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -137,15 +143,24 @@ const VOUCHER_BASE_FROM = `
   LEFT JOIN topup_methods tm ON tm.id = v.topup_method_id
 `;
 
+function mysqlDateTimeLiteral(value) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return formatTimestampSl(value);
+  }
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  return raw.slice(0, 19).replace('T', ' ');
+}
+
 async function countPlatformDuplicates(platformId, createdAt) {
   if (!platformId) {
     return { daily_count: 0, monthly_count: 0, is_daily_duplicate: false, is_monthly_duplicate: false };
   }
 
-  const created = new Date(createdAt);
-  const createdDay = formatYmd(created);
-  const monthStart = new Date(created);
-  monthStart.setDate(monthStart.getDate() - 30);
+  const createdSql = mysqlDateTimeLiteral(createdAt);
+  if (!createdSql) {
+    return { daily_count: 0, monthly_count: 0, is_daily_duplicate: false, is_monthly_duplicate: false };
+  }
 
   const duplicateScope = DUPLICATE_VOUCHER_SCOPE;
 
@@ -153,18 +168,18 @@ async function countPlatformDuplicates(platformId, createdAt) {
     `SELECT COUNT(*) AS total
      FROM loyalty_client_bonus_vouchers
      WHERE platform_id = ?
-       AND DATE(created_at) = ?
+       AND DATE(created_at) = DATE(?)
        AND ${duplicateScope}`,
-    [platformId, createdDay],
+    [platformId, createdSql],
   );
 
   const monthlyRows = await query(
     `SELECT COUNT(*) AS total
      FROM loyalty_client_bonus_vouchers
      WHERE platform_id = ?
-       AND created_at >= ?
+       AND created_at >= DATE_SUB(?, INTERVAL 30 DAY)
        AND ${duplicateScope}`,
-    [platformId, formatYmd(monthStart)],
+    [platformId, createdSql],
   );
 
   const dailyCount = Number(dailyRows[0]?.total || 0);
@@ -205,6 +220,8 @@ function mapAdminVoucherRow(row, adminUsers, duplicates = null) {
     token: row.voucher_token || '—',
     status,
     admin: adminName,
+    assigned: resolveAssignedName(row, adminUsers),
+    assignedToId: row.assigned_to || null,
     claimedBy: claimedAdmin || '—',
     claimedDate: row.claimed_at ? formatYmdHis(row.claimed_at) : null,
     rejectedDate: row.rejected_at ? formatYmdHis(row.rejected_at) : isAutoRejected(row) ? formatYmdHis(row.created_at) : null,
@@ -213,7 +230,14 @@ function mapAdminVoucherRow(row, adminUsers, duplicates = null) {
   };
 }
 
-export async function listVoucherClaimsForAdmin(params = {}) {
+function resolveAssignedName(row, users = {}) {
+  const assignedId = Number(row.assigned_to) || 0;
+  if (!assignedId) return '—';
+  return users[assignedId] || String(assignedId);
+}
+
+export async function listVoucherClaimsForAdmin(params = {}, auth = null) {
+  await ensureLoyaltyAssignedToColumn('loyalty_client_bonus_vouchers');
   await processExpiredVoucherAutoRejection();
 
   const page = Math.max(1, Number(params.page) || 1);
@@ -235,6 +259,13 @@ export async function listVoucherClaimsForAdmin(params = {}) {
   const values = [];
 
   sql = applyVoucherStatusFilter(sql, values, statusInput);
+
+  const assignedToUserId = loyaltyAssignedToUserId(auth, statusInput);
+  if (assignedToUserId) {
+    await ensureLoyaltyAssignedToColumn('loyalty_client_bonus_vouchers');
+    sql += ` AND v.assigned_to = ?`;
+    values.push(assignedToUserId);
+  }
 
   if (fromDate) {
     sql += ` AND DATE(v.created_at) >= ?`;
@@ -262,9 +293,9 @@ export async function listVoucherClaimsForAdmin(params = {}) {
   const total = Number(countRows[0]?.total || 0);
 
   const orderBy =
-    statusInput === 'Claimed' || statusInput === 'Rejected'
-      ? 'v.updated_at DESC'
-      : 'v.created_at DESC';
+    statusInput === 'Pending'
+      ? 'v.updated_at ASC, v.id ASC'
+      : 'v.updated_at DESC, v.id DESC';
 
   const rows = await query(`${sql} ORDER BY ${orderBy} LIMIT ? OFFSET ?`, [
     ...values,
@@ -272,7 +303,7 @@ export async function listVoucherClaimsForAdmin(params = {}) {
     offset,
   ]);
 
-  const adminIds = rows.flatMap((row) => [row.claimed_by_admin, row.rejected_by_admin]);
+  const adminIds = rows.flatMap((row) => [row.claimed_by_admin, row.rejected_by_admin, row.assigned_to]);
   const adminUsers = await fetchAdminNames(adminIds);
 
   const includeDuplicates = statusInput === 'Pending';
@@ -292,6 +323,7 @@ export async function listVoucherClaimsForAdmin(params = {}) {
       total,
       total_pages: Math.max(1, Math.ceil(total / perPage)),
     },
+    isAdmin: isLoyaltySystemAdmin(auth?.roles || []),
   };
 }
 
@@ -326,6 +358,12 @@ export async function completeVoucherClaim(adminUserId, payload = {}) {
   );
 
   await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.VOUCHER_CLAIM_APPROVE);
+
+  try {
+    await refillLoyaltyVoucherPending(voucher.assigned_to || adminUserId);
+  } catch (error) {
+    console.error('[loyalty-voucher:refill]', error.message);
+  }
 
   return {
     ok: true,
@@ -371,6 +409,12 @@ export async function rejectVoucherClaim(adminUserId, payload = {}) {
 
   await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.VOUCHER_CLAIM_REJECT);
 
+  try {
+    await refillLoyaltyVoucherPending(voucher.assigned_to || adminUserId);
+  } catch (error) {
+    console.error('[loyalty-voucher:refill]', error.message);
+  }
+
   return {
     ok: true,
     error: false,
@@ -411,7 +455,7 @@ export async function getVoucherDuplicatePlatformStats() {
   const dailyRows = await query(
     `SELECT platform_id, COUNT(*) AS duplicate_count
      FROM loyalty_client_bonus_vouchers
-     WHERE DATE(created_at) = CURDATE()
+     WHERE DATE(created_at) = UTC_DATE()
        AND ${duplicateScope}
      GROUP BY platform_id
      HAVING duplicate_count > 1`,
@@ -420,7 +464,7 @@ export async function getVoucherDuplicatePlatformStats() {
   const monthlyRows = await query(
     `SELECT platform_id, COUNT(*) AS duplicate_count
      FROM loyalty_client_bonus_vouchers
-     WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+     WHERE created_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL 30 DAY)
        AND ${duplicateScope}
      GROUP BY platform_id
      HAVING duplicate_count > 1`,

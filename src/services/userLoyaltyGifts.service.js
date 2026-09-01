@@ -98,7 +98,7 @@ async function resolveUserLevelLabel(userId, isPartner) {
 function mapGiftRow(row, userLevel, existingClaim) {
   const allowedLevels = parseAllowedLevels(row.allowed_levels);
   const levelAllowed = allowedLevels.includes(userLevel);
-  const alreadyClaimed = Boolean(existingClaim);
+  const alreadyClaimed = Boolean(existingClaim && existingClaim.status !== 'Rejected');
   const claimStatus = existingClaim?.status || null;
   const createdAt = row.created_at || null;
   const expiresAt = giftExpiresAt(row);
@@ -146,11 +146,17 @@ export async function listAvailableGiftsForUser(userId) {
     `SELECT lgc.*
      FROM loyalty_gift_claims lgc
      INNER JOIN loyalty_gifts lg ON lg.id = lgc.gift_id
-     WHERE lgc.user_id = ?`,
+     WHERE lgc.user_id = ?
+     ORDER BY CASE WHEN lgc.status = 'Rejected' THEN 1 ELSE 0 END ASC, lgc.id DESC`,
     [userId],
   );
 
-  const claimsByGiftId = new Map(claimRows.map((row) => [row.gift_id, row]));
+  const claimsByGiftId = new Map();
+  for (const row of claimRows) {
+    if (!claimsByGiftId.has(row.gift_id)) {
+      claimsByGiftId.set(row.gift_id, row);
+    }
+  }
 
   return {
     user_level: userLevel,
@@ -201,7 +207,9 @@ export async function createGiftClaim(userId, payload = {}) {
   }
 
   const existingRows = await query(
-    `SELECT id, status FROM loyalty_gift_claims WHERE gift_id = ? AND user_id = ? LIMIT 1`,
+    `SELECT id, status FROM loyalty_gift_claims
+     WHERE gift_id = ? AND user_id = ? AND status != 'Rejected'
+     LIMIT 1`,
     [giftId, userId],
   );
   if (existingRows.length) {

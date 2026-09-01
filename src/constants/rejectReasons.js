@@ -14,3 +14,17 @@ export const REJECT_REASON_CATEGORY_IDS = REJECT_REASON_CATEGORIES.map((item) =>
 export function isRejectReasonCategory(value) {
   return REJECT_REASON_CATEGORY_IDS.includes(String(value || '').trim());
 }
+
+export function isCustomRejectReason(value) {
+  const key = String(value || '').trim().toLowerCase();
+  return key === 'custom' || key === 'custom message' || key === 'other';
+}
+
+/** Customer-facing reject text. Custom option shows the typed message only. */
+export function formatCustomerRejectReason(category, message) {
+  const cat = String(category || '').trim();
+  const msg = String(message || '').trim();
+  if (isCustomRejectReason(cat)) return msg;
+  if (msg && cat && msg !== cat) return `${msg} — ${cat}`;
+  return msg || cat;
+}
