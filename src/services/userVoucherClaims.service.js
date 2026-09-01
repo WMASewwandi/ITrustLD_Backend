@@ -338,6 +338,10 @@ function mapUserVoucherRow(row) {
     tier_label: tier ? tier.charAt(0).toUpperCase() + tier.slice(1) : null,
     loyalty_management_client_bonus_id: row.loyalty_management_client_bonus_id || null,
     voucher_url: token ? `${env.userAppUrl}/dashboard/earnings/vouchers/${token}` : null,
+    rejectReason:
+      row.rejection_reason || (isAutoRejected(row) ? 'Auto-rejected: Voucher expired after 30 days' : null),
+    rejection_reason:
+      row.rejection_reason || (isAutoRejected(row) ? 'Auto-rejected: Voucher expired after 30 days' : ''),
   };
 }
 

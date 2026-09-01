@@ -562,14 +562,22 @@ export function loyaltyRedemptionApprovedEmailHtml({ firstName, balanceUrl }) {
     </div>`);
 }
 
-export function loyaltyRedemptionRejectedEmailHtml({ firstName, balanceUrl }) {
+export function loyaltyRedemptionRejectedEmailHtml({ firstName, balanceUrl, reason }) {
   const name = firstName || 'Customer';
+  const reasonText = String(reason || '').trim();
   return wrap(`
     <div style="padding:40px 30px;text-align:left;">
       <h1 style="font-size:24px;color:#0E1726;margin:0 0 24px;">Redemption rejected</h1>
       <p style="font-size:16px;line-height:25px;color:#0E1726;margin:0 0 12px;">
-        Hi ${name}, your loyalty bonus redemption request has been rejected.
+        Hi ${escapeHtml(name)}, your loyalty bonus redemption request has been rejected.
       </p>
+      ${
+        reasonText
+          ? `<p style="font-size:16px;line-height:25px;color:#0E1726;margin:0 0 12px;">
+        Reason: <strong>${escapeHtml(reasonText)}</strong>
+      </p>`
+          : ''
+      }
       <p style="font-size:16px;line-height:25px;color:#0E1726;margin:0 0 32px;">
         Please contact support if you need more information.
       </p>

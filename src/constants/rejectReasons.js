@@ -4,6 +4,7 @@ export const REJECT_REASON_CATEGORIES = [
   { id: 'kyc_nic', label: 'KYC NIC', description: 'Identity document rejection' },
   { id: 'kyc_address', label: 'KYC Address', description: 'Address document rejection' },
   { id: 'loyalty_order', label: 'Loyalty Orders', description: 'Loyalty point redemption rejection' },
+  { id: 'bonus_claim', label: 'Bonus Claims', description: 'Loyalty bonus claim rejection' },
   { id: 'voucher_claim', label: 'Voucher Claims', description: 'Loyalty voucher claim rejection' },
   { id: 'gift_claim', label: 'Gift Claims', description: 'Loyalty gift claim rejection' },
 ];
