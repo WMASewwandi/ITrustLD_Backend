@@ -37,6 +37,7 @@ const MONTH_NAMES = [
 const DASHBOARD_CACHE_TTL_MS = 90_000;
 const PLATFORMS_CACHE_TTL_MS = 180_000;
 const DEFAULT_DASHBOARD_FILTER = 'currentyear';
+const YEAR_DASHBOARD_FILTER = 'currentyear';
 const dashboardCacheMap = new Map();
 let platformsAllTimeCache = { data: null, expiresAt: 0, version: 0 };
 const PLATFORMS_CACHE_VERSION = 3;
@@ -359,14 +360,14 @@ function eachMonthInPeriod(periodStart, periodEnd, filter, year) {
   return months;
 }
 
-function buildRevenueSeries(depositByDay, depositByMonth, period, chartMode) {
+function buildRevenueSeries(revenueUsdByDay, revenueUsdByMonth, period, chartMode) {
   if (chartMode === 'daily') {
     const dayKeys = eachDayInPeriod(period.periodStart, period.periodEnd);
     const labels = dayKeys.map((key) => {
       const [, m, d] = key.split('-');
       return `${m}/${d}`;
     });
-    const values = dayKeys.map((key) => (depositByDay[key] || 0) / 1000);
+    const values = dayKeys.map((key) => Number(revenueUsdByDay[key]) || 0);
     return { labels, values };
   }
 
@@ -377,14 +378,60 @@ function buildRevenueSeries(depositByDay, depositByMonth, period, chartMode) {
     period.year,
   );
   const labels = monthBuckets.map((b) => b.label);
-  const values = monthBuckets.map((b) => {
-    const total = depositByMonth[`${b.year}-${b.month}`] || 0;
-    return total / 1000;
-  });
+  const values = monthBuckets.map((b) => Number(revenueUsdByMonth[`${b.year}-${b.month}`]) || 0);
   return { labels, values };
 }
 
-/** Real LKR profit = LKR received on deposits − LKR paid on withdrawals (Completed only). */
+/** Profit LKR = completed deposit USD × 10. Revenue = that amount ÷ today's SL USD rate. */
+const PROFIT_PER_USD = 10;
+
+function scaleAmountMap(source, factor) {
+  const out = {};
+  for (const [key, val] of Object.entries(source || {})) {
+    out[key] = (Number(val) || 0) * factor;
+  }
+  return out;
+}
+
+function revenueUsdFactor(usdLkrRate) {
+  const rate = Number(usdLkrRate);
+  const safeRate = Number.isFinite(rate) && rate > 0 ? rate : 1;
+  return PROFIT_PER_USD / safeRate;
+}
+
+function buildRevenueUsdMaps(depositByDay, depositByMonth, usdLkrRate) {
+  const factor = revenueUsdFactor(usdLkrRate);
+  return {
+    revenueUsdByDay: scaleAmountMap(depositByDay, factor),
+    revenueUsdByMonth: scaleAmountMap(depositByMonth, factor),
+  };
+}
+
+async function getTodayUsdLkrBuyRate() {
+  const rows = await query(
+    `SELECT dr.rate
+     FROM deposit_rates dr
+     INNER JOIN payment_options po ON po.id = dr.payment_option_id
+     WHERE (dr.is_deleted = 0 OR dr.is_deleted IS NULL)
+       AND (po.is_deleted = 0 OR po.is_deleted IS NULL)
+       AND UPPER(TRIM(po.payment_option_currency)) = 'LKR'
+     ORDER BY
+       CASE WHEN UPPER(TRIM(po.payment_option_name)) = 'BANK TRANSFER' THEN 0 ELSE 1 END,
+       dr.applicable_date DESC,
+       dr.id DESC
+     LIMIT 1`,
+  );
+  const rate = Number(rows[0]?.rate);
+  return Number.isFinite(rate) && rate > 0 ? rate : null;
+}
+
+function buildProfitFromDeposits(depositByDay, depositByMonth) {
+  return {
+    profitByDay: scaleAmountMap(depositByDay, PROFIT_PER_USD),
+    profitByMonth: scaleAmountMap(depositByMonth, PROFIT_PER_USD),
+  };
+}
+
 function buildProfitSeries(profitByDay, profitByMonth, period, chartMode) {
   if (chartMode === 'daily') {
     const dayKeys = eachDayInPeriod(period.periodStart, period.periodEnd);
@@ -430,14 +477,7 @@ async function fetchDepositsGrouped(periodStart, periodEnd, { byDay = true } = {
     `SELECT ${yearExpr} AS yr,
             ${monthExpr} AS mo
             ${selectDay},
-            COALESCE(SUM(deposit_amount), 0) AS total_deposit,
-            COALESCE(SUM(
-              CASE
-                WHEN UPPER(TRIM(COALESCE(payment_amount_currency, ''))) = 'LKR'
-                THEN payment_amount
-                ELSE 0
-              END
-            ), 0) AS total_payment_lkr
+            COALESCE(SUM(deposit_amount), 0) AS total_deposit
      FROM deposits
      WHERE transaction_status = 'Completed'
      ${whereSql}
@@ -447,90 +487,18 @@ async function fetchDepositsGrouped(periodStart, periodEnd, { byDay = true } = {
 
   const depositByDay = {};
   const depositByMonth = {};
-  const paymentLkrByDay = {};
-  const paymentLkrByMonth = {};
-
   const total = accumulateGroupedRows(rows, {
     byDay,
     amountKey: 'total_deposit',
     dayMap: depositByDay,
     monthMap: depositByMonth,
   });
-  accumulateGroupedRows(rows, {
-    byDay,
-    amountKey: 'total_payment_lkr',
-    dayMap: paymentLkrByDay,
-    monthMap: paymentLkrByMonth,
-  });
 
   return {
     total,
     depositByDay,
     depositByMonth,
-    paymentLkrByDay,
-    paymentLkrByMonth,
   };
-}
-
-async function fetchWithdrawalsLkrGrouped(periodStart, periodEnd, { byDay = true } = {}) {
-  const yearExpr = sqlYear('created_at');
-  const monthExpr = sqlMonth('created_at');
-  const dayExpr = sqlDayOfMonth('created_at');
-  const { conditions, values } = periodWhereClause('created_at', periodStart, periodEnd);
-  const whereSql = conditions.length ? `AND ${conditions.join(' AND ')}` : '';
-
-  const selectDay = byDay ? `, ${dayExpr} AS dy` : '';
-  const groupDay = byDay ? ', dy' : '';
-
-  const rows = await query(
-    `SELECT ${yearExpr} AS yr,
-            ${monthExpr} AS mo
-            ${selectDay},
-            COALESCE(SUM(
-              CASE
-                WHEN UPPER(TRIM(COALESCE(receiving_amount_currency, ''))) = 'LKR'
-                THEN receiving_amount
-                ELSE 0
-              END
-            ), 0) AS total_receiving_lkr
-     FROM withdrawals
-     WHERE transaction_status = 'Completed'
-     ${whereSql}
-     GROUP BY yr, mo${groupDay}`,
-    values,
-  );
-
-  const receivingLkrByDay = {};
-  const receivingLkrByMonth = {};
-  accumulateGroupedRows(rows, {
-    byDay,
-    amountKey: 'total_receiving_lkr',
-    dayMap: receivingLkrByDay,
-    monthMap: receivingLkrByMonth,
-  });
-
-  return { receivingLkrByDay, receivingLkrByMonth };
-}
-
-function mergeProfitMaps(paymentByDay, paymentByMonth, receivingByDay, receivingByMonth) {
-  const profitByDay = {};
-  const profitByMonth = {};
-  const dayKeys = new Set([
-    ...Object.keys(paymentByDay || {}),
-    ...Object.keys(receivingByDay || {}),
-  ]);
-  for (const key of dayKeys) {
-    profitByDay[key] = (Number(paymentByDay[key]) || 0) - (Number(receivingByDay[key]) || 0);
-  }
-  const monthKeys = new Set([
-    ...Object.keys(paymentByMonth || {}),
-    ...Object.keys(receivingByMonth || {}),
-  ]);
-  for (const key of monthKeys) {
-    profitByMonth[key] =
-      (Number(paymentByMonth[key]) || 0) - (Number(receivingByMonth[key]) || 0);
-  }
-  return { profitByDay, profitByMonth };
 }
 
 async function fetchDepositTotalInPeriod(periodStart, periodEnd) {
@@ -541,7 +509,7 @@ async function fetchDepositTotalInPeriod(periodStart, periodEnd) {
 }
 
 async function fetchDepositsDashboardBundle(period, { includeDaily = true } = {}) {
-  const needDailySparkline = includeDaily && period.filter === DEFAULT_DASHBOARD_FILTER;
+  const needDailySparkline = includeDaily && period.filter === YEAR_DASHBOARD_FILTER;
   const byDay = period.chartMode === 'daily';
   const canMergeCompare =
     !byDay &&
@@ -554,7 +522,7 @@ async function fetchDepositsDashboardBundle(period, { includeDaily = true } = {}
 
   const tasks = [
     fetchDepositsGrouped(primaryStart, primaryEnd, { byDay }),
-    fetchWithdrawalsLkrGrouped(primaryStart, primaryEnd, { byDay }),
+    getTodayUsdLkrBuyRate(),
   ];
 
   if (!canMergeCompare) {
@@ -575,26 +543,16 @@ async function fetchDepositsDashboardBundle(period, { includeDaily = true } = {}
       colomboLocalToDate({ year: nextMonth.year, month: nextMonth.month, day: 1 }),
     );
     tasks.push(fetchDepositsGrouped(sparkStart, monthEnd, { byDay: true }));
-    tasks.push(fetchWithdrawalsLkrGrouped(sparkStart, monthEnd, { byDay: true }));
   } else {
-    tasks.push(Promise.resolve(null));
     tasks.push(Promise.resolve(null));
   }
 
-  const [
-    primaryGrouped,
-    primaryWithdrawals,
-    compareFallback,
-    dailyGrouped,
-    dailyWithdrawals,
-  ] = await Promise.all(tasks);
+  const [primaryGrouped, usdLkrRate, compareFallback, dailyGrouped] = await Promise.all(tasks);
 
   if (canMergeCompare) {
     let periodTotal = 0;
     let compareTotal = 0;
     const depositByMonth = {};
-    const paymentLkrByMonth = { ...primaryGrouped.paymentLkrByMonth };
-    const receivingLkrByMonth = { ...primaryWithdrawals.receivingLkrByMonth };
     const periodYear = period.filter === 'lastyear' ? period.year - 1 : period.year;
     const compareYear = periodYear - 1;
 
@@ -608,57 +566,33 @@ async function fetchDepositsDashboardBundle(period, { includeDaily = true } = {}
       }
     }
 
-    const dailyProfitMaps = mergeProfitMaps(
-      dailyGrouped?.paymentLkrByDay || {},
-      {},
-      dailyWithdrawals?.receivingLkrByDay || {},
-      {},
-    );
-
+    const depositByDay = dailyGrouped?.depositByDay || {};
     return {
       total: periodTotal,
       compareTotal,
-      depositByDay: dailyGrouped?.depositByDay || {},
+      depositByDay,
       depositByMonth,
-      paymentLkrByDay: dailyGrouped?.paymentLkrByDay || {},
-      paymentLkrByMonth,
-      receivingLkrByDay: dailyWithdrawals?.receivingLkrByDay || {},
-      receivingLkrByMonth,
-      profitByDay: dailyProfitMaps.profitByDay,
-      profitByMonth: mergeProfitMaps({}, paymentLkrByMonth, {}, receivingLkrByMonth).profitByMonth,
+      ...buildProfitFromDeposits(depositByDay, depositByMonth),
+      ...buildRevenueUsdMaps(depositByDay, depositByMonth, usdLkrRate),
     };
   }
 
-  const profitMaps = mergeProfitMaps(
-    byDay ? primaryGrouped.paymentLkrByDay : dailyGrouped?.paymentLkrByDay || {},
-    primaryGrouped.paymentLkrByMonth,
-    byDay ? primaryWithdrawals.receivingLkrByDay : dailyWithdrawals?.receivingLkrByDay || {},
-    primaryWithdrawals.receivingLkrByMonth,
-  );
-
-  // When monthly chart + daily sparkline, month profit uses primary maps; day uses sparkline maps.
-  const sparkProfit = mergeProfitMaps(
-    dailyGrouped?.paymentLkrByDay || {},
-    {},
-    dailyWithdrawals?.receivingLkrByDay || {},
-    {},
-  );
+  const depositByDay = byDay ? primaryGrouped.depositByDay : dailyGrouped?.depositByDay || {};
+  const depositByMonth = primaryGrouped.depositByMonth;
+  const sparkProfit = buildProfitFromDeposits(dailyGrouped?.depositByDay || {}, {});
+  const profitMaps = buildProfitFromDeposits(depositByDay, depositByMonth);
+  const revenueMaps = buildRevenueUsdMaps(depositByDay, depositByMonth, usdLkrRate);
+  const sparkRevenue = buildRevenueUsdMaps(dailyGrouped?.depositByDay || {}, {}, usdLkrRate);
 
   return {
     total: primaryGrouped.total,
     compareTotal: compareFallback || 0,
-    depositByDay: byDay ? primaryGrouped.depositByDay : dailyGrouped?.depositByDay || {},
-    depositByMonth: primaryGrouped.depositByMonth,
-    paymentLkrByDay: byDay
-      ? primaryGrouped.paymentLkrByDay
-      : dailyGrouped?.paymentLkrByDay || {},
-    paymentLkrByMonth: primaryGrouped.paymentLkrByMonth,
-    receivingLkrByDay: byDay
-      ? primaryWithdrawals.receivingLkrByDay
-      : dailyWithdrawals?.receivingLkrByDay || {},
-    receivingLkrByMonth: primaryWithdrawals.receivingLkrByMonth,
+    depositByDay,
+    depositByMonth,
     profitByDay: byDay ? profitMaps.profitByDay : sparkProfit.profitByDay,
     profitByMonth: profitMaps.profitByMonth,
+    revenueUsdByDay: byDay ? revenueMaps.revenueUsdByDay : sparkRevenue.revenueUsdByDay,
+    revenueUsdByMonth: revenueMaps.revenueUsdByMonth,
   };
 }
 
@@ -801,14 +735,14 @@ async function buildAdminDashboard({
   let platformsDeferred = false;
   if (includePlatforms) {
     if (
-      period.filter === DEFAULT_DASHBOARD_FILTER &&
+      period.filter === YEAR_DASHBOARD_FILTER &&
       platformsAllTimeCache.version === PLATFORMS_CACHE_VERSION &&
       Array.isArray(platformsAllTimeCache.data) &&
       platformsAllTimeCache.data.length > 0 &&
       platformsAllTimeCache.expiresAt > Date.now()
     ) {
       platformsPromise = Promise.resolve(platformsAllTimeCache.data);
-    } else if (period.filter === DEFAULT_DASHBOARD_FILTER) {
+    } else if (period.filter === YEAR_DASHBOARD_FILTER) {
       platformsPromise = getAlltimeTotalDeposits();
     } else {
       platformsPromise = getAlltimeTotalDeposits(period.filter, fromDate, toDate);
@@ -830,6 +764,8 @@ async function buildAdminDashboard({
     depositByMonth,
     profitByDay,
     profitByMonth,
+    revenueUsdByDay,
+    revenueUsdByMonth,
   } = depositBundle;
 
   const growthPercentage = calcGrowthPercentage(
@@ -838,8 +774,8 @@ async function buildAdminDashboard({
   );
 
   const revenueSeries = buildRevenueSeries(
-    depositByDay,
-    depositByMonth,
+    revenueUsdByDay,
+    revenueUsdByMonth,
     period,
     period.chartMode,
   );
@@ -984,8 +920,8 @@ export async function filterDashboardTransactions({ filter, fromDate, toDate } =
 }
 
 function dashboardCacheKey(filter, fromDate, toDate) {
-  // v3: real LKR profit (payment − receiving), not deposit×10
-  return `${filter}|${fromDate || ''}|${toDate || ''}|${getColomboDateParts().day}|v3`;
+  // v7: profit = USD × 10; revenue = (USD × 10) ÷ today's SL USD rate
+  return `${filter}|${fromDate || ''}|${toDate || ''}|${getColomboDateParts().day}|v7`;
 }
 
 export async function getAdminDashboard({ filter, fromDate, toDate } = {}) {
@@ -1007,7 +943,7 @@ export async function getAdminDashboard({ filter, fromDate, toDate } = {}) {
 
   // Attach cached platforms when available so the client can skip a second wait.
   if (
-    resolvedFilter === DEFAULT_DASHBOARD_FILTER &&
+    resolvedFilter === YEAR_DASHBOARD_FILTER &&
     platformsAllTimeCache.version === PLATFORMS_CACHE_VERSION &&
     Array.isArray(platformsAllTimeCache.data) &&
     platformsAllTimeCache.expiresAt > Date.now()
