@@ -4,6 +4,7 @@ import {
   getAdminSession,
   loginAdmin,
   logoutAdmin,
+  markAdminOfflineFromToken,
 } from '../../services/adminAuth.service.js';
 
 export const adminAuthRouter = Router();
@@ -24,6 +25,20 @@ adminAuthRouter.post('/logout', requireAdminAuth, async (req, res, next) => {
     res.json(result);
   } catch (error) {
     next(error);
+  }
+});
+
+adminAuthRouter.post('/mark-offline', async (req, res) => {
+  const header = req.headers.authorization || '';
+  const [scheme, token] = header.split(' ');
+  if (scheme !== 'Bearer' || !token) {
+    return res.status(401).json({ message: 'Unauthenticated.' });
+  }
+  try {
+    const result = await markAdminOfflineFromToken(token);
+    return res.json(result);
+  } catch {
+    return res.status(401).json({ message: 'Could not mark user offline.' });
   }
 });
 

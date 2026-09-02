@@ -62,6 +62,23 @@ export function verifyAccessToken(token) {
   return jwt.verify(token, env.jwtSecret);
 }
 
+/** Same as verifyAccessToken but still accepts an expired JWT so auto-logout can set is_online=false. */
+export function verifyAccessTokenAllowExpired(token) {
+  return jwt.verify(token, env.jwtSecret, { ignoreExpiration: true });
+}
+
+export async function markAdminOfflineFromToken(token) {
+  const payload = verifyAccessTokenAllowExpired(token);
+  const userId = payload?.sub;
+  if (!userId) {
+    const error = new Error('Invalid token.');
+    error.status = 401;
+    throw error;
+  }
+  await setUserOnline(userId, false);
+  return { ok: true };
+}
+
 export async function loginAdmin({ email, password }) {
   const normalizedEmail = String(email || '').trim().toLowerCase();
   if (!normalizedEmail || !password) {
