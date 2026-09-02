@@ -4,6 +4,7 @@ import { requireUserAuth } from '../../middleware/requireUserAuth.js';
 import { requireCustomerDepositActivity } from '../../middleware/requireCustomerDepositActivity.js';
 import {
   createUserDeposit,
+  checkGiftVoucherPlatformReuse,
   exportUserDepositTransactions,
   getDepositBootstrap,
   getDepositMethodDetails,
@@ -80,6 +81,18 @@ userDepositsRouter.get('/export', async (req, res, next) => {
     res.setHeader('Content-Type', exported.mimeType);
     res.setHeader('Content-Disposition', `attachment; filename="${exported.filename}"`);
     res.send(exported.content);
+  } catch (error) {
+    next(error);
+  }
+});
+
+userDepositsRouter.get('/platform-check', async (req, res, next) => {
+  try {
+    const data = await checkGiftVoucherPlatformReuse(req.auth.userId, {
+      paymentOptionId: req.query.paymentOptionId ?? req.query.payment_option_id,
+      topupAccountId: req.query.topupAccountId ?? req.query.topup_account_id,
+    });
+    res.json(data);
   } catch (error) {
     next(error);
   }

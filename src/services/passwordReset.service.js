@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { query } from '../config/database.js';
 import { env } from '../config/env.js';
 import { hashLaravelPassword, verifyLaravelPassword } from '../utils/laravelPassword.js';
-import { parseDbDateTime } from '../utils/slTime.js';
+import { nowSqlDateTime, parseDbDateTime } from '../utils/slTime.js';
 import { isStrongPassword, STRONG_PASSWORD_MESSAGE } from '../utils/passwordPolicy.js';
 import { sendMail } from './mail.service.js';
 import { passwordResetEmailHtml } from './mail.templates.js';
@@ -26,18 +26,64 @@ function buildResetUrl(plainToken, normalizedEmail) {
   return `${env.userAppUrl}/reset-password/${encodeURIComponent(plainToken)}?email=${encodeURIComponent(normalizedEmail)}`;
 }
 
-async function assertNotThrottled(normalizedEmail) {
+function hashResetTokenSha256(plainToken) {
+  return crypto.createHash('sha256').update(String(plainToken)).digest('hex');
+}
+
+async function verifyResetToken(plainToken, stored) {
+  const storedHash = String(stored || '').trim();
+  if (!plainToken || !storedHash) return false;
+
+  if (storedHash.startsWith('$2y$') || storedHash.startsWith('$2a$') || storedHash.startsWith('$2b$')) {
+    return verifyLaravelPassword(plainToken, storedHash);
+  }
+
+  const sha256 = hashResetTokenSha256(plainToken);
+  const left = Buffer.from(sha256, 'utf8');
+  const right = Buffer.from(storedHash, 'utf8');
+  if (left.length !== right.length) return false;
+  return crypto.timingSafeEqual(left, right);
+}
+
+async function findUserByEmail(normalizedEmail) {
   const rows = await query(
-    `SELECT created_at FROM password_reset_tokens WHERE email = ? LIMIT 1`,
+    `SELECT id, email, name FROM users WHERE LOWER(TRIM(email)) = ? LIMIT 1`,
     [normalizedEmail],
   );
-  const record = rows[0];
+  return rows[0] || null;
+}
+
+async function findResetRecord(normalizedEmail) {
+  const rows = await query(
+    `SELECT email, token, created_at FROM password_reset_tokens WHERE LOWER(TRIM(email)) = ? LIMIT 1`,
+    [normalizedEmail],
+  );
+  return rows[0] || null;
+}
+
+async function deleteResetRecord(normalizedEmail, storedEmail = null) {
+  if (storedEmail) {
+    await query(`DELETE FROM password_reset_tokens WHERE email = ? OR LOWER(TRIM(email)) = ?`, [
+      storedEmail,
+      normalizedEmail,
+    ]);
+    return;
+  }
+  await query(`DELETE FROM password_reset_tokens WHERE LOWER(TRIM(email)) = ?`, [normalizedEmail]);
+}
+
+function tokenAgeMinutes(createdAtRaw) {
+  const createdAt = parseDbDateTime(createdAtRaw);
+  if (!createdAt) return Infinity;
+  return (Date.now() - createdAt.getTime()) / 60000;
+}
+
+async function assertNotThrottled(normalizedEmail) {
+  const record = await findResetRecord(normalizedEmail);
   if (!record?.created_at) return;
 
-  const createdAt = parseDbDateTime(record.created_at);
-  if (!createdAt) return;
-  const ageSeconds = (Date.now() - createdAt.getTime()) / 1000;
-  if (ageSeconds < REQUEST_THROTTLE_SECONDS) {
+  const ageSeconds = tokenAgeMinutes(record.created_at) * 60;
+  if (ageSeconds >= 0 && ageSeconds < REQUEST_THROTTLE_SECONDS) {
     throw validationError(
       'Too many password reset attempts. Please wait before trying again.',
       429,
@@ -51,11 +97,7 @@ export async function requestPasswordReset(email) {
     throw validationError('Please enter a valid email address.');
   }
 
-  const users = await query(
-    `SELECT id, email, name FROM users WHERE email = ? LIMIT 1`,
-    [normalizedEmail],
-  );
-  const user = users[0];
+  const user = await findUserByEmail(normalizedEmail);
   if (!user) {
     throw validationError('We could not find a user with that email address.', 404);
   }
@@ -63,14 +105,23 @@ export async function requestPasswordReset(email) {
   await assertNotThrottled(normalizedEmail);
 
   const plainToken = crypto.randomBytes(32).toString('hex');
-  const hashedToken = await hashLaravelPassword(plainToken);
+  const hashedToken = hashResetTokenSha256(plainToken);
+  const createdAt = nowSqlDateTime();
+  const existing = await findResetRecord(normalizedEmail);
 
-  await query(
-    `INSERT INTO password_reset_tokens (email, token, created_at)
-     VALUES (?, ?, NOW())
-     ON DUPLICATE KEY UPDATE token = VALUES(token), created_at = VALUES(created_at)`,
-    [normalizedEmail, hashedToken],
-  );
+  if (existing?.email) {
+    await query(`UPDATE password_reset_tokens SET token = ?, created_at = ? WHERE email = ?`, [
+      hashedToken,
+      createdAt,
+      existing.email,
+    ]);
+  } else {
+    await query(
+      `INSERT INTO password_reset_tokens (email, token, created_at)
+       VALUES (?, ?, ?)`,
+      [normalizedEmail, hashedToken, createdAt],
+    );
+  }
 
   const resetUrl = buildResetUrl(plainToken, normalizedEmail);
   const emailContent = await resolveEmailContent({
@@ -83,7 +134,7 @@ export async function requestPasswordReset(email) {
     },
   });
   await sendMail({
-    to: normalizedEmail,
+    to: user.email || normalizedEmail,
     subject: emailContent.subject,
     html: emailContent.html,
     text: emailContent.text,
@@ -111,29 +162,23 @@ export async function resetPassword({ email, token, password, password_confirmat
     throw validationError('Password confirmation does not match.');
   }
 
-  const rows = await query(
-    `SELECT email, token, created_at FROM password_reset_tokens WHERE email = ? LIMIT 1`,
-    [normalizedEmail],
-  );
-  const record = rows[0];
+  const record = await findResetRecord(normalizedEmail);
   if (!record) {
     throw validationError('This password reset token is invalid.');
   }
 
-  const createdAt = parseDbDateTime(record.created_at);
-  const ageMinutes = createdAt ? (Date.now() - createdAt.getTime()) / 60000 : Infinity;
+  const ageMinutes = tokenAgeMinutes(record.created_at);
   if (ageMinutes > TOKEN_EXPIRY_MINUTES) {
-    await query(`DELETE FROM password_reset_tokens WHERE email = ?`, [normalizedEmail]);
-    throw validationError('This password reset token is invalid.');
+    await deleteResetRecord(normalizedEmail, record.email);
+    throw validationError('This password reset link has expired. Request a new one.');
   }
 
-  const tokenValid = await verifyLaravelPassword(plainToken, record.token);
+  const tokenValid = await verifyResetToken(plainToken, record.token);
   if (!tokenValid) {
     throw validationError('This password reset token is invalid.');
   }
 
-  const users = await query(`SELECT id FROM users WHERE email = ? LIMIT 1`, [normalizedEmail]);
-  const user = users[0];
+  const user = await findUserByEmail(normalizedEmail);
   if (!user) {
     throw validationError('We could not find a user with that email address.', 404);
   }
@@ -142,10 +187,10 @@ export async function resetPassword({ email, token, password, password_confirmat
   const rememberToken = crypto.randomBytes(30).toString('hex');
 
   await query(
-    `UPDATE users SET password = ?, remember_token = ?, updated_at = NOW() WHERE id = ?`,
-    [hashedPassword, rememberToken, user.id],
+    `UPDATE users SET password = ?, remember_token = ?, updated_at = ? WHERE id = ?`,
+    [hashedPassword, rememberToken, nowSqlDateTime(), user.id],
   );
-  await query(`DELETE FROM password_reset_tokens WHERE email = ?`, [normalizedEmail]);
+  await deleteResetRecord(normalizedEmail, record.email);
 
   return {
     ok: true,

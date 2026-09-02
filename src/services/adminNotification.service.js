@@ -98,8 +98,26 @@ function isSystemAdminRole(roles = []) {
   return roles.includes('super-admin') || roles.includes('sub-admin');
 }
 
-async function countPendingLoyaltyOrders(userId, roles) {
+async function countPendingLoyaltyOrders(userId, roles, permissions = []) {
   const conditions = ["status = 'Pending'"];
+  const values = [];
+  if (!isSystemAdminRole(roles) && userId) {
+    conditions.push('assigned_to = ?');
+    values.push(userId);
+  }
+  try {
+    const rows = await query(
+      `SELECT COUNT(*) AS total FROM point_withdrawals WHERE ${conditions.join(' AND ')}`,
+      values,
+    );
+    return Number(rows[0]?.total ?? 0);
+  } catch {
+    return 0;
+  }
+}
+
+async function countPendingAuthorizationLoyaltyOrders(userId, roles, permissions = []) {
+  const conditions = ["status = 'Pending Authorization'"];
   const values = [];
   if (!isSystemAdminRole(roles) && userId) {
     conditions.push('assigned_to = ?');
@@ -164,6 +182,7 @@ export async function getAdminNavCounts(roles = [], userId = null) {
     withdrawalsPending,
     withdrawalsPendingAuthorization,
     loyaltyOrdersPending,
+    loyaltyOrdersPendingAuthorization,
     loyaltyBonusPending,
     loyaltyVouchersPending,
     loyaltyGiftsPending,
@@ -177,6 +196,7 @@ export async function getAdminNavCounts(roles = [], userId = null) {
     countPendingWithdrawals(userId, withdrawalScope),
     countPendingAuthorizationWithdrawals(userId, withdrawalScope),
     countPendingLoyaltyOrders(userId, roles),
+    countPendingAuthorizationLoyaltyOrders(userId, roles),
     countPendingBonusClaims(userId, roles),
     countPendingVoucherClaims(userId, roles),
     countPendingGiftClaims(),
@@ -197,6 +217,7 @@ export async function getAdminNavCounts(roles = [], userId = null) {
     },
     loyalty: {
       orders: loyaltyOrdersPending,
+      orders_pending_authorization: loyaltyOrdersPendingAuthorization,
       bonus: loyaltyBonusPending,
       vouchers: loyaltyVouchersPending,
       gifts: loyaltyGiftsPending,

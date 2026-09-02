@@ -8,6 +8,7 @@
 import {
   ALL_LOYALTY_READ_PERMISSIONS,
   ALL_LOYALTY_UPDATE_PERMISSIONS,
+  AUTHORIZE_LOYALTY_ORDERS,
   LOYALTY_BONUS_READ,
   LOYALTY_BONUS_UPDATE,
   LOYALTY_GIFTS_CATALOG_UPDATE,
@@ -81,6 +82,7 @@ export const SYSTEM_ACTIVITIES = [
 
   { activity_identifier: 'read_loyalty_orders_data', activity_name: 'Read Loyalty Order Requests', category_id: 51, sort_order: 1 },
   { activity_identifier: 'status_update_loyalty_orders_data', activity_name: 'Status Update Loyalty Order Records', category_id: 51, sort_order: 2 },
+  { activity_identifier: AUTHORIZE_LOYALTY_ORDERS, activity_name: 'Authorize Loyalty Order Records', category_id: 51, sort_order: 3 },
 
   { activity_identifier: 'read_loyalty_bonus_claims_data', activity_name: 'Read Loyalty Bonus Claims', category_id: 52, sort_order: 1 },
   { activity_identifier: 'status_update_loyalty_bonus_claims_data', activity_name: 'Status Update Loyalty Bonus Claims', category_id: 52, sort_order: 2 },

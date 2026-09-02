@@ -278,7 +278,9 @@ async function resolveStatusScopeForRole(roleName, payload = {}) {
     permissions.includes('status_update_withdrawal_data') ||
     permissions.includes('authorize_withdrawal_data');
 
-  const canUpdateLoyaltyOrders = permissions.includes('status_update_loyalty_orders_data');
+  const canUpdateLoyaltyOrders =
+    permissions.includes('status_update_loyalty_orders_data') ||
+    permissions.includes('authorize_loyalty_orders_data');
   const canUpdateLoyaltyBonus = permissions.includes('status_update_loyalty_bonus_claims_data');
   const canUpdateLoyaltyVouchers = permissions.includes('status_update_loyalty_voucher_claims_data');
 

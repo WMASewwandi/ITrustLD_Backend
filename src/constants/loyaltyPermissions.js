@@ -2,6 +2,7 @@
 
 export const LOYALTY_ORDERS_READ = 'read_loyalty_orders_data';
 export const LOYALTY_ORDERS_UPDATE = 'status_update_loyalty_orders_data';
+export const AUTHORIZE_LOYALTY_ORDERS = 'authorize_loyalty_orders_data';
 
 export const LOYALTY_BONUS_READ = 'read_loyalty_bonus_claims_data';
 export const LOYALTY_BONUS_UPDATE = 'status_update_loyalty_bonus_claims_data';
@@ -88,6 +89,7 @@ export function userHasAnyPermission(userPermissions = [], requiredList = []) {
 }
 
 export const LOYALTY_LANDING_ROUTES = [
+  { permission: AUTHORIZE_LOYALTY_ORDERS, href: '/loyalty?tab=orders&status=Pending%20Authorization' },
   { permission: LOYALTY_ORDERS_READ, href: '/loyalty?tab=orders&status=Pending' },
   { permission: LOYALTY_BONUS_READ, href: '/loyalty?tab=bonus&status=Pending' },
   { permission: LOYALTY_VOUCHER_READ, href: '/loyalty?tab=vouchers&status=Pending' },

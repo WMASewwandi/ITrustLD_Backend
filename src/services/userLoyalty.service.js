@@ -1,4 +1,4 @@
-import { query } from '../config/database.js';
+import { getDbDriver, query } from '../config/database.js';
 import { addColumnIfMissing } from '../db/helpers.js';
 import { env } from '../config/env.js';
 import {
@@ -9,12 +9,21 @@ import {
 import {
   autoAssignLoyaltyBonus,
   autoAssignLoyaltyOrder,
+  autoAssignLoyaltyOrderAuthorizer,
+  canAuthorizeLoyaltyOrders,
   ensureLoyaltyAssignedToColumn,
+  ensureLoyaltyOrderAuthorizationSchema,
+  hasActiveLoyaltyOrderAuthorizers,
+  isLoyaltyOrderAuthorizerOnly,
+  isLoyaltyOrderExecutive,
   isLoyaltySystemAdmin,
   loyaltyAssignedToUserId,
   refillLoyaltyBonusPending,
+  refillLoyaltyOrderAuthorization,
   refillLoyaltyOrderPending,
 } from './loyaltyAssignment.service.js';
+import { bumpAdminNavCounts } from './adminNavCountsRevision.service.js';
+import { LOYALTY_ORDERS_UPDATE } from '../constants/loyaltyPermissions.js';
 import { sendEmailAndSms } from './notification.service.js';
 import {
   loyaltyRedemptionApprovedEmailHtml,
@@ -44,7 +53,7 @@ import {
   logSystemUserAction,
   SYSTEM_USER_ACTIONS,
 } from './systemUserActionLog.service.js';
-import { assertCanUpdateRecordStatus } from './statusUpdateScope.service.js';
+import { assertCanUpdateRecordStatus, getUserStatusUpdateScope } from './statusUpdateScope.service.js';
 import {
   addColomboDays,
   formatTimestampSl,
@@ -96,6 +105,62 @@ function mapUserStatus(status) {
 function mapAdminStatus(status) {
   if (status === 'Completed') return 'Approved';
   return status;
+}
+
+function hasLoyaltyOrderUpdatePermission(permissions = []) {
+  return (permissions || []).includes(LOYALTY_ORDERS_UPDATE);
+}
+
+async function assertCanUpdateLoyaltyOrder(auth, currentStatus, nextStatus, makerCheckerEnabled) {
+  const roles = auth?.roles || [];
+  const permissions = auth?.permissions || [];
+  if (isLoyaltySystemAdmin(roles)) return;
+
+  const canAuthorize = canAuthorizeLoyaltyOrders(permissions);
+  const canUpdate = hasLoyaltyOrderUpdatePermission(permissions);
+  const isAuthorizerOnly = canAuthorize && !canUpdate;
+
+  if (isAuthorizerOnly) {
+    if (nextStatus === 'Pending Authorization') {
+      throw validationError('Authorizer cannot send loyalty orders for authorization.', 403);
+    }
+    if (currentStatus !== 'Pending Authorization' && nextStatus !== 'Rejected') {
+      throw validationError('Authorizer can only action loyalty orders pending authorization.', 403);
+    }
+    return;
+  }
+
+  if (canUpdate) {
+    if (
+      makerCheckerEnabled &&
+      nextStatus === 'Approved' &&
+      currentStatus !== 'Pending Authorization'
+    ) {
+      throw validationError(
+        'This loyalty order must be authorized before it can be completed.',
+        403,
+      );
+    }
+    if (nextStatus === 'Approved' && currentStatus === 'Pending Authorization') {
+      if (!canAuthorize) {
+        throw validationError('You do not have permission to authorize loyalty orders.', 403);
+      }
+      return;
+    }
+    if (nextStatus === 'Pending Authorization' && currentStatus !== 'Pending') {
+      throw validationError('Only pending loyalty orders can be sent for authorization.', 403);
+    }
+    return;
+  }
+
+  if (nextStatus === 'Approved' && currentStatus === 'Pending Authorization') {
+    if (!canAuthorize) {
+      throw validationError('You do not have permission to authorize loyalty orders.', 403);
+    }
+    return;
+  }
+
+  throw validationError('You do not have permission to update this loyalty order.', 403);
 }
 
 function displayTransactionId(rowId) {
@@ -958,6 +1023,26 @@ function resolveAssignedName(row, users = {}) {
   return users[assignedId] || String(assignedId);
 }
 
+function resolveLoyaltyUpdatedBy(row, adminUsers = {}) {
+  const id = Number(row.pendings_by_admin) || 0;
+  if (!id) return '—';
+  return adminUsers[id] || String(id);
+}
+
+function resolveLoyaltyAuthorizedBy(row, adminUsers = {}) {
+  const rawStatus = String(row.status || '');
+  let adminId = 0;
+  if (rawStatus === 'Approved' || rawStatus === 'Completed') {
+    adminId = Number(row.approved_by_admin) || Number(row.assigned_to) || 0;
+  } else if (rawStatus === 'Rejected') {
+    adminId = Number(row.rejected_by_admin) || Number(row.assigned_to) || 0;
+  } else if (rawStatus === 'Pending Authorization') {
+    adminId = Number(row.assigned_to) || 0;
+  }
+  if (!adminId) return '—';
+  return adminUsers[adminId] || String(adminId);
+}
+
 function mapAdminWithdrawalRow(row, accountDisplay, adminUsers = {}) {
   const points = Number(row.point_withdrawal_amount || 0);
   const cashout = Number(row.cashout_amount || 0);
@@ -971,10 +1056,10 @@ function mapAdminWithdrawalRow(row, accountDisplay, adminUsers = {}) {
     customer: row.customer_name || '—',
     email: row.email || '—',
     points: points.toFixed(2),
-    amount: `LKR ${received.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-    amountUsd: `USD ${cashout.toFixed(2)}`,
+    amount: `USD ${cashout.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+    amountUsd: `USD ${cashout.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
     method: row.payment_option || '—',
-    received: `LKR ${received.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+    received: formatBonusReceivedAmount(row.payment_option, received),
     platform: accountDisplay.platform,
     platformId: accountDisplay.platformId,
     platformName: accountDisplay.platformName,
@@ -984,12 +1069,15 @@ function mapAdminWithdrawalRow(row, accountDisplay, adminUsers = {}) {
     admin: resolveLoyaltyAdminName(row, adminUsers),
     assigned: resolveAssignedName(row, adminUsers),
     assignedToId: row.assigned_to || null,
+    updatedBy: resolveLoyaltyUpdatedBy(row, adminUsers),
+    authorizedBy: resolveLoyaltyAuthorizedBy(row, adminUsers),
     rejectReason: row.rejection_reason || null,
   };
 }
 
 export async function listLoyaltyOrdersForAdmin(params = {}, auth = null) {
   await ensureLoyaltyAssignedToColumn('point_withdrawals');
+  await ensureLoyaltyOrderAuthorizationSchema();
   const page = Math.max(1, Number(params.page) || 1);
   const perPage = Math.min(50, Math.max(1, Number(params.per_page) || 20));
   const offset = (page - 1) * perPage;
@@ -1070,6 +1158,11 @@ export async function listLoyaltyOrdersForAdmin(params = {}, auth = null) {
     orders.push(mapAdminWithdrawalRow(row, accountDisplay, adminUsers));
   }
 
+  const statusScope = await getUserStatusUpdateScope(auth?.userId);
+  const roles = auth?.roles || [];
+  const permissions = auth?.permissions || [];
+  const isAdmin = isLoyaltySystemAdmin(roles);
+
   return {
     orders,
     pagination: {
@@ -1079,15 +1172,27 @@ export async function listLoyaltyOrdersForAdmin(params = {}, auth = null) {
       total_pages: Math.max(1, Math.ceil(total / perPage)),
     },
     starter_transaction_id: STARTER_TX_ID,
-    isAdmin: isLoyaltySystemAdmin(auth?.roles || []),
+    isAdmin,
+    canAuthorizeLoyaltyOrders: isAdmin || canAuthorizeLoyaltyOrders(permissions),
+    makerCheckerEnabled: await hasActiveLoyaltyOrderAuthorizers(),
+    isLoyaltyOrderAuthorizer: isLoyaltyOrderAuthorizerOnly(roles, permissions),
+    isLoyaltyOrderExecutive: isLoyaltyOrderExecutive(roles, permissions),
+    allowed_loyalty_order_statuses: statusScope.allowed_loyalty_order_statuses,
   };
 }
 
-export async function updateLoyaltyOrderStatus(adminUserId, payload = {}) {
+export async function updateLoyaltyOrderStatus(authOrUserId, payload = {}) {
   await addColumnIfMissing('point_withdrawals', 'rejection_reason', {
     mysql: 'rejection_reason TEXT NULL',
     sqlite: 'rejection_reason TEXT',
   });
+  await ensureLoyaltyOrderAuthorizationSchema();
+
+  const auth =
+    authOrUserId && typeof authOrUserId === 'object'
+      ? authOrUserId
+      : { userId: authOrUserId, roles: [], permissions: [] };
+  const adminUserId = Number(auth.userId);
 
   const transactionId = Number(payload.transaction_id ?? payload.transactionId);
   const nextStatus = mapAdminStatus(payload.withdrawal_request_status ?? payload.status);
@@ -1098,7 +1203,7 @@ export async function updateLoyaltyOrderStatus(adminUserId, payload = {}) {
   if (!Number.isInteger(transactionId)) {
     throw validationError('Transaction id is required.');
   }
-  if (!['Pending', 'Approved', 'Rejected'].includes(nextStatus)) {
+  if (!['Pending', 'Pending Authorization', 'Approved', 'Rejected'].includes(nextStatus)) {
     throw validationError('Invalid loyalty order status.');
   }
 
@@ -1110,10 +1215,24 @@ export async function updateLoyaltyOrderStatus(adminUserId, payload = {}) {
   }
 
   const currentStatus = mapUserStatus(withdrawal.status);
+  const makerCheckerEnabled = await hasActiveLoyaltyOrderAuthorizers();
+  await assertCanUpdateLoyaltyOrder(auth, currentStatus, nextStatus, makerCheckerEnabled);
   await assertCanUpdateRecordStatus(adminUserId, 'loyalty_order', currentStatus);
 
   const nowSl = nowSqlDateTime();
   if (nextStatus === 'Pending') {
+    const revertingFromAuthorization = String(withdrawal.status) === 'Pending Authorization';
+    const previousAdmin = Number(withdrawal.pendings_by_admin) || null;
+    const assignTo = revertingFromAuthorization ? previousAdmin || null : withdrawal.assigned_to ?? null;
+    const pendingByAdmin = revertingFromAuthorization && previousAdmin ? previousAdmin : adminUserId;
+    await query(
+      `UPDATE point_withdrawals
+       SET status = ?, pendings_by_admin = ?, assigned_to = ?, updated_at = ?
+       WHERE id = ?`,
+      [nextStatus, pendingByAdmin, assignTo, nowSl, withdrawalId],
+    );
+    await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.LOYALTY_ORDER_PENDING);
+  } else if (nextStatus === 'Pending Authorization') {
     await query(
       `UPDATE point_withdrawals
        SET status = ?, pendings_by_admin = ?, updated_at = ?
@@ -1121,6 +1240,19 @@ export async function updateLoyaltyOrderStatus(adminUserId, payload = {}) {
       [nextStatus, adminUserId, nowSl, withdrawalId],
     );
     await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.LOYALTY_ORDER_PENDING);
+    try {
+      await refillLoyaltyOrderPending(withdrawal.assigned_to || adminUserId);
+    } catch (error) {
+      console.error('[loyalty-order:refill]', error.message);
+    }
+    try {
+      await autoAssignLoyaltyOrderAuthorizer({
+        ...withdrawal,
+        transaction_id: displayTransactionId(withdrawal.id),
+      });
+    } catch (error) {
+      console.error('[loyalty-order:assign-authorizer]', error.message);
+    }
   } else if (nextStatus === 'Approved') {
     await query(
       `UPDATE point_withdrawals
@@ -1142,13 +1274,20 @@ export async function updateLoyaltyOrderStatus(adminUserId, payload = {}) {
     await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.LOYALTY_ORDER_REJECT);
   }
 
-  if (nextStatus !== 'Pending') {
+  if (nextStatus === 'Approved' || nextStatus === 'Rejected') {
     try {
       await refillLoyaltyOrderPending(withdrawal.assigned_to || adminUserId);
     } catch (error) {
       console.error('[loyalty-order:refill]', error.message);
     }
+    try {
+      await refillLoyaltyOrderAuthorization(withdrawal.assigned_to || adminUserId);
+    } catch (error) {
+      console.error('[loyalty-order:refill-auth]', error.message);
+    }
   }
+
+  bumpAdminNavCounts();
 
   return {
     ok: true,
@@ -1471,7 +1610,7 @@ export async function updateBonusClaimStatus(adminUserId, payload = {}) {
   };
 }
 
-const BONUS_MIN_POINTS_REMAINING = 200;
+const BONUS_MIN_POINTS_REMAINING = 5000;
 
 async function getLoyaltyManagementConfig(identifier) {
   const rows = await query(
@@ -1589,7 +1728,7 @@ export async function getBonusSummaryForUser(userId, isPartner, pointsRemaining)
     bonus_type: eligibility.bonusType || (isPartner ? 'partner' : 'standard'),
     reason: eligibility.reason || null,
     already_claimed: Boolean(eligibility.alreadyClaimed),
-    min_points_required: BONUS_MIN_POINTS_REMAINING + 1,
+    min_points_required: BONUS_MIN_POINTS_REMAINING,
   };
 }
 

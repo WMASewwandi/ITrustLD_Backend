@@ -11,6 +11,7 @@ import {
   LOYALTY_MANAGEMENT_UPDATE,
   LOYALTY_ORDERS_READ,
   LOYALTY_ORDERS_UPDATE,
+  AUTHORIZE_LOYALTY_ORDERS,
   LOYALTY_VOUCHER_READ,
   LOYALTY_VOUCHER_UPDATE,
 } from '../../constants/loyaltyPermissions.js';
@@ -65,7 +66,7 @@ adminLoyaltyRouter.use(requireAdminAuth);
 
 adminLoyaltyRouter.get(
   '/orders',
-  requirePermission(LOYALTY_ORDERS_READ),
+  requirePermission(LOYALTY_ORDERS_READ, AUTHORIZE_LOYALTY_ORDERS),
   async (req, res, next) => {
     try {
       const data = await listLoyaltyOrdersForAdmin(req.query ?? {}, req.auth);
@@ -78,10 +79,13 @@ adminLoyaltyRouter.get(
 
 adminLoyaltyRouter.get(
   '/orders/executives',
-  requirePermission(LOYALTY_ORDERS_READ),
+  requirePermission(LOYALTY_ORDERS_READ, AUTHORIZE_LOYALTY_ORDERS),
   async (req, res, next) => {
     try {
-      const data = await listLoyaltyAssignees('order');
+      const queue = String(req.query.queue || '');
+      const data = await listLoyaltyAssignees('order', {
+        authorizers: queue === 'pending-authorization',
+      });
       res.json(data);
     } catch (error) {
       next(error);
@@ -108,10 +112,10 @@ adminLoyaltyRouter.post(
 
 adminLoyaltyRouter.post(
   '/orders/status',
-  requirePermission(LOYALTY_ORDERS_UPDATE),
+  requirePermission(LOYALTY_ORDERS_UPDATE, AUTHORIZE_LOYALTY_ORDERS),
   async (req, res, next) => {
     try {
-      const data = await updateLoyaltyOrderStatus(req.auth.userId, req.body ?? {});
+      const data = await updateLoyaltyOrderStatus(req.auth, req.body ?? {});
       res.json(data);
     } catch (error) {
       next(error);
