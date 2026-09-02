@@ -391,10 +391,11 @@ export async function getDepositMethodDetails(userId, { topupMethodId, depositAm
 
   await assertDepositMethodPendingLimit(userId, methodId, topupMethod.name);
 
-  const [paymentOptions, depositRates, priorityRate] = await Promise.all([
+  const [paymentOptions, depositRates, priorityRate, giftVoucherCooldown] = await Promise.all([
     loadSupportedPaymentOptions(methodId, topupMethod.name),
     loadDepositRatesForMethod(methodId),
     loadPriorityDepositRate(methodId),
+    getGiftVoucherCooldown(userId),
   ]);
 
   if (!priorityRate) {
@@ -416,6 +417,7 @@ export async function getDepositMethodDetails(userId, { topupMethodId, depositAm
         ? Math.round((amount * priorityRate.rate + Number.EPSILON) * 100) / 100
         : null,
     initial_payment_currency: priorityRate.paymentOptionCurrency,
+    gift_voucher_cooldown: giftVoucherCooldown,
   };
 }
 
@@ -453,6 +455,10 @@ const GIFT_VOUCHER_PLATFORM_REUSE_DAYS = 30;
 export const GIFT_VOUCHER_PLATFORM_REUSE_CODE = 'GIFT_VOUCHER_PLATFORM_REUSE';
 const GIFT_VOUCHER_PLATFORM_REUSE_MESSAGE =
   'This Platform ID was already used for a gift voucher deposit in the last 30 days. Please use a different Platform ID.';
+export const GIFT_VOUCHER_COOLDOWN_CODE = 'GIFT_VOUCHER_COOLDOWN';
+const GIFT_VOUCHER_COOLDOWN_MESSAGE =
+  'You already claimed a gift voucher in the last 30 days. You cannot create a new deposit with this option until 30 days have passed.';
+const GIFT_VOUCHER_OPTION_SQL = `LOWER(TRIM(po.payment_option_name)) IN ('gift voucher', 'giftvoucher')`;
 
 export function isGiftVoucherPaymentOption(name) {
   return String(name || '')
@@ -481,13 +487,96 @@ async function findRecentGiftVoucherDepositByPlatformId(platformId) {
      FROM deposits d
      INNER JOIN payment_options po ON po.id = d.payment_option_id
      WHERE d.topup_account_id = ?
-       AND LOWER(TRIM(po.payment_option_name)) IN ('gift voucher', 'giftvoucher')
+       AND ${GIFT_VOUCHER_OPTION_SQL}
        AND d.transaction_status != 'Rejected'
        AND d.created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
      LIMIT 1`,
     [accountId, GIFT_VOUCHER_PLATFORM_REUSE_DAYS],
   );
   return rows[0] || null;
+}
+
+async function collectUserPlatformIds(userId) {
+  const ids = new Set();
+  const xmRows = await query(
+    `SELECT xm_account_id
+     FROM user_xm_accounts
+     WHERE user_id = ?
+       AND (is_deleted = 0 OR is_deleted IS NULL OR is_deleted = FALSE)`,
+    [userId],
+  );
+  for (const row of xmRows) {
+    const id = String(row.xm_account_id || '').trim();
+    if (id) ids.add(id);
+  }
+  const depositRows = await query(
+    `SELECT DISTINCT topup_account_id
+     FROM deposits
+     WHERE user_id = ?
+       AND topup_account_id IS NOT NULL
+       AND TRIM(topup_account_id) != ''`,
+    [userId],
+  );
+  for (const row of depositRows) {
+    const id = String(row.topup_account_id || '').trim();
+    if (id) ids.add(id);
+  }
+  return [...ids];
+}
+
+async function findRecentClaimedVoucherForUser(userId) {
+  try {
+    const platformIds = await collectUserPlatformIds(userId);
+    if (platformIds.length) {
+      const placeholders = platformIds.map(() => '?').join(', ');
+      const voucherRows = await query(
+        `SELECT id
+         FROM loyalty_client_bonus_vouchers
+         WHERE is_claimed = 1
+           AND platform_id IN (${placeholders})
+           AND COALESCE(claimed_at, updated_at, created_at) >= DATE_SUB(NOW(), INTERVAL ? DAY)
+         LIMIT 1`,
+        [...platformIds, GIFT_VOUCHER_PLATFORM_REUSE_DAYS],
+      );
+      if (voucherRows[0]) return voucherRows[0];
+    }
+  } catch (error) {
+    console.error('[gift-voucher-cooldown:vouchers]', error.message);
+  }
+
+  const depositRows = await query(
+    `SELECT d.id
+     FROM deposits d
+     INNER JOIN payment_options po ON po.id = d.payment_option_id
+     WHERE d.user_id = ?
+       AND ${GIFT_VOUCHER_OPTION_SQL}
+       AND d.transaction_status = 'Completed'
+       AND d.created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+     LIMIT 1`,
+    [userId, GIFT_VOUCHER_PLATFORM_REUSE_DAYS],
+  );
+  return depositRows[0] || null;
+}
+
+async function getGiftVoucherCooldown(userId) {
+  const claimed = await findRecentClaimedVoucherForUser(userId);
+  if (!claimed) {
+    return { blocked: false, days: GIFT_VOUCHER_PLATFORM_REUSE_DAYS };
+  }
+  return {
+    blocked: true,
+    days: GIFT_VOUCHER_PLATFORM_REUSE_DAYS,
+    code: GIFT_VOUCHER_COOLDOWN_CODE,
+    message: GIFT_VOUCHER_COOLDOWN_MESSAGE,
+  };
+}
+
+async function assertGiftVoucherUserCooldown(userId) {
+  const cooldown = await getGiftVoucherCooldown(userId);
+  if (!cooldown.blocked) return;
+  const error = validationError(cooldown.message);
+  error.code = GIFT_VOUCHER_COOLDOWN_CODE;
+  throw error;
 }
 
 async function assertGiftVoucherPlatformIdUnused(platformId) {
@@ -503,6 +592,14 @@ export async function checkGiftVoucherPlatformReuse(userId, params = {}) {
   const paymentOption = await getPaymentOptionById(params.paymentOptionId ?? params.payment_option_id);
   if (!isGiftVoucherPaymentOption(paymentOption?.payment_option_name)) {
     return { allowed: true };
+  }
+  const cooldown = await getGiftVoucherCooldown(userId);
+  if (cooldown.blocked) {
+    return {
+      allowed: false,
+      code: cooldown.code,
+      message: cooldown.message,
+    };
   }
   const topupAccountId = String(params.topupAccountId ?? params.topup_account_id ?? '').trim();
   if (!topupAccountId) {
@@ -566,6 +663,7 @@ export async function createUserDeposit(userId, payload) {
     throw validationError('Selected payment option is not available.');
   }
   if (isGiftVoucherPaymentOption(paymentOption.payment_option_name)) {
+    await assertGiftVoucherUserCooldown(userId);
     await assertGiftVoucherPlatformIdUnused(topupAccountId);
   }
 

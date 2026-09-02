@@ -267,7 +267,7 @@ export async function autoAssignLoyaltyOrder(row) {
     const executive = await findBestExecutive('withdrawal-executive');
     return assignRow(QUEUES.order, row.id, displayId, executive);
   }
-  const executive = await findBestUserWithPermissions(QUEUES.order.permissions, QUEUES.order.kind);
+  const executive = await findBestExecutive('deposit-executive');
   return assignRow(QUEUES.order, row.id, displayId, executive);
 }
 
@@ -285,7 +285,10 @@ export async function refillLoyaltyOrderPending(userId) {
   if (roles.includes('withdrawal-executive')) {
     return refillQueue(BANK_TRANSFER_ORDER_QUEUE, executiveId, 'withdrawal-executive');
   }
-  return refillQueue(QUEUES.order, executiveId);
+  if (roles.includes('deposit-executive')) {
+    return refillQueue(QUEUES.order, executiveId, 'deposit-executive');
+  }
+  return 0;
 }
 
 export async function autoAssignLoyaltyOrderAuthorizer(row) {
@@ -354,10 +357,13 @@ export async function listLoyaltyAssignees(kind, { authorizers = false } = {}) {
   if (kind !== 'order') {
     return loyaltyUsers;
   }
+  const depositExecs = await buildExecutivesForAssignment('deposit-executive', {
+    includeSubAdmin: false,
+  });
   const withdrawalExecs = await buildExecutivesForAssignment('withdrawal-executive', {
     includeSubAdmin: false,
   });
-  return mergeAssigneeLists(withdrawalExecs, loyaltyUsers);
+  return mergeAssigneeLists(withdrawalExecs, depositExecs);
 }
 
 export async function assignLoyaltyRecords(auth, kind, { ids, executiveId }) {
@@ -416,13 +422,14 @@ export async function assignLoyaltyRecords(auth, kind, { ids, executiveId }) {
 
   if (kind === 'order' && execId != null && queueStatus === 'Pending') {
     const isWithdrawalExec = execRoles.includes('withdrawal-executive');
+    const isDepositExec = execRoles.includes('deposit-executive');
     const bankTransferIds = selectedRows.filter((row) => isLoyaltyBankTransfer(row.payment_option));
     const otherIds = selectedRows.filter((row) => !isLoyaltyBankTransfer(row.payment_option));
-    if (isWithdrawalExec && otherIds.length) {
-      throw validationError('Withdrawal executives can only be assigned Bank Transfer loyalty orders.');
+    if (bankTransferIds.length && !isWithdrawalExec) {
+      throw validationError('Bank Transfer loyalty orders must be assigned to a Withdrawal Executive.');
     }
-    if (!isWithdrawalExec && bankTransferIds.length) {
-      throw validationError('Bank Transfer loyalty orders must be assigned to a withdrawal executive.');
+    if (otherIds.length && !isDepositExec) {
+      throw validationError('Non-Bank Transfer loyalty orders must be assigned to a Deposit Executive.');
     }
   }
 
