@@ -555,8 +555,34 @@ async function findRecentClaimedVoucherForUser(userId, extraPlatformId = '') {
   }
 }
 
+async function findRecentCompletedGiftVoucherDeposit(userId) {
+  const rows = await query(
+    `SELECT d.id, COALESCE(d.approved_date, d.updated_at, d.created_at) AS claimed_at
+     FROM deposits d
+     INNER JOIN payment_options po ON po.id = d.payment_option_id
+     WHERE d.user_id = ?
+       AND ${GIFT_VOUCHER_OPTION_SQL}
+       AND d.transaction_status = 'Completed'
+       AND COALESCE(d.approved_date, d.updated_at, d.created_at) >= DATE_SUB(NOW(), INTERVAL ? DAY)
+     ORDER BY COALESCE(d.approved_date, d.updated_at, d.created_at) DESC
+     LIMIT 1`,
+    [userId, GIFT_VOUCHER_PLATFORM_REUSE_DAYS],
+  );
+  return rows[0] || null;
+}
+
 async function getGiftVoucherCooldown(userId, extraPlatformId = '') {
-  const claimed = await findRecentClaimedVoucherForUser(userId, extraPlatformId);
+  const [claimedVoucher, completedDeposit] = await Promise.all([
+    findRecentClaimedVoucherForUser(userId, extraPlatformId),
+    findRecentCompletedGiftVoucherDeposit(userId),
+  ]);
+  const claimed = [claimedVoucher, completedDeposit]
+    .filter(Boolean)
+    .sort((a, b) => {
+      const aTime = parseDbDateTime(a.claimed_at)?.getTime() || 0;
+      const bTime = parseDbDateTime(b.claimed_at)?.getTime() || 0;
+      return bTime - aTime;
+    })[0];
   if (!claimed) {
     return { blocked: false, remaining_days: 0, days: GIFT_VOUCHER_PLATFORM_REUSE_DAYS };
   }
