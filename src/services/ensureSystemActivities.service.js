@@ -4,7 +4,7 @@ import {
   SYSTEM_ACTIVITIES,
   SYSTEM_ACTIVITY_CATEGORIES,
 } from '../constants/systemActivityCatalog.js';
-import { LOYALTY_ORDERS_READ, LOYALTY_ORDERS_UPDATE } from '../constants/loyaltyPermissions.js';
+import { LOYALTY_ORDERS_READ, LOYALTY_ORDERS_UPDATE, AUTHORIZE_LOYALTY_ORDERS } from '../constants/loyaltyPermissions.js';
 import { nowSqlDateTime } from '../utils/slTime.js';
 import { syncRolePermissions, normalizeToActivityIdentifier } from './role.service.js';
 
@@ -98,6 +98,8 @@ export async function ensureSystemActivitiesCatalog() {
 
   await ensureBuiltinRolePermissions();
   await grantAuthorizePermissionToExistingAuthorizerRole();
+  await grantLoyaltyAuthorizeToWithdrawalAuthorizers();
+  await revokeLoyaltyAuthorizeFromAdminRoles();
   await grantMobileVerificationPendingToExistingAccountReaders();
   await grantLoyaltyOrderAccessToWithdrawalExecutives();
 
@@ -119,9 +121,65 @@ async function grantAuthorizePermissionToExistingAuthorizerRole() {
     [roleRows[0].id],
   );
   const current = currentRows.map((row) => normalizeToActivityIdentifier(row.name));
-  if (current.includes('authorize_withdrawal_data')) return;
+  const missing = ['authorize_withdrawal_data', AUTHORIZE_LOYALTY_ORDERS, LOYALTY_ORDERS_READ].filter(
+    (permission) => !current.includes(permission),
+  );
+  if (!missing.length) return;
 
-  await syncRolePermissions('withdrawal-authorizer', [...current, 'authorize_withdrawal_data']);
+  await syncRolePermissions('withdrawal-authorizer', [...current, ...missing]);
+}
+
+async function grantLoyaltyAuthorizeToWithdrawalAuthorizers() {
+  const roleRows = await query(
+    `SELECT DISTINCT r.id, r.name
+     FROM roles r
+     INNER JOIN role_has_permissions rhp ON rhp.role_id = r.id
+     INNER JOIN permissions p ON p.id = rhp.permission_id
+     WHERE r.guard_name = ?
+       AND p.name = ?
+       AND r.name <> 'customer'`,
+    [GUARD_NAME, 'authorize_withdrawal_data'],
+  );
+
+  for (const role of roleRows) {
+    if (role.name === 'super-admin' || role.name === 'sub-admin') continue;
+    const currentRows = await query(
+      `SELECT p.name
+       FROM permissions p
+       INNER JOIN role_has_permissions rhp ON rhp.permission_id = p.id
+       WHERE rhp.role_id = ?`,
+      [role.id],
+    );
+    const current = currentRows.map((row) => normalizeToActivityIdentifier(row.name));
+    const missing = [AUTHORIZE_LOYALTY_ORDERS, LOYALTY_ORDERS_READ].filter(
+      (permission) => !current.includes(permission),
+    );
+    if (!missing.length) continue;
+    await syncRolePermissions(role.name, [...current, ...missing]);
+  }
+}
+
+async function revokeLoyaltyAuthorizeFromAdminRoles() {
+  for (const roleName of ['super-admin', 'sub-admin']) {
+    const roleRows = await query(
+      `SELECT id FROM roles WHERE name = ? AND guard_name = ? LIMIT 1`,
+      [roleName, GUARD_NAME],
+    );
+    if (!roleRows[0]) continue;
+    const currentRows = await query(
+      `SELECT p.name
+       FROM permissions p
+       INNER JOIN role_has_permissions rhp ON rhp.permission_id = p.id
+       WHERE rhp.role_id = ?`,
+      [roleRows[0].id],
+    );
+    const current = currentRows.map((row) => normalizeToActivityIdentifier(row.name));
+    if (!current.includes(AUTHORIZE_LOYALTY_ORDERS)) continue;
+    await syncRolePermissions(
+      roleName,
+      current.filter((permission) => permission !== AUTHORIZE_LOYALTY_ORDERS),
+    );
+  }
 }
 
 async function grantMobileVerificationPendingToExistingAccountReaders() {

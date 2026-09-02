@@ -449,6 +449,74 @@ function validateTopupAccountId(methodName, accountId) {
   return null;
 }
 
+const GIFT_VOUCHER_PLATFORM_REUSE_DAYS = 30;
+export const GIFT_VOUCHER_PLATFORM_REUSE_CODE = 'GIFT_VOUCHER_PLATFORM_REUSE';
+const GIFT_VOUCHER_PLATFORM_REUSE_MESSAGE =
+  'This Platform ID was already used for a gift voucher deposit in the last 30 days. Please use a different Platform ID.';
+
+export function isGiftVoucherPaymentOption(name) {
+  return String(name || '')
+    .toLowerCase()
+    .replace(/[\s_-]+/g, '') === 'giftvoucher';
+}
+
+async function getPaymentOptionById(paymentOptionId) {
+  const id = Number(paymentOptionId);
+  if (!Number.isInteger(id) || id <= 0) return null;
+  const rows = await query(
+    `SELECT id, payment_option_name, payment_option_currency
+     FROM payment_options
+     WHERE id = ?
+     LIMIT 1`,
+    [id],
+  );
+  return rows[0] || null;
+}
+
+async function findRecentGiftVoucherDepositByPlatformId(platformId) {
+  const accountId = String(platformId || '').trim();
+  if (!accountId) return null;
+  const rows = await query(
+    `SELECT d.id
+     FROM deposits d
+     INNER JOIN payment_options po ON po.id = d.payment_option_id
+     WHERE d.topup_account_id = ?
+       AND LOWER(TRIM(po.payment_option_name)) IN ('gift voucher', 'giftvoucher')
+       AND d.transaction_status != 'Rejected'
+       AND d.created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+     LIMIT 1`,
+    [accountId, GIFT_VOUCHER_PLATFORM_REUSE_DAYS],
+  );
+  return rows[0] || null;
+}
+
+async function assertGiftVoucherPlatformIdUnused(platformId) {
+  const used = await findRecentGiftVoucherDepositByPlatformId(platformId);
+  if (!used) return;
+  const error = validationError(GIFT_VOUCHER_PLATFORM_REUSE_MESSAGE);
+  error.code = GIFT_VOUCHER_PLATFORM_REUSE_CODE;
+  throw error;
+}
+
+export async function checkGiftVoucherPlatformReuse(userId, params = {}) {
+  await assertDepositAccess(userId);
+  const paymentOption = await getPaymentOptionById(params.paymentOptionId ?? params.payment_option_id);
+  if (!isGiftVoucherPaymentOption(paymentOption?.payment_option_name)) {
+    return { allowed: true };
+  }
+  const topupAccountId = String(params.topupAccountId ?? params.topup_account_id ?? '').trim();
+  if (!topupAccountId) {
+    return { allowed: true };
+  }
+  const used = await findRecentGiftVoucherDepositByPlatformId(topupAccountId);
+  if (!used) return { allowed: true };
+  return {
+    allowed: false,
+    code: GIFT_VOUCHER_PLATFORM_REUSE_CODE,
+    message: GIFT_VOUCHER_PLATFORM_REUSE_MESSAGE,
+  };
+}
+
 export async function createUserDeposit(userId, payload) {
   const accountHolder = await assertDepositAccess(userId);
 
@@ -492,6 +560,14 @@ export async function createUserDeposit(userId, payload) {
 
   const accountError = validateTopupAccountId(topupMethod.name, topupAccountId);
   if (accountError) throw validationError(accountError);
+
+  const paymentOption = await getPaymentOptionById(paymentOptionId);
+  if (!paymentOption) {
+    throw validationError('Selected payment option is not available.');
+  }
+  if (isGiftVoucherPaymentOption(paymentOption.payment_option_name)) {
+    await assertGiftVoucherPlatformIdUnused(topupAccountId);
+  }
 
   if (depositAmount < topupMethod.minLimit || depositAmount > topupMethod.maxLimit) {
     throw validationError(

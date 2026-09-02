@@ -476,6 +476,17 @@ export async function getPendingCountForRole(userId, roles, roleName) {
     return Number(rows[0]?.total) || 0;
   }
 
+  if (roleName === 'loyalty-order-authorizer') {
+    const rows = await query(
+      `SELECT COUNT(*) AS total
+       FROM point_withdrawals
+       WHERE assigned_to = ?
+         AND status = 'Pending Authorization'`,
+      [userId],
+    );
+    return Number(rows[0]?.total) || 0;
+  }
+
   if (roleName === 'loyalty-bonus') {
     const rows = await query(
       `SELECT COUNT(*) AS total FROM loyalty_bonus_collects WHERE assigned_to = ? AND status = 'Pending'`,

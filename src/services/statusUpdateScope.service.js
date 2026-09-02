@@ -8,7 +8,7 @@ export const WITHDRAWAL_UPDATE_STATUSES = [
   'Rejected',
 ];
 
-export const LOYALTY_ORDER_UPDATE_STATUSES = ['Pending', 'Completed', 'Rejected'];
+export const LOYALTY_ORDER_UPDATE_STATUSES = ['Pending', 'Pending Authorization', 'Completed', 'Rejected'];
 export const LOYALTY_BONUS_UPDATE_STATUSES = ['Pending', 'Claimed', 'Rejected'];
 export const LOYALTY_VOUCHER_UPDATE_STATUSES = ['Pending', 'Claimed', 'Rejected'];
 
@@ -67,6 +67,15 @@ export function parseAllowedStatuses(raw, allowedAll) {
   const allowed = [
     ...new Set(parsed.map((item) => String(item || '').trim()).filter((item) => allowedAll.includes(item))),
   ];
+  if (
+    allowedAll.includes('Pending Authorization') &&
+    !allowed.includes('Pending Authorization') &&
+    allowed.includes('Pending') &&
+    (allowed.includes('Completed') || allowed.includes('Rejected'))
+  ) {
+    const pendingIdx = allowed.indexOf('Pending');
+    allowed.splice(pendingIdx + 1, 0, 'Pending Authorization');
+  }
   return allowed;
 }
 
