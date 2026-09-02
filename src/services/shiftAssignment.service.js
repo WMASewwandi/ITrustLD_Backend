@@ -442,12 +442,20 @@ export async function getPendingCountForRole(userId, roles, roleName) {
 
   if (roleName === 'deposit-executive') {
     const rows = await query(
-      `SELECT COUNT(*) AS total
-       FROM deposits
-       WHERE assigned_to = ?
-         AND transaction_status = 'Pending'
-         AND payment_proof IS NOT NULL`,
-      [userId],
+      `SELECT
+         (SELECT COUNT(*)
+          FROM deposits
+          WHERE assigned_to = ?
+            AND transaction_status = 'Pending'
+            AND payment_proof IS NOT NULL)
+         +
+         (SELECT COUNT(*)
+          FROM point_withdrawals
+          WHERE assigned_to = ?
+            AND status = 'Pending'
+            AND UPPER(TRIM(COALESCE(payment_option, ''))) <> 'BANK TRANSFER')
+         AS total`,
+      [userId, userId],
     );
     return Number(rows[0]?.total) || 0;
   }

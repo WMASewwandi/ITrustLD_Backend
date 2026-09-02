@@ -101,7 +101,8 @@ export async function ensureSystemActivitiesCatalog() {
   await grantLoyaltyAuthorizeToWithdrawalAuthorizers();
   await revokeLoyaltyAuthorizeFromAdminRoles();
   await grantMobileVerificationPendingToExistingAccountReaders();
-  await grantLoyaltyOrderAccessToWithdrawalExecutives();
+  await grantLoyaltyOrderAccessToRole('withdrawal-executive');
+  await grantLoyaltyOrderAccessToRole('deposit-executive');
 
   syncReady = true;
 }
@@ -208,10 +209,10 @@ async function grantMobileVerificationPendingToExistingAccountReaders() {
   }
 }
 
-async function grantLoyaltyOrderAccessToWithdrawalExecutives() {
+async function grantLoyaltyOrderAccessToRole(roleName) {
   const roleRows = await query(
-    `SELECT id FROM roles WHERE name = 'withdrawal-executive' AND guard_name = ? LIMIT 1`,
-    [GUARD_NAME],
+    `SELECT id FROM roles WHERE name = ? AND guard_name = ? LIMIT 1`,
+    [roleName, GUARD_NAME],
   );
   if (!roleRows[0]) return;
 
@@ -228,7 +229,7 @@ async function grantLoyaltyOrderAccessToWithdrawalExecutives() {
   );
   if (!missing.length) return;
 
-  await syncRolePermissions('withdrawal-executive', [...current, ...missing]);
+  await syncRolePermissions(roleName, [...current, ...missing]);
 }
 
 async function ensureBuiltinRolePermissions() {
