@@ -17,6 +17,26 @@ import {
 export { SL_TIMEZONE as SHIFT_TIMEZONE };
 
 const SHIFT_ROLES = ['sub-admin', 'deposit-executive', 'withdrawal-executive'];
+/** New shift + new assignments start at 00:10 SL. Ended shift stays logged in until 00:15. */
+const SHIFT_BOUNDARY_MINUTE = 10;
+const SHIFT_LOGIN_GRACE_END_MINUTE = 15;
+
+function isEndedShiftLoginGrace(date = new Date()) {
+  const parts = getColomboDateParts(date);
+  return (
+    parts.hour === 0 &&
+    parts.minute >= SHIFT_BOUNDARY_MINUTE &&
+    parts.minute < SHIFT_LOGIN_GRACE_END_MINUTE
+  );
+}
+
+function shouldMarkEndedShiftOffline(date = new Date()) {
+  const parts = getColomboDateParts(date);
+  if (parts.hour === 0 && parts.minute < SHIFT_LOGIN_GRACE_END_MINUTE) {
+    return false;
+  }
+  return true;
+}
 
 let lastAssignedAtColumnReady = false;
 
@@ -806,7 +826,7 @@ export async function runShiftEndRollover() {
     todayShift,
     endedShift,
     affected,
-    message: `Today active shift: ${todayShift}. Set ${affected} Shift ${endedShift} user(s) is_online=false.`,
+    message: `Today active shift: ${todayShift}. After 00:15 grace, set ${affected} Shift ${endedShift} user(s) is_online=false.`,
   };
 }
 
@@ -825,7 +845,9 @@ export function getAssignedShift(user) {
   return shift === 'A' || shift === 'B' ? shift : null;
 }
 
-/** System users on the opposite shift cannot sign in. Super/sub admins are exempt. */
+/** System users on the opposite shift cannot sign in. Super/sub admins are exempt.
+ *  Ended-shift users keep portal access until 00:15 SL so they can finish 00:09 work.
+ *  New assignments switch at 00:10 via getActiveShiftForDate(). */
 export async function assertCanLoginForActiveShift(user, roles = []) {
   if (isAdminExemptFromShiftRestriction(roles)) return null;
   const userShift = getAssignedShift(user);
@@ -834,6 +856,14 @@ export async function assertCanLoginForActiveShift(user, roles = []) {
   const activeShift = await getActiveShiftForDate();
   if (userShift === activeShift) {
     return { activeShift, userShift };
+  }
+
+  if (isEndedShiftLoginGrace()) {
+    const shiftDate = getShiftDateString();
+    const endedShift = await getActiveShiftForDate(shiftDateMinusOneDay(shiftDate));
+    if (userShift === endedShift) {
+      return { activeShift, userShift, grace: true };
+    }
   }
 
   const error = new Error(
@@ -850,8 +880,7 @@ let lastShiftRolloverDate = null;
 
 export function startShiftRolloverScheduler() {
   const tick = async () => {
-    const parts = getColomboDateParts();
-    if (parts.hour !== 0 || parts.minute !== 10) {
+    if (!shouldMarkEndedShiftOffline()) {
       return;
     }
 
