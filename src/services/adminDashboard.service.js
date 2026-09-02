@@ -572,6 +572,7 @@ async function fetchDepositsDashboardBundle(period, { includeDaily = true } = {}
       compareTotal,
       depositByDay,
       depositByMonth,
+      usdLkrRate,
       ...buildProfitFromDeposits(depositByDay, depositByMonth),
       ...buildRevenueUsdMaps(depositByDay, depositByMonth, usdLkrRate),
     };
@@ -593,6 +594,7 @@ async function fetchDepositsDashboardBundle(period, { includeDaily = true } = {}
     profitByMonth: profitMaps.profitByMonth,
     revenueUsdByDay: byDay ? revenueMaps.revenueUsdByDay : sparkRevenue.revenueUsdByDay,
     revenueUsdByMonth: revenueMaps.revenueUsdByMonth,
+    usdLkrRate,
   };
 }
 
@@ -768,6 +770,7 @@ async function buildAdminDashboard({
     profitByMonth,
     revenueUsdByDay,
     revenueUsdByMonth,
+    usdLkrRate,
   } = depositBundle;
 
   const growthPercentage = calcGrowthPercentage(
@@ -862,6 +865,20 @@ async function buildAdminDashboard({
     dailyProfitLabels = profitChartLabels;
   }
 
+  const lastRevenueIndex = (() => {
+    for (let i = monthlyRevenue.length - 1; i >= 0; i -= 1) {
+      if (Number(monthlyRevenue[i]) !== 0) return i;
+    }
+    return monthlyRevenue.length ? monthlyRevenue.length - 1 : -1;
+  })();
+  const lastRevenueUsd = lastRevenueIndex >= 0 ? Number(monthlyRevenue[lastRevenueIndex]) || 0 : 0;
+  const lastRevenueLabel = lastRevenueIndex >= 0 ? revenueLabels[lastRevenueIndex] || '' : '';
+  const safeUsdLkrRate = Number(usdLkrRate);
+  const lastRevenueLkr =
+    Number.isFinite(safeUsdLkrRate) && safeUsdLkrRate > 0
+      ? lastRevenueUsd * safeUsdLkrRate
+      : lastRevenueUsd;
+
   const compareLabel =
     period.filter === 'currentyear'
       ? String(year - 1)
@@ -880,6 +897,10 @@ async function buildAdminDashboard({
     totalCompletedWithdrawals,
     monthlyRevenue,
     revenueLabels,
+    lastRevenueUsd,
+    lastRevenueLkr,
+    lastRevenueLabel,
+    usdLkrRate: Number.isFinite(safeUsdLkrRate) && safeUsdLkrRate > 0 ? safeUsdLkrRate : null,
     monthlyProfit,
     profitChartLabels,
     dailyProfit,
@@ -922,8 +943,8 @@ export async function filterDashboardTransactions({ filter, fromDate, toDate } =
 }
 
 function dashboardCacheKey(filter, fromDate, toDate) {
-  // v7: profit = USD × 10; revenue = (USD × 10) ÷ today's SL USD rate
-  return `${filter}|${fromDate || ''}|${toDate || ''}|${getColomboDateParts().day}|v7`;
+  // v10: restore previous SL USD rate (latest Bank Transfer LKR)
+  return `${filter}|${fromDate || ''}|${toDate || ''}|${getColomboDateParts().day}|v10`;
 }
 
 export async function getAdminDashboard({ filter, fromDate, toDate } = {}) {
