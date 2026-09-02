@@ -385,45 +385,6 @@ function sanitizePendingSearchParams(status, params) {
   };
 }
 
-function isWithdrawalSearchActive(status, params) {
-  const normalizedStatus = normalizeStatus(status);
-  if (params.keyword?.trim()) return true;
-  if (normalizedStatus === 'Pending') return false;
-  if (normalizedStatus === 'Pending Authorization') return false;
-  if (normalizedStatus === 'All') {
-    return Boolean(
-      params.transactionId ||
-        params.platformId ||
-        params.userAccount ||
-        (params.amount != null && params.amount !== '') ||
-        params.filter ||
-        params.fromDate ||
-        params.toDate,
-    );
-  }
-
-  return Boolean(
-    params.transactionId ||
-      params.platformId ||
-      params.userAccount ||
-      (params.amount != null && params.amount !== '') ||
-      (params.filter && params.filter !== 'today') ||
-      params.fromDate ||
-      params.toDate,
-  );
-}
-
-function sumPageTotals(rows) {
-  return rows.reduce(
-    (acc, row) => {
-      acc.totalCashoutAmount += Number(row.cashout_amount) || 0;
-      acc.totalReceivingAmount += Number(row.receiving_amount) || 0;
-      return acc;
-    },
-    { totalCashoutAmount: 0, totalReceivingAmount: 0 },
-  );
-}
-
 async function listWithdrawalsQuery({
   status,
   page,
@@ -578,7 +539,13 @@ async function listWithdrawalsQuery({
       : 'ORDER BY w.updated_at DESC, w.id DESC';
 
   const [countRows, idRows] = await Promise.all([
-    query(`SELECT COUNT(*) AS total FROM withdrawals w ${whereSql}`, values),
+    query(
+      `SELECT COUNT(*) AS total,
+              COALESCE(SUM(w.cashout_amount), 0) AS totalCashoutAmount,
+              COALESCE(SUM(w.receiving_amount), 0) AS totalReceivingAmount
+       FROM withdrawals w ${whereSql}`,
+      values,
+    ),
     take <= 0
       ? Promise.resolve([])
       : query(
@@ -624,6 +591,10 @@ async function listWithdrawalsQuery({
     rows,
     adminUsers,
     assignedUsers,
+    totals: {
+      totalCashoutAmount: Number(countRows[0]?.totalCashoutAmount) || 0,
+      totalReceivingAmount: Number(countRows[0]?.totalReceivingAmount) || 0,
+    },
     pagination: {
       current_page: pageNum,
       total_pages: totalPages,
@@ -632,35 +603,6 @@ async function listWithdrawalsQuery({
       has_prev: pageNum > 1,
       has_next: pageNum < totalPages,
     },
-  };
-}
-
-async function getWithdrawalTotals(status, assignedToUserId) {
-  const normalizedStatus = normalizeStatus(status);
-  const { conditions, values } = buildBaseConditions(
-    normalizedStatus === 'All' ? 'Pending' : normalizedStatus,
-    assignedToUserId,
-  );
-
-  if (normalizedStatus === 'Completed' || normalizedStatus === 'Rejected') {
-    const today = parseDateWindow('today');
-    conditions.push('w.updated_at >= ?');
-    conditions.push('w.updated_at < ?');
-    values.push(formatTimestampSl(today.from), formatTimestampSl(today.to));
-  }
-
-  const rows = await query(
-    `SELECT
-       COALESCE(SUM(w.cashout_amount), 0) AS totalCashoutAmount,
-       COALESCE(SUM(w.receiving_amount), 0) AS totalReceivingAmount
-     FROM withdrawals w
-     WHERE ${conditions.join(' AND ')}`,
-    values,
-  );
-
-  return {
-    totalCashoutAmount: Number(rows[0]?.totalCashoutAmount) || 0,
-    totalReceivingAmount: Number(rows[0]?.totalReceivingAmount) || 0,
   };
 }
 
@@ -711,23 +653,10 @@ export async function listWithdrawalsForAdmin(auth, params = {}) {
     hasActiveWithdrawalAuthorizers(),
   ]);
 
-  const searchActive = isWithdrawalSearchActive(statusForTotals, {
-    keyword: sanitized.keyword,
-    transactionId: sanitized.transactionId,
-    platformId: sanitized.platformId,
-    userAccount: sanitized.userAccount,
-    amount: sanitized.amount,
-    filter: sanitized.filter,
-    fromDate: sanitized.fromDate,
-    toDate: sanitized.toDate,
-  });
-
-  const totals = searchActive
-    ? sumPageTotals(result.rows)
-    : await getWithdrawalTotals(
-        statusForTotals === 'All' ? 'Pending' : statusForTotals,
-        assignedToUserId,
-      );
+  const totals = result.totals || {
+    totalCashoutAmount: 0,
+    totalReceivingAmount: 0,
+  };
 
   const [scammerFlags, similarCounts, statusScope] = await Promise.all([
     batchScammerCheck({

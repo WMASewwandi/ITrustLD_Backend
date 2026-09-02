@@ -40,7 +40,7 @@ const DEFAULT_DASHBOARD_FILTER = 'currentyear';
 const YEAR_DASHBOARD_FILTER = 'currentyear';
 const dashboardCacheMap = new Map();
 let platformsAllTimeCache = { data: null, expiresAt: 0, version: 0 };
-const PLATFORMS_CACHE_VERSION = 3;
+const PLATFORMS_CACHE_VERSION = 4;
 let dashboardIndexesReady = false;
 
 function readDashboardCache(key) {
@@ -653,12 +653,14 @@ async function getAlltimeTotalDeposits(filter, fromDate, toDate) {
       `SELECT id, topup_method_name AS name, topup_method_logo AS logo
        FROM topup_methods
        WHERE (is_deleted = 0 OR is_deleted IS NULL)
+         AND UPPER(TRIM(COALESCE(availability, ''))) = 'AVAILABLE'
        ORDER BY id ASC`,
     ),
     query(
       `SELECT id, cashout_method_name AS name, cashout_method_logo AS logo
        FROM cashout_methods
        WHERE (is_deleted = 0 OR is_deleted IS NULL)
+         AND UPPER(TRIM(COALESCE(availability, ''))) = 'AVAILABLE'
        ORDER BY id ASC`,
     ),
     query(

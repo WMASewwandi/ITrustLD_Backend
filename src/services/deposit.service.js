@@ -204,44 +204,6 @@ function sanitizePendingSearchParams(status, params) {
   };
 }
 
-function isDepositSearchActive(status, params) {
-  const normalizedStatus = normalizeStatus(status);
-  if (params.keyword?.trim()) return true;
-  if (normalizedStatus === 'Pending') return false;
-  if (normalizedStatus === 'All') {
-    return Boolean(
-      params.transactionId ||
-        params.platformId ||
-        params.userAccount ||
-        (params.amount != null && params.amount !== '') ||
-        params.filter ||
-        params.fromDate ||
-        params.toDate,
-    );
-  }
-
-  return Boolean(
-    params.transactionId ||
-      params.platformId ||
-      params.userAccount ||
-      (params.amount != null && params.amount !== '') ||
-      (params.filter && params.filter !== 'today') ||
-      params.fromDate ||
-      params.toDate,
-  );
-}
-
-function sumPageTotals(rows) {
-  return rows.reduce(
-    (acc, row) => {
-      acc.totalDepositAmount += Number(row.deposit_amount) || 0;
-      acc.totalPaymentAmount += Number(row.payment_amount) || 0;
-      return acc;
-    },
-    { totalDepositAmount: 0, totalPaymentAmount: 0 },
-  );
-}
-
 async function listDepositsQuery({
   status,
   page,
@@ -390,7 +352,9 @@ async function listDepositsQuery({
     normalizedStatus === 'Pending' ? 'ORDER BY d.updated_at ASC' : 'ORDER BY d.updated_at DESC';
 
   const countRows = await query(
-    `SELECT COUNT(*) AS total
+    `SELECT COUNT(*) AS total,
+            COALESCE(SUM(d.deposit_amount), 0) AS totalDepositAmount,
+            COALESCE(SUM(d.payment_amount), 0) AS totalPaymentAmount
      FROM deposits d
      ${joins}
      ${whereSql}`,
@@ -428,6 +392,10 @@ async function listDepositsQuery({
     rows,
     adminUsers,
     assignedUsers,
+    totals: {
+      totalDepositAmount: Number(countRows[0]?.totalDepositAmount) || 0,
+      totalPaymentAmount: Number(countRows[0]?.totalPaymentAmount) || 0,
+    },
     pagination: {
       current_page: pageNum,
       total_pages: totalPages,
@@ -436,35 +404,6 @@ async function listDepositsQuery({
       has_prev: pageNum > 1,
       has_next: pageNum < totalPages,
     },
-  };
-}
-
-async function getDepositTotals(status, assignedToUserId) {
-  const normalizedStatus = normalizeStatus(status);
-  const { conditions, values } = buildBaseConditions(
-    normalizedStatus === 'All' ? 'Pending' : normalizedStatus,
-    assignedToUserId,
-  );
-
-  if (normalizedStatus === 'Completed' || normalizedStatus === 'Rejected') {
-    const today = parseDateWindow('today');
-    conditions.push('d.updated_at >= ?');
-    conditions.push('d.updated_at < ?');
-    values.push(formatTimestampSl(today.from), formatTimestampSl(today.to));
-  }
-
-  const rows = await query(
-    `SELECT
-       COALESCE(SUM(d.deposit_amount), 0) AS totalDepositAmount,
-       COALESCE(SUM(d.payment_amount), 0) AS totalPaymentAmount
-     FROM deposits d
-     WHERE ${conditions.join(' AND ')}`,
-    values,
-  );
-
-  return {
-    totalDepositAmount: Number(rows[0]?.totalDepositAmount) || 0,
-    totalPaymentAmount: Number(rows[0]?.totalPaymentAmount) || 0,
   };
 }
 
@@ -505,23 +444,10 @@ export async function listDepositsForAdmin(auth, params = {}) {
     maxLoadRows,
   });
 
-  const searchActive = isDepositSearchActive(statusForTotals, {
-    keyword: sanitized.keyword,
-    transactionId: sanitized.transactionId,
-    platformId: sanitized.platformId,
-    userAccount: sanitized.userAccount,
-    amount: sanitized.amount,
-    filter: sanitized.filter,
-    fromDate: sanitized.fromDate,
-    toDate: sanitized.toDate,
-  });
-
-  const totals = searchActive
-    ? sumPageTotals(result.rows)
-    : await getDepositTotals(
-        statusForTotals === 'All' ? 'Pending' : statusForTotals,
-        assignedToUserId,
-      );
+  const totals = result.totals || {
+    totalDepositAmount: 0,
+    totalPaymentAmount: 0,
+  };
 
   const scammerFlags = await batchScammerCheck({
     platformIds: result.rows.map((row) => row.topup_account_id),
