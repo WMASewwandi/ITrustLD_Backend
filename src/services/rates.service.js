@@ -4,6 +4,7 @@ import { formatTimestampSl, formatYmdColombo, parseDbDateTime } from '../utils/s
 import { sendEmailAndSms } from './notification.service.js';
 import { rateChangeEmailHtml } from './mail.templates.js';
 import { fullyVerifiedAccountSql } from './accountHolder.service.js';
+import { ensureWalletCatalogLinksForRates } from './wallet.service.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -96,6 +97,7 @@ export async function listRatePaymentOptions() {
 }
 
 export async function listWalletsForRates() {
+  await ensureWalletCatalogLinksForRates();
   const rows = await query(
     `SELECT w.id, w.wallet_name
      FROM wallets w

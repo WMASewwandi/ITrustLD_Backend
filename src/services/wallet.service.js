@@ -1,4 +1,5 @@
 import { getDbDriver, query } from '../config/database.js';
+import { columnExists } from '../db/helpers.js';
 import { listPayAccountChoices, payAccountExists } from './payAccount.service.js';
 import { resolveWalletLogoPublicUrl, storeWalletLogo } from './walletLogoStorage.service.js';
 
@@ -24,11 +25,22 @@ const WALLET_CONFIG = {
 let topupVoucherFlagSchemaReady = false;
 let walletNavigateSchemaReady = false;
 let walletPayAccountSchemaReady = false;
+let walletCatalogFkSchemaReady = false;
 
 function validationError(message, status = 422) {
   const error = new Error(message);
   error.status = status;
   return error;
+}
+
+function insertedId(result) {
+  const id = Number(result?.insertId ?? result?.lastInsertRowid ?? 0);
+  return Number.isSafeInteger(id) && id > 0 ? id : 0;
+}
+
+function toPositiveInt(value) {
+  const id = Number(value);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
 }
 
 function parseBooleanFlag(value, fallback = false) {
@@ -80,7 +92,7 @@ async function resolveOrCreateWalletCatalogId(methodName, platformTypes) {
      LIMIT 1`,
     [identifier, identifier],
   );
-  if (existing[0]) return existing[0].id;
+  if (existing[0]) return toPositiveInt(existing[0].id);
 
   const platformType = mapPlatformTypeForWalletCatalog(platformTypes);
   const result = await query(
@@ -88,7 +100,22 @@ async function resolveOrCreateWalletCatalogId(methodName, platformTypes) {
      VALUES (?, ?, ?, NOW(), NOW())`,
     [identifier, name, platformType],
   );
-  return result.insertId;
+  const createdId = insertedId(result);
+  if (createdId) {
+    const created = await query(`SELECT id FROM wallets WHERE id = ? LIMIT 1`, [createdId]);
+    if (created[0]) return toPositiveInt(created[0].id);
+  }
+
+  const fallback = await query(
+    `SELECT id
+     FROM wallets
+     WHERE UPPER(wallet_identifier) = ?
+        OR UPPER(wallet_name) = ?
+     ORDER BY id DESC
+     LIMIT 1`,
+    [identifier, identifier],
+  );
+  return toPositiveInt(fallback[0]?.id);
 }
 
 async function methodHasExchangeRates(kind, methodId) {
@@ -175,19 +202,24 @@ async function ensureMethodWalletCatalogLink(
   const current = await query(`SELECT wallet_id FROM ${config.table} WHERE id = ? LIMIT 1`, [
     methodId,
   ]);
-  let catalogWalletId = current[0]?.wallet_id ?? null;
+  let catalogWalletId = toPositiveInt(current[0]?.wallet_id);
+
+  if (catalogWalletId) {
+    const linked = await query(`SELECT id FROM wallets WHERE id = ? LIMIT 1`, [catalogWalletId]);
+    if (!linked[0]) catalogWalletId = null;
+  }
 
   if (!catalogWalletId) {
     catalogWalletId = await resolveOrCreateWalletCatalogId(methodName, platformTypes);
     if (catalogWalletId) {
-      await query(`UPDATE ${config.table} SET wallet_id = ? WHERE id = ?`, [
-        catalogWalletId,
-        methodId,
-      ]);
+      await query(
+        `UPDATE ${config.table} SET wallet_id = ?, updated_at = NOW() WHERE id = ?`,
+        [catalogWalletId, methodId],
+      );
     }
   }
 
-  if (copyRates && !(await methodHasExchangeRates(kind, methodId))) {
+  if (copyRates && catalogWalletId && !(await methodHasExchangeRates(kind, methodId))) {
     await copyExchangeRatesFromPreviousMethod(
       kind,
       methodId,
@@ -199,15 +231,44 @@ async function ensureMethodWalletCatalogLink(
   return catalogWalletId;
 }
 
-async function backfillWalletCatalogLinks(kind, rows) {
+async function backfillWalletCatalogLinks(kind, rows, { copyRates = true } = {}) {
   for (const row of rows) {
     const config = WALLET_CONFIG[kind];
     const platformTypes = parsePlatformTypes(row.platform_id_type || row[config.idTypeColumn] || '');
     const methodName = row[config.nameColumn] || '';
     await ensureMethodWalletCatalogLink(kind, row.id, methodName, platformTypes, {
-      copyRates: true,
+      copyRates,
     });
   }
+}
+
+function isDeletedWalletRow(row) {
+  return Number(row.is_deleted) === 1 || row.is_deleted === true;
+}
+
+/** Link top-up/cash-out methods to the wallets catalog without copying rates. */
+export async function ensureWalletCatalogLinksForRates() {
+  await ensureWalletMethodSchema();
+
+  const topupRows = await query(
+    `SELECT id, topup_method_name, platform_id_type, topup_method_id_type, is_deleted
+     FROM topup_methods`,
+  );
+  await backfillWalletCatalogLinks(
+    'topup',
+    topupRows.filter((row) => !isDeletedWalletRow(row)),
+    { copyRates: false },
+  );
+
+  const cashoutRows = await query(
+    `SELECT id, cashout_method_name, platform_id_type, cashout_method_id_type, is_deleted
+     FROM cashout_methods`,
+  );
+  await backfillWalletCatalogLinks(
+    'cashout',
+    cashoutRows.filter((row) => !isDeletedWalletRow(row)),
+    { copyRates: false },
+  );
 }
 
 async function hasAllowForVoucherColumn() {
@@ -317,9 +378,38 @@ export async function ensureWalletPayAccountSchema() {
   walletPayAccountSchemaReady = true;
 }
 
+async function ensureWalletCatalogFkColumn(tableName) {
+  const driver = getDbDriver();
+  if (driver === 'sqlite') {
+    if (!(await columnExists(tableName, 'wallet_id'))) {
+      await query(`ALTER TABLE ${tableName} ADD COLUMN wallet_id INTEGER NULL`);
+    }
+    return;
+  }
+
+  if (!(await columnExists(tableName, 'wallet_id'))) {
+    await query(`ALTER TABLE ${tableName} ADD COLUMN wallet_id BIGINT UNSIGNED NULL`);
+    return;
+  }
+
+  const cols = await query(`SHOW COLUMNS FROM ${tableName} LIKE 'wallet_id'`);
+  const type = String(cols[0]?.Type || '').toLowerCase();
+  if (!type.includes('bigint')) {
+    await query(`ALTER TABLE ${tableName} MODIFY COLUMN wallet_id BIGINT UNSIGNED NULL`);
+  }
+}
+
+export async function ensureWalletCatalogFkSchema() {
+  if (walletCatalogFkSchemaReady) return;
+  await ensureWalletCatalogFkColumn('topup_methods');
+  await ensureWalletCatalogFkColumn('cashout_methods');
+  walletCatalogFkSchemaReady = true;
+}
+
 async function ensureWalletMethodSchema() {
   await ensureWalletNavigateSchema();
   await ensureWalletPayAccountSchema();
+  await ensureWalletCatalogFkSchema();
 }
 
 async function loadPayAccountIndex() {
@@ -787,7 +877,7 @@ export async function createTopupWallet(payload, logoFile) {
     insertValues,
   );
 
-  const methodId = result.insertId;
+  const methodId = insertedId(result);
   await createWalletPaymentOptions(methodId, config.walletType, paymentMethodIds);
   await ensureMethodWalletCatalogLink('topup', methodId, validated.name, validated.platformTypes, {
     copyRates: true,
@@ -865,7 +955,7 @@ export async function createCashoutWallet(payload, logoFile) {
     insertValues,
   );
 
-  const methodId = result.insertId;
+  const methodId = insertedId(result);
   await createWalletPaymentOptions(methodId, config.walletType, paymentMethodIds);
   await ensureMethodWalletCatalogLink('cashout', methodId, validated.name, validated.platformTypes, {
     copyRates: true,
