@@ -74,9 +74,15 @@ async function ensureLastAssignedAtColumn() {
 }
 
 const USER_SELECT_WITH_LAST_ASSIGNED =
-  `SELECT DISTINCT u.id, u.name, u.email, u.is_online, u.shift, u.shift_start_time, u.shift_end_time, u.last_assigned_at`;
+  `SELECT DISTINCT u.id, u.name, u.email, u.is_online, u.is_active, u.shift, u.shift_start_time, u.shift_end_time, u.last_assigned_at`;
 const USER_SELECT_WITHOUT_LAST_ASSIGNED =
-  `SELECT DISTINCT u.id, u.name, u.email, u.is_online, u.shift, u.shift_start_time, u.shift_end_time`;
+  `SELECT DISTINCT u.id, u.name, u.email, u.is_online, u.is_active, u.shift, u.shift_start_time, u.shift_end_time`;
+const ACTIVE_USER_SQL = `(u.is_active IS NULL OR u.is_active = 1)`;
+
+function isActiveSystemUser(user) {
+  if (user?.is_active === undefined || user?.is_active === null) return true;
+  return Boolean(Number(user.is_active));
+}
 
 function parseTimeToMinutes(value) {
   if (!value) return null;
@@ -388,6 +394,7 @@ async function getUsersByPermission(permissionName) {
      INNER JOIN model_has_roles mhr ON mhr.model_id = u.id AND mhr.model_type = ?
      INNER JOIN role_has_permissions rhp ON rhp.role_id = mhr.role_id
      WHERE rhp.permission_id IN (${placeholders})
+       AND ${ACTIVE_USER_SQL}
      ORDER BY u.id ASC`,
     [LARAVEL_USER_MODEL, ...ids],
   );
@@ -399,6 +406,7 @@ async function getUsersByPermission(permissionName) {
        FROM users u
        INNER JOIN model_has_permissions mhp ON mhp.model_id = u.id AND mhp.model_type = ?
        WHERE mhp.permission_id IN (${placeholders})
+         AND ${ACTIVE_USER_SQL}
        ORDER BY u.id ASC`,
       [LARAVEL_USER_MODEL, ...ids],
     );
@@ -424,6 +432,7 @@ async function getUsersByRole(roleName) {
      INNER JOIN model_has_roles mhr ON mhr.model_id = u.id AND mhr.model_type = ?
      INNER JOIN roles r ON r.id = mhr.role_id
      WHERE r.name = ?
+       AND ${ACTIVE_USER_SQL}
      ORDER BY u.id ASC`,
     [LARAVEL_USER_MODEL, roleName],
   );
@@ -440,6 +449,7 @@ async function getUsersByRoles(roleNames) {
      INNER JOIN model_has_roles mhr ON mhr.model_id = u.id AND mhr.model_type = ?
      INNER JOIN roles r ON r.id = mhr.role_id
      WHERE r.name IN (${placeholders})
+       AND ${ACTIVE_USER_SQL}
      ORDER BY u.id ASC`,
     [LARAVEL_USER_MODEL, ...roleNames],
   );
@@ -576,7 +586,7 @@ export async function getCandidateExecutives(roleName) {
     roleName === 'withdrawal-authorizer'
       ? await getAuthorizerUsers()
       : await getUsersByRole(roleName);
-  const eligible = await withoutSystemAdmins(allInRole);
+  const eligible = (await withoutSystemAdmins(allInRole)).filter(isActiveSystemUser);
   if (!eligible.length) return [];
 
   let shiftFiltered = eligible.filter((user) => user.shift === activeShift);
@@ -620,7 +630,7 @@ export async function getCandidateUsersByPermissions(permissionNames) {
   await initializeShiftIfNeeded();
   const activeShift = await getActiveShiftForDate();
   const allWithPermission = await getUsersByAnyPermission(permissionNames);
-  const eligible = await withoutSystemAdmins(allWithPermission);
+  const eligible = (await withoutSystemAdmins(allWithPermission)).filter(isActiveSystemUser);
   if (!eligible.length) return [];
 
   let shiftFiltered = eligible.filter((user) => user.shift === activeShift);
@@ -702,7 +712,9 @@ export async function buildExecutivesForAssignment(roleName, { includeSubAdmin =
     roleName === 'withdrawal-authorizer'
       ? await getAuthorizerUsers()
       : await getUsersByRoles(includeSubAdmin ? [roleName, 'sub-admin'] : [roleName]);
-  const uniqueUsers = [...new Map(users.map((user) => [user.id, user])).values()];
+  const uniqueUsers = [...new Map(users.map((user) => [user.id, user])).values()].filter(
+    isActiveSystemUser,
+  );
 
   const executives = [];
   for (const user of uniqueUsers) {
@@ -754,7 +766,9 @@ export async function buildUsersForAssignmentByPermissions(permissionNames, pend
   const activeShift = await getActiveShiftForDate();
   const now = new Date();
   const users = await withoutSystemAdmins(await getUsersByAnyPermission(permissionNames));
-  const uniqueUsers = [...new Map(users.map((user) => [user.id, user])).values()];
+  const uniqueUsers = [...new Map(users.map((user) => [user.id, user])).values()].filter(
+    isActiveSystemUser,
+  );
 
   const executives = [];
   for (const user of uniqueUsers) {
