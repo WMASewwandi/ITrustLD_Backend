@@ -797,14 +797,6 @@ export async function createUserLoyaltyWithdrawal(userId, payload = {}) {
     throw validationError('Selected receiving account was not found.');
   }
 
-  await assertPlatformIdUnusedForLoyaltyRequest({
-    userId,
-    accountType,
-    accountId,
-    table: 'point_withdrawals',
-    label: 'loyalty order',
-  });
-
   const rate = await getLatestPointWithdrawalRate(accountType);
   const isPartner = accountHolder.is_patner === 'YES';
   const usdPerBlock = isPartner ? PARTNER_USD : STANDARD_USD;
