@@ -436,6 +436,54 @@ async function getLatestPointWithdrawalRate(paymentOptionName) {
   return Number(rows[0]?.rate || 1);
 }
 
+function roundMoney2(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.round((n + Number.EPSILON) * 100) / 100;
+}
+
+function formatPaymentLimit(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return String(value ?? '');
+  return n.toLocaleString('en-US', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  });
+}
+
+async function getPaymentOptionLimits(accountType) {
+  const name = String(accountType || '').trim().toUpperCase();
+  if (!name) return null;
+  const rows = await query(
+    `SELECT payment_option_name, payment_option_currency, minimum_limit, maximum_limit
+     FROM payment_options
+     WHERE UPPER(TRIM(payment_option_name)) = ?
+       AND (is_deleted = 0 OR is_deleted IS NULL)
+     ORDER BY CASE WHEN UPPER(availability) = 'AVAILABLE' THEN 0 ELSE 1 END, id ASC
+     LIMIT 1`,
+    [name],
+  );
+  return rows[0] ?? null;
+}
+
+function assertCashoutWithinPaymentOptionLimits(cashoutAmount, accountCurrencyAmount, option) {
+  if (!option) return;
+
+  const min = Number(option.minimum_limit);
+  const max = Number(option.maximum_limit);
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return;
+  if (min === 0 && max === 0) return;
+
+  const currency = String(option.payment_option_currency || 'USD').trim().toUpperCase() || 'USD';
+  const amount = currency === 'LKR' ? roundMoney2(accountCurrencyAmount) : roundMoney2(cashoutAmount);
+
+  if (amount < min || amount > max) {
+    throw validationError(
+      `Cash-out amount must be between ${currency} ${formatPaymentLimit(min)} and ${currency} ${formatPaymentLimit(max)}.`,
+    );
+  }
+}
+
 async function accountExistsForUser(userId, accountType, accountId) {
   const type = String(accountType || '').trim().toUpperCase();
   const id = Number(accountId);
@@ -762,6 +810,9 @@ export async function createUserLoyaltyWithdrawal(userId, payload = {}) {
   const usdPerBlock = isPartner ? PARTNER_USD : STANDARD_USD;
   const cashoutAmount = (points / POINT_DIVIDER) * usdPerBlock;
   const accountCurrencyAmount = cashoutAmount * rate;
+
+  const paymentOptionLimits = await getPaymentOptionLimits(accountType);
+  assertCashoutWithinPaymentOptionLimits(cashoutAmount, accountCurrencyAmount, paymentOptionLimits);
 
   const issuedAtSl = nowSqlDateTime();
   const insert = await query(

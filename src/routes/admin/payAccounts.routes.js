@@ -14,6 +14,18 @@ import {
   updateBinanceAccount,
   updateWalletAccount,
 } from '../../services/payAccount.service.js';
+import {
+  createCustomPayAccountCategory,
+  createCustomPayAccountField,
+  createCustomPayAccountRecord,
+  deleteCustomPayAccountCategory,
+  deleteCustomPayAccountField,
+  deleteCustomPayAccountRecord,
+  toggleCustomPayAccountRecord,
+  updateCustomPayAccountCategory,
+  updateCustomPayAccountField,
+  updateCustomPayAccountRecord,
+} from '../../services/customPayAccount.service.js';
 
 export const adminPayAccountsRouter = Router();
 
@@ -26,6 +38,141 @@ adminPayAccountsRouter.get(
     try {
       const accounts = await listPayAccounts();
       res.json({ ok: true, ...accounts });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminPayAccountsRouter.post(
+  '/categories',
+  requirePermission('change_account_configs'),
+  async (req, res, next) => {
+    try {
+      const category = await createCustomPayAccountCategory(req.body);
+      res.status(201).json({ ok: true, category });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminPayAccountsRouter.post(
+  '/categories/:categoryId/update',
+  requirePermission('change_account_configs'),
+  async (req, res, next) => {
+    try {
+      const category = await updateCustomPayAccountCategory(req.params.categoryId, req.body);
+      res.json({ ok: true, category });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminPayAccountsRouter.post(
+  '/categories/:categoryId/delete',
+  requirePermission('change_account_configs'),
+  async (req, res, next) => {
+    try {
+      const result = await deleteCustomPayAccountCategory(req.params.categoryId);
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminPayAccountsRouter.post(
+  '/categories/:categoryId/fields',
+  requirePermission('change_account_configs'),
+  async (req, res, next) => {
+    try {
+      const field = await createCustomPayAccountField(req.params.categoryId, req.body);
+      res.status(201).json({ ok: true, field });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminPayAccountsRouter.post(
+  '/fields/:fieldId/update',
+  requirePermission('change_account_configs'),
+  async (req, res, next) => {
+    try {
+      const field = await updateCustomPayAccountField(req.params.fieldId, req.body);
+      res.json({ ok: true, field });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminPayAccountsRouter.post(
+  '/fields/:fieldId/delete',
+  requirePermission('change_account_configs'),
+  async (req, res, next) => {
+    try {
+      const result = await deleteCustomPayAccountField(req.params.fieldId);
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminPayAccountsRouter.post(
+  '/categories/:categoryId/records',
+  requirePermission('change_account_configs'),
+  async (req, res, next) => {
+    try {
+      const account = await createCustomPayAccountRecord(req.params.categoryId, req.body);
+      res.status(201).json({ ok: true, account });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminPayAccountsRouter.post(
+  '/records/:recordId/update',
+  requirePermission('change_account_configs'),
+  async (req, res, next) => {
+    try {
+      const account = await updateCustomPayAccountRecord(req.params.recordId, req.body);
+      res.json({ ok: true, account });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminPayAccountsRouter.post(
+  '/records/:recordId/delete',
+  requirePermission('change_account_configs'),
+  async (req, res, next) => {
+    try {
+      const result = await deleteCustomPayAccountRecord(req.params.recordId);
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminPayAccountsRouter.post(
+  '/records/:recordId/toggle-status',
+  requirePermission('change_account_configs'),
+  async (req, res, next) => {
+    try {
+      const active =
+        req.body?.active === true ||
+        req.body?.active === 'true' ||
+        req.body?.active === 1 ||
+        req.body?.active === '1';
+      const account = await toggleCustomPayAccountRecord(req.params.recordId, active);
+      res.json({ ok: true, account });
     } catch (error) {
       next(error);
     }

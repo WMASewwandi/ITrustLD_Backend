@@ -22,6 +22,7 @@ import {
   assertDepositMethodPendingLimit,
   getOpenDepositCountsByMethod,
 } from './pendingMethodLimit.service.js';
+import { loadCustomPayAccountsByCategoryName } from './customPayAccount.service.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -345,6 +346,11 @@ async function loadPaymentAccounts(paymentOptionName) {
         cardPaymentLink: row.card_payment_link,
       })),
     };
+  }
+
+  const custom = await loadCustomPayAccountsByCategoryName(paymentOptionName);
+  if (custom.type === 'custom') {
+    return custom;
   }
 
   return { type: 'unknown', accounts: [] };

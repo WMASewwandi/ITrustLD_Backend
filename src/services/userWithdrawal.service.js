@@ -5,7 +5,7 @@ import {
   needsVerification,
 } from './accountHolder.service.js';
 import { resolveWalletLogoPublicUrl } from './walletLogoStorage.service.js';
-import { ensureWalletNavigateSchema } from './wallet.service.js';
+import { ensureWalletNavigateSchema, ensureWalletPayAccountSchema } from './wallet.service.js';
 import { autoAssignWithdrawal } from './withdrawalAssignment.service.js';
 import { storeWithdrawalProof } from './withdrawalProofStorage.service.js';
 import { formatCustomerRejectReason } from '../constants/rejectReasons.js';
@@ -16,6 +16,10 @@ import {
   assertWithdrawalMethodPendingLimit,
   getOpenWithdrawalCountsByMethod,
 } from './pendingMethodLimit.service.js';
+import {
+  loadCustomPayAccountByRecordId,
+  loadCustomPayAccountsByCategoryName,
+} from './customPayAccount.service.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -335,7 +339,164 @@ async function loadCashoutMethodPaymentAccounts(cashoutMethodName) {
     };
   }
 
+  const custom = await loadCustomPayAccountsByCategoryName(cashoutMethodName);
+  if (custom.type === 'custom') {
+    return custom;
+  }
+
   return { type: 'unknown', accounts: [] };
+}
+
+const LINKED_PAY_ACCOUNT_PANEL_TYPE = {
+  bank: 'bank_transfer',
+  skrill: 'skrill',
+  neteller: 'neteller',
+  binance: 'binance',
+  xm: 'xm',
+  pm: 'perfect_money',
+};
+
+async function loadPayAccountByTypeAndId(accountType, accountId) {
+  const type = String(accountType || '').trim().toLowerCase();
+  const id = Number(accountId);
+  if (type === 'custom') {
+    if (!Number.isInteger(id) || id <= 0) return { type: 'custom', accounts: [] };
+    return loadCustomPayAccountByRecordId(id, { activeOnly: true });
+  }
+  const panelType = LINKED_PAY_ACCOUNT_PANEL_TYPE[type];
+  if (!panelType || !Number.isInteger(id) || id <= 0) {
+    return { type: null, accounts: [] };
+  }
+
+  if (type === 'bank') {
+    const rows = await query(
+      `SELECT id, bank_account_number, beneficiary_name, bank, branch
+       FROM admin_bank_accounts
+       WHERE id = ?
+         AND status = 'AVAILABLE'
+         AND (is_deleted = 0 OR is_deleted IS NULL)
+       LIMIT 1`,
+      [id],
+    );
+    if (!rows[0]) return { type: panelType, accounts: [] };
+    return {
+      type: panelType,
+      accounts: [
+        {
+          id: rows[0].id,
+          accountNumber: rows[0].bank_account_number,
+          name: rows[0].beneficiary_name,
+          bank: rows[0].bank,
+          branch: rows[0].branch,
+        },
+      ],
+    };
+  }
+
+  if (type === 'binance') {
+    const rows = await query(
+      `SELECT id, trc20_wallet_address, binance_email
+       FROM admin_binance_accounts
+       WHERE id = ?
+         AND status = 'AVAILABLE'
+         AND (is_deleted = 0 OR is_deleted IS NULL)
+       LIMIT 1`,
+      [id],
+    );
+    if (!rows[0]) return { type: panelType, accounts: [] };
+    return {
+      type: panelType,
+      accounts: [
+        {
+          id: rows[0].id,
+          trc20WalletAddress: rows[0].trc20_wallet_address,
+          binanceEmail: rows[0].binance_email,
+        },
+      ],
+    };
+  }
+
+  if (type === 'xm') {
+    const rows = await query(
+      `SELECT id, xm_account_id
+       FROM admin_xm_accounts
+       WHERE id = ?
+         AND status = 'AVAILABLE'
+         AND (is_deleted = 0 OR is_deleted IS NULL)
+       LIMIT 1`,
+      [id],
+    );
+    if (!rows[0]) return { type: panelType, accounts: [] };
+    return {
+      type: panelType,
+      accounts: [{ id: rows[0].id, accountId: rows[0].xm_account_id }],
+    };
+  }
+
+  if (type === 'skrill') {
+    const rows = await query(
+      `SELECT id, skrill_email
+       FROM admin_skrill_accounts
+       WHERE id = ?
+         AND status = 'AVAILABLE'
+         AND (is_deleted = 0 OR is_deleted IS NULL)
+       LIMIT 1`,
+      [id],
+    );
+    if (!rows[0]) return { type: panelType, accounts: [] };
+    return {
+      type: panelType,
+      accounts: [{ id: rows[0].id, email: rows[0].skrill_email }],
+    };
+  }
+
+  if (type === 'neteller') {
+    const rows = await query(
+      `SELECT id, neteller_email
+       FROM admin_neteller_accounts
+       WHERE id = ?
+         AND status = 'AVAILABLE'
+         AND (is_deleted = 0 OR is_deleted IS NULL)
+       LIMIT 1`,
+      [id],
+    );
+    if (!rows[0]) return { type: panelType, accounts: [] };
+    return {
+      type: panelType,
+      accounts: [{ id: rows[0].id, email: rows[0].neteller_email }],
+    };
+  }
+
+  if (type === 'pm') {
+    const rows = await query(
+      `SELECT id, pm_account_id
+       FROM admin_perfect_money_accounts
+       WHERE id = ?
+         AND status = 'AVAILABLE'
+         AND (is_deleted = 0 OR is_deleted IS NULL)
+       LIMIT 1`,
+      [id],
+    );
+    if (!rows[0]) return { type: panelType, accounts: [] };
+    return {
+      type: panelType,
+      accounts: [{ id: rows[0].id, accountId: rows[0].pm_account_id }],
+    };
+  }
+
+  return { type: panelType, accounts: [] };
+}
+
+async function loadLinkedCashoutPayAccount(cashoutMethodId) {
+  await ensureWalletPayAccountSchema();
+  const rows = await query(
+    `SELECT pay_account_type, pay_account_id
+     FROM cashout_methods
+     WHERE id = ?
+     LIMIT 1`,
+    [cashoutMethodId],
+  );
+  return loadPayAccountByTypeAndId(rows[0]?.pay_account_type, rows[0]?.pay_account_id);
 }
 
 async function loadUserReceivingAccounts(userId, paymentOptionName) {
@@ -631,10 +792,11 @@ export async function getWithdrawalMethodDetails(
 
   await assertWithdrawalMethodPendingLimit(userId, methodId, cashoutMethod.name);
 
-  const [paymentOptions, withdrawalRates, priorityRate] = await Promise.all([
+  const [paymentOptions, withdrawalRates, priorityRate, linkedPayAccount] = await Promise.all([
     loadSupportedReceivingOptions(methodId, cashoutMethod.name),
     loadWithdrawalRatesForMethod(methodId),
     loadPriorityWithdrawalRate(methodId),
+    loadLinkedCashoutPayAccount(methodId),
   ]);
 
   if (!priorityRate) {
@@ -656,6 +818,8 @@ export async function getWithdrawalMethodDetails(
         ? Math.round((amount * priorityRate.rate + Number.EPSILON) * 100) / 100
         : null,
     initial_receiving_currency: priorityRate.paymentOptionCurrency,
+    linked_pay_account_type: linkedPayAccount.accounts?.length ? linkedPayAccount.type : null,
+    linked_pay_accounts: linkedPayAccount.accounts || [],
   };
 }
 

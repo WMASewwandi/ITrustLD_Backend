@@ -1,4 +1,8 @@
 import { query } from '../config/database.js';
+import {
+  customPayAccountExists,
+  listCustomPayAccountCategories,
+} from './customPayAccount.service.js';
 
 const ACCOUNT_CONFIG = {
   bank: {
@@ -172,6 +176,13 @@ export async function listPayAccounts() {
     ),
   ]);
 
+  let customCategories = [];
+  try {
+    customCategories = await listCustomPayAccountCategories();
+  } catch (error) {
+    console.error('[pay-accounts] failed to load custom categories', error);
+  }
+
   return {
     banks: bankRows.map(ACCOUNT_CONFIG.bank.mapRow),
     skrill: skrillRows.map(ACCOUNT_CONFIG.skrill.mapRow),
@@ -179,6 +190,7 @@ export async function listPayAccounts() {
     binance: binanceRows.map(ACCOUNT_CONFIG.binance.mapRow),
     pm: pmRows.map(ACCOUNT_CONFIG.pm.mapRow),
     xm: xmRows.map(ACCOUNT_CONFIG.xm.mapRow),
+    customCategories,
   };
 }
 
@@ -382,4 +394,89 @@ export async function togglePayAccountStatus(accountType, accountId, active) {
 
   const row = await getAccountRow(type, id);
   return config.mapRow(row);
+}
+
+const PAY_ACCOUNT_GROUP_LABELS = {
+  bank: 'Bank Account',
+  skrill: 'Skrill',
+  neteller: 'Neteller',
+  binance: 'Binance',
+  pm: 'Perfect Money',
+  xm: 'XM',
+};
+
+function formatPayAccountChoice(type, account) {
+  let detail = '';
+  if (type === 'bank') {
+    detail = [account.name, account.bank, account.accountNumber].filter(Boolean).join(' · ');
+  } else if (type === 'skrill' || type === 'neteller') {
+    detail = account.email || '';
+  } else if (type === 'binance') {
+    detail = [account.binanceEmail, account.trc20WalletAddress].filter(Boolean).join(' · ');
+  } else {
+    detail = account.accountId || '';
+  }
+
+  const group = PAY_ACCOUNT_GROUP_LABELS[type] || type;
+  const label = `${group}${detail ? ` · ${detail}` : ` · #${account.id}`}${
+    account.active ? '' : ' (Inactive)'
+  }`;
+
+  return {
+    key: `${type}:${account.id}`,
+    type,
+    id: account.id,
+    group,
+    label,
+    active: Boolean(account.active),
+  };
+}
+
+export async function payAccountExists(type, id) {
+  const accountType = String(type || '').trim().toLowerCase();
+  const accountId = Number(id);
+  if (!Number.isInteger(accountId) || accountId <= 0) return false;
+  if (accountType === 'custom') {
+    return customPayAccountExists(accountId);
+  }
+  if (!ACCOUNT_CONFIG[accountType]) return false;
+  const row = await getAccountRow(accountType, accountId);
+  return Boolean(row);
+}
+
+export async function listPayAccountChoices() {
+  const accounts = await listPayAccounts();
+  const groups = [
+    ['bank', accounts.banks],
+    ['skrill', accounts.skrill],
+    ['neteller', accounts.neteller],
+    ['binance', accounts.binance],
+    ['pm', accounts.pm],
+    ['xm', accounts.xm],
+  ];
+
+  const choices = [];
+  for (const [type, rows] of groups) {
+    for (const row of rows || []) {
+      choices.push(formatPayAccountChoice(type, row));
+    }
+  }
+
+  for (const category of accounts.customCategories || []) {
+    for (const row of category.accounts || []) {
+      const detail = row.summary || '';
+      choices.push({
+        key: `custom:${row.id}`,
+        type: 'custom',
+        id: row.id,
+        group: category.name,
+        label: `${category.name}${detail ? ` · ${detail}` : ` · #${row.id}`}${
+          row.active ? '' : ' (Inactive)'
+        }`,
+        active: Boolean(row.active),
+      });
+    }
+  }
+
+  return choices;
 }

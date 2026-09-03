@@ -194,14 +194,45 @@ export async function listUserPaymentAccounts(userId) {
     [userId],
   );
 
+  const optionLimitRows = await query(
+    `SELECT payment_option_name, payment_option_currency, minimum_limit, maximum_limit, availability
+     FROM payment_options
+     WHERE (is_deleted = 0 OR is_deleted IS NULL)
+     ORDER BY CASE WHEN UPPER(availability) = 'AVAILABLE' THEN 0 ELSE 1 END, id ASC`,
+  );
+  const optionLimitsByName = new Map();
+  for (const row of optionLimitRows) {
+    const key = String(row.payment_option_name || '').trim().toUpperCase();
+    if (!optionLimitsByName.has(key)) optionLimitsByName.set(key, row);
+  }
+
+  const rateRows = await query(
+    `SELECT po.payment_option_name, pwr.rate
+     FROM point_withdrawal_rates pwr
+     INNER JOIN payment_options po ON po.id = pwr.payment_option_id
+     WHERE (po.is_deleted = 0 OR po.is_deleted IS NULL)
+     ORDER BY pwr.applicable_date DESC, pwr.id DESC`,
+  );
+  const rateByName = new Map();
+  for (const row of rateRows) {
+    const key = String(row.payment_option_name || '').trim().toUpperCase();
+    if (!rateByName.has(key)) rateByName.set(key, Number(row.rate) || 1);
+  }
+
   const accountGroups = [];
   for (const row of groupRows) {
     const accounts = await loadAccountsForType(userId, row.payment_option);
     if (accounts.length > 0) {
+      const optionKey = String(row.payment_option || '').trim().toUpperCase();
+      const meta = optionLimitsByName.get(optionKey);
       accountGroups.push({
         payment_option: row.payment_option,
         account_count: accounts.length,
         accounts,
+        min_limit: meta?.minimum_limit != null ? Number(meta.minimum_limit) : null,
+        max_limit: meta?.maximum_limit != null ? Number(meta.maximum_limit) : null,
+        currency: meta?.payment_option_currency || 'USD',
+        conversion_rate: rateByName.get(optionKey) ?? 1,
       });
     }
   }

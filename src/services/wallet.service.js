@@ -1,4 +1,5 @@
 import { getDbDriver, query } from '../config/database.js';
+import { listPayAccountChoices, payAccountExists } from './payAccount.service.js';
 import { resolveWalletLogoPublicUrl, storeWalletLogo } from './walletLogoStorage.service.js';
 
 const WALLET_CONFIG = {
@@ -22,6 +23,7 @@ const WALLET_CONFIG = {
 
 let topupVoucherFlagSchemaReady = false;
 let walletNavigateSchemaReady = false;
+let walletPayAccountSchemaReady = false;
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -288,6 +290,79 @@ export async function ensureWalletNavigateSchema() {
   walletNavigateSchemaReady = true;
 }
 
+async function ensurePayAccountColumnsForTable(tableName) {
+  const hasType = await tableHasColumn(tableName, 'pay_account_type');
+  if (!hasType) {
+    if (getDbDriver() === 'sqlite') {
+      await query(`ALTER TABLE ${tableName} ADD COLUMN pay_account_type TEXT NULL`);
+    } else {
+      await query(`ALTER TABLE ${tableName} ADD COLUMN pay_account_type VARCHAR(32) NULL`);
+    }
+  }
+
+  const hasId = await tableHasColumn(tableName, 'pay_account_id');
+  if (!hasId) {
+    if (getDbDriver() === 'sqlite') {
+      await query(`ALTER TABLE ${tableName} ADD COLUMN pay_account_id INTEGER NULL`);
+    } else {
+      await query(`ALTER TABLE ${tableName} ADD COLUMN pay_account_id BIGINT NULL`);
+    }
+  }
+}
+
+export async function ensureWalletPayAccountSchema() {
+  if (walletPayAccountSchemaReady) return;
+  await ensurePayAccountColumnsForTable('topup_methods');
+  await ensurePayAccountColumnsForTable('cashout_methods');
+  walletPayAccountSchemaReady = true;
+}
+
+async function ensureWalletMethodSchema() {
+  await ensureWalletNavigateSchema();
+  await ensureWalletPayAccountSchema();
+}
+
+async function loadPayAccountIndex() {
+  const choices = await listPayAccountChoices();
+  return new Map(choices.map((choice) => [choice.key, choice]));
+}
+
+async function parsePayAccountSelection(payload = {}, { allow = true } = {}) {
+  if (!allow) {
+    return { type: null, id: null };
+  }
+
+  const key = String(payload.payAccountKey ?? payload.pay_account_key ?? '').trim();
+  const typeRaw = String(payload.payAccountType ?? payload.pay_account_type ?? '').trim().toLowerCase();
+  const idRaw = payload.payAccountId ?? payload.pay_account_id;
+
+  let type = '';
+  let id = 0;
+  if (key) {
+    const separator = key.indexOf(':');
+    type = (separator >= 0 ? key.slice(0, separator) : key).trim().toLowerCase();
+    id = Number(separator >= 0 ? key.slice(separator + 1) : '');
+  } else if (typeRaw || idRaw) {
+    type = typeRaw;
+    id = Number(idRaw);
+  }
+
+  if (!type && !id) {
+    return { type: null, id: null };
+  }
+
+  if (!type || !Number.isInteger(id) || id <= 0) {
+    throw validationError('Selected pay account is invalid.');
+  }
+
+  const exists = await payAccountExists(type, id);
+  if (!exists) {
+    throw validationError('Selected pay account was not found.');
+  }
+
+  return { type, id };
+}
+
 function parseNavigateSettings(payload = {}, existing = null) {
   const allowNavigateButton = parseBooleanFlag(
     payload.allowNavigateButton ?? payload.allow_navigate_button,
@@ -464,7 +539,7 @@ async function getActivePaymentOptionsForWallet(walletId, walletType) {
   return rows;
 }
 
-async function mapWalletRow(row, kind) {
+async function mapWalletRow(row, kind, payAccountIndex = null) {
   const config = WALLET_CONFIG[kind];
   const paymentOptions = await getActivePaymentOptionsForWallet(row.id, config.walletType);
   const logo = row[config.logoColumn];
@@ -475,6 +550,12 @@ async function mapWalletRow(row, kind) {
   const navigateButtonLabel = allowNavigateButton
     ? String(row.navigate_button_label || '').trim() || null
     : null;
+
+  const payAccountType = String(row.pay_account_type || '').trim().toLowerCase();
+  const payAccountId = Number(row.pay_account_id) || 0;
+  const payAccountKey = payAccountType && payAccountId ? `${payAccountType}:${payAccountId}` : '';
+  const index = payAccountIndex || (payAccountKey ? await loadPayAccountIndex() : null);
+  const payAccountChoice = payAccountKey && index ? index.get(payAccountKey) : null;
 
   return {
     id: row.id,
@@ -495,6 +576,10 @@ async function mapWalletRow(row, kind) {
     navigate_url: navigateUrl,
     navigateButtonLabel,
     navigate_button_label: navigateButtonLabel,
+    payAccountType: payAccountKey ? payAccountType : null,
+    payAccountId: payAccountKey ? payAccountId : null,
+    payAccountKey,
+    payAccountLabel: payAccountChoice?.label || (payAccountKey ? `${payAccountType} #${payAccountId}` : ''),
     logo,
     logoName: logo,
     logoUrl: resolveWalletLogoPublicUrl(logo),
@@ -506,7 +591,7 @@ async function mapWalletRow(row, kind) {
 }
 
 async function findWalletById(kind, walletId, { includeHidden = true } = {}) {
-  await ensureWalletNavigateSchema();
+  await ensureWalletMethodSchema();
   if (kind === 'topup') {
     await ensureTopupWalletVoucherFlagSchema();
   }
@@ -577,7 +662,7 @@ export async function getCashoutWalletById(walletId) {
 }
 
 export async function getWalletFormMeta() {
-  const [paymentOptions, currencyTypes] = await Promise.all([
+  const [paymentOptions, currencyTypes, payAccounts] = await Promise.all([
     query(
       `SELECT id, payment_option_name
        FROM payment_options
@@ -591,6 +676,7 @@ export async function getWalletFormMeta() {
          AND UPPER(status) = 'ACTIVE'
        ORDER BY id`,
     ),
+    listPayAccountChoices(),
   ]);
 
   return {
@@ -600,11 +686,12 @@ export async function getWalletFormMeta() {
     })),
     currencyTypes: currencyTypes.map((row) => row.code),
     platformTypes: [...PLATFORM_TYPE_OPTIONS],
+    payAccounts,
   };
 }
 
 export async function listTopupWallets() {
-  await ensureWalletNavigateSchema();
+  await ensureWalletMethodSchema();
   await ensureTopupWalletVoucherFlagSchema();
   const config = WALLET_CONFIG.topup;
   const rows = await query(
@@ -613,11 +700,12 @@ export async function listTopupWallets() {
      ORDER BY CASE WHEN is_deleted = 1 THEN 1 ELSE 0 END ASC, id DESC`,
   );
   await backfillWalletCatalogLinks('topup', rows.filter((row) => !(Number(row.is_deleted) === 1 || row.is_deleted === true)));
-  return Promise.all(rows.map((row) => mapWalletRow(row, 'topup')));
+  const payAccountIndex = await loadPayAccountIndex();
+  return Promise.all(rows.map((row) => mapWalletRow(row, 'topup', payAccountIndex)));
 }
 
 export async function listCashoutWallets() {
-  await ensureWalletNavigateSchema();
+  await ensureWalletMethodSchema();
   const config = WALLET_CONFIG.cashout;
   const rows = await query(
     `SELECT *
@@ -625,11 +713,12 @@ export async function listCashoutWallets() {
      ORDER BY CASE WHEN is_deleted = 1 THEN 1 ELSE 0 END ASC, id DESC`,
   );
   await backfillWalletCatalogLinks('cashout', rows.filter((row) => !(Number(row.is_deleted) === 1 || row.is_deleted === true)));
-  return Promise.all(rows.map((row) => mapWalletRow(row, 'cashout')));
+  const payAccountIndex = await loadPayAccountIndex();
+  return Promise.all(rows.map((row) => mapWalletRow(row, 'cashout', payAccountIndex)));
 }
 
 export async function createTopupWallet(payload, logoFile) {
-  await ensureWalletNavigateSchema();
+  await ensureWalletMethodSchema();
   await ensureTopupWalletVoucherFlagSchema();
   const validated = validateWalletPayload(payload);
   await assertUniqueWalletName('topup', validated.name);
@@ -707,7 +796,7 @@ export async function createTopupWallet(payload, logoFile) {
 }
 
 export async function createCashoutWallet(payload, logoFile) {
-  await ensureWalletNavigateSchema();
+  await ensureWalletMethodSchema();
   const validated = validateWalletPayload(payload);
   await assertUniqueWalletName('cashout', validated.name);
   const paymentMethodIds = parsePaymentMethodIds(payload.paymentMethodIds);
@@ -716,6 +805,7 @@ export async function createCashoutWallet(payload, logoFile) {
   }
 
   const navigate = parseNavigateSettings(payload);
+  const payAccount = await parsePayAccountSelection(payload, { allow: true });
   const config = WALLET_CONFIG.cashout;
   const logo = logoFile ? await storeWalletLogo(logoFile) : null;
   const catalogWalletId = await resolveOrCreateWalletCatalogId(
@@ -723,6 +813,7 @@ export async function createCashoutWallet(payload, logoFile) {
     validated.platformTypes,
   );
   const hasWalletIdColumn = await tableHasColumn(config.table, 'wallet_id');
+  const hasPayAccountType = await tableHasColumn(config.table, 'pay_account_type');
 
   const insertColumns = [
     config.nameColumn,
@@ -760,6 +851,11 @@ export async function createCashoutWallet(payload, logoFile) {
   if (hasWalletIdColumn && catalogWalletId) {
     insertColumns.push('wallet_id');
     insertValues.push(catalogWalletId);
+  }
+
+  if (hasPayAccountType) {
+    insertColumns.push('pay_account_type', 'pay_account_id');
+    insertValues.push(payAccount.type, payAccount.id);
   }
 
   const placeholders = [...insertValues.map(() => '?'), 'NOW()', 'NOW()'].join(', ');
@@ -850,8 +946,34 @@ export async function updateCashoutWallet(walletId, payload, logoFile) {
   }
 
   const navigate = parseNavigateSettings(payload, existing);
+  const payAccount = await parsePayAccountSelection(payload, { allow: true });
   const config = WALLET_CONFIG.cashout;
   const logo = logoFile ? await storeWalletLogo(logoFile) : existing.logo;
+  const hasPayAccountType = await tableHasColumn(config.table, 'pay_account_type');
+
+  let payAccountSql = '';
+  const updateValues = [
+    validated.name,
+    validated.currency,
+    validated.minimumLimit,
+    validated.maximumLimit,
+    validated.platformType,
+    validated.platformType,
+    validated.terms,
+    navigate.allowNavigateButton ? 1 : 0,
+    navigate.navigateUrl,
+    navigate.navigateButtonLabel,
+    logo,
+  ];
+
+  if (hasPayAccountType) {
+    payAccountSql = `,
+         pay_account_type = ?,
+         pay_account_id = ?`;
+    updateValues.push(payAccount.type, payAccount.id);
+  }
+
+  updateValues.push(walletId);
 
   await query(
     `UPDATE ${config.table}
@@ -865,23 +987,10 @@ export async function updateCashoutWallet(walletId, payload, logoFile) {
          allow_navigate_button = ?,
          navigate_url = ?,
          navigate_button_label = ?,
-         ${config.logoColumn} = ?,
+         ${config.logoColumn} = ?${payAccountSql},
          updated_at = NOW()
      WHERE id = ?`,
-    [
-      validated.name,
-      validated.currency,
-      validated.minimumLimit,
-      validated.maximumLimit,
-      validated.platformType,
-      validated.platformType,
-      validated.terms,
-      navigate.allowNavigateButton ? 1 : 0,
-      navigate.navigateUrl,
-      navigate.navigateButtonLabel,
-      logo,
-      walletId,
-    ],
+    updateValues,
   );
 
   await syncWalletPaymentOptions(walletId, config.walletType, paymentMethodIds);
