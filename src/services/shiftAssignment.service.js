@@ -840,6 +840,17 @@ export function isAdminExemptFromShiftRestriction(roles = []) {
   return roles.some((role) => ADMIN_SHIFT_EXEMPT_ROLES.includes(role));
 }
 
+export function assertShiftManagedUserOnline(user, roles = []) {
+  if (isAdminExemptFromShiftRestriction(roles)) return;
+  if (!isShiftManagedRole(roles)) return;
+  if (user?.is_online) return;
+
+  const error = new Error('Your shift has ended. Please log in again for the next shift.');
+  error.status = 401;
+  error.code = 'SHIFT_ENDED';
+  throw error;
+}
+
 export function getAssignedShift(user) {
   const shift = String(user?.shift || '').trim().toUpperCase();
   return shift === 'A' || shift === 'B' ? shift : null;

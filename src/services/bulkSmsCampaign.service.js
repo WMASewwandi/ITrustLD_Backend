@@ -58,7 +58,10 @@ const SEGMENT_WHERE = {
 
 const BATCH_SIZE = 100;
 const MAX_CUSTOM_NUMBERS = 200;
+const BULK_SMS_TICK_MS = 5_000;
+const BULK_SMS_DRAIN_MS = 20_000;
 const processingCampaignIds = new Set();
+let bulkSmsSchedulerBusy = false;
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -347,7 +350,6 @@ async function fetchRecipientBatch(segment, offset, limit, customNumbers = []) {
 
 export async function listBulkSmsCampaignsAdmin() {
   await ensureBulkSmsSchema();
-  await processDueBulkSmsCampaigns();
 
   const rows = await query(
     `SELECT id, recipient_segment, recipient_emails, message, scheduled_at, status, total_recipients,
@@ -461,6 +463,44 @@ export async function processDueBulkSmsCampaigns() {
     if ((await getCampaignStatus(row.id)) === 'cancelled') continue;
     await processBulkSmsCampaign(row.id);
   }
+}
+
+async function countDueBulkSmsCampaigns() {
+  const now = nowSqlDateTime();
+  const rows = await query(
+    `SELECT COUNT(*) AS total
+     FROM bulk_sms_campaigns
+     WHERE status IN ('queued', 'sending')
+       AND (scheduled_at IS NULL OR scheduled_at <= ?)`,
+    [now],
+  );
+  return Number(rows[0]?.total) || 0;
+}
+
+async function drainDueBulkSmsCampaigns({ maxMs = BULK_SMS_DRAIN_MS } = {}) {
+  const started = Date.now();
+  while (Date.now() - started < maxMs) {
+    if ((await countDueBulkSmsCampaigns()) === 0) return;
+    await processDueBulkSmsCampaigns();
+  }
+}
+
+/** Continues queued/sending campaigns in the background without an admin session. */
+export function startBulkSmsScheduler() {
+  const tick = async () => {
+    if (bulkSmsSchedulerBusy) return;
+    bulkSmsSchedulerBusy = true;
+    try {
+      await drainDueBulkSmsCampaigns();
+    } catch (error) {
+      console.error('[bulk-sms]', error.message);
+    } finally {
+      bulkSmsSchedulerBusy = false;
+    }
+  };
+
+  setInterval(tick, BULK_SMS_TICK_MS);
+  tick().catch((error) => console.error('[bulk-sms:init]', error.message));
 }
 
 export async function processBulkSmsCampaign(campaignId) {

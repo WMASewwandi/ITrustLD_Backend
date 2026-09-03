@@ -4,6 +4,7 @@ import { env } from './config/env.js';
 import { runPendingMigrations } from './db/migrationRunner.js';
 import { warmAdminDashboardCache } from './services/adminDashboard.service.js';
 import { ensureSystemActivitiesCatalog } from './services/ensureSystemActivities.service.js';
+import { startBulkSmsScheduler } from './services/bulkSmsCampaign.service.js';
 import { startShiftRolloverScheduler } from './services/shiftAssignment.service.js';
 
 async function main() {
@@ -19,6 +20,7 @@ async function main() {
 
   const app = createApp();
   startShiftRolloverScheduler();
+  startBulkSmsScheduler();
   const server = app.listen(env.port, () => {
     console.log(`iTrustLD backend listening on http://localhost:${env.port}`);
     console.log(`Health: http://localhost:${env.port}/api/v1/health`);
