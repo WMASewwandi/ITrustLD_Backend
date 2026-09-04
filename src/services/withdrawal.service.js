@@ -610,10 +610,19 @@ export async function listWithdrawalsForAdmin(auth, params = {}) {
   const isAuthorizer = isWithdrawalAuthorizerOnly(roles, permissions);
 
   const statusForTotals = resolveWithdrawalListStatus(params.status);
+  const [makerCheckerEnabled, statusScope] = await Promise.all([
+    hasActiveWithdrawalAuthorizers(),
+    getUserStatusUpdateScope(userId),
+  ]);
+  const allowedWithdrawalStatuses = statusScope.allowed_withdrawal_statuses;
+  const authorizerViewAllPending =
+    isAuthorizer &&
+    statusForTotals === 'Pending' &&
+    (!allowedWithdrawalStatuses || allowedWithdrawalStatuses.includes('Pending'));
   const restrictToAssigned =
-    (statusForTotals === 'Pending' && (isExec || isAuthorizer)) ||
+    (statusForTotals === 'Pending' && isExec) ||
+    (statusForTotals === 'Pending' && isAuthorizer && !authorizerViewAllPending) ||
     (statusForTotals === 'Pending Authorization' && !isAdmin(roles));
-  const assignedToUserId = restrictToAssigned ? userId : null;
   const sanitized = sanitizePendingSearchParams(statusForTotals, {
     keyword: params.keyword,
     transactionId: params.transactionId,
@@ -626,39 +635,36 @@ export async function listWithdrawalsForAdmin(auth, params = {}) {
   });
 
   const maxLoadRows = restrictToAssigned ? await getUserPendingShowCount(userId) : null;
+  const assignedToUserId = restrictToAssigned ? userId : null;
 
-  const [result, makerCheckerEnabled] = await Promise.all([
-    listWithdrawalsQuery({
-      status: statusForTotals,
-      page: params.page,
-      perPage: params.perPage,
-      keyword: sanitized.keyword,
-      transactionId: sanitized.transactionId,
-      platformId: sanitized.platformId,
-      userAccount: sanitized.userAccount,
-      amount: sanitized.amount,
-      filter: sanitized.filter,
-      fromDate: sanitized.fromDate,
-      toDate: sanitized.toDate,
-      assignedToUserId,
-      requirePaymentProof: sanitized.requirePaymentProof,
-      maxLoadRows,
-    }),
-    hasActiveWithdrawalAuthorizers(),
-  ]);
+  const result = await listWithdrawalsQuery({
+    status: statusForTotals,
+    page: params.page,
+    perPage: params.perPage,
+    keyword: sanitized.keyword,
+    transactionId: sanitized.transactionId,
+    platformId: sanitized.platformId,
+    userAccount: sanitized.userAccount,
+    amount: sanitized.amount,
+    filter: sanitized.filter,
+    fromDate: sanitized.fromDate,
+    toDate: sanitized.toDate,
+    assignedToUserId,
+    requirePaymentProof: sanitized.requirePaymentProof,
+    maxLoadRows,
+  });
 
   const totals = result.totals || {
     totalCashoutAmount: 0,
     totalReceivingAmount: 0,
   };
 
-  const [scammerFlags, similarCounts, statusScope] = await Promise.all([
+  const [scammerFlags, similarCounts] = await Promise.all([
     batchScammerCheck({
       platformIds: result.rows.map((row) => row.cashout_account_id),
       userIds: result.rows.map((row) => row.user_id),
     }),
     batchSimilarWithdrawals(result.rows, statusForTotals === 'All' ? 'Pending' : statusForTotals),
-    getUserStatusUpdateScope(userId),
   ]);
 
   return {
@@ -680,7 +686,7 @@ export async function listWithdrawalsForAdmin(auth, params = {}) {
     isWithdrawalAuthorizer: isAuthorizer,
     canAuthorizeWithdrawals: canAuthorize,
     isWithdrawalExecutive: isExec,
-    allowed_withdrawal_statuses: statusScope.allowed_withdrawal_statuses,
+    allowed_withdrawal_statuses: allowedWithdrawalStatuses,
   };
 }
 
