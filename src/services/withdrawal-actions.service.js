@@ -51,6 +51,9 @@ function assertCanUpdateWithdrawal(auth, withdrawal, nextStatus, makerCheckerEna
   const isAuthorizerOnly = canAuthorize && !isExec;
 
   if (isAuthorizerOnly) {
+    if (withdrawal.transaction_status === 'Pending') {
+      throw validationError('Pending withdrawals are view-only for authorizers.', 403);
+    }
     if (nextStatus === 'Pending Authorization') {
       throw validationError('Authorizer cannot send withdrawals for authorization.', 403);
     }

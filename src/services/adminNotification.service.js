@@ -60,10 +60,12 @@ async function countPendingDeposits(userId, roles) {
 }
 
 async function countPendingWithdrawals(userId, { isExec, isAuthorizerOnly } = {}) {
+  if (isAuthorizerOnly) return 0;
+
   const conditions = ["transaction_status = 'Pending'", 'cashout_payment_proof IS NOT NULL'];
   const values = [];
 
-  if ((isExec || isAuthorizerOnly) && userId) {
+  if (isExec && userId) {
     conditions.push('assigned_to = ?');
     values.push(userId);
   }
