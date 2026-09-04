@@ -12,6 +12,7 @@ import {
   updatePointWithdrawalRate,
   updateWithdrawalRate,
 } from '../../services/rates.service.js';
+import { listCustomPayAccountCategoryNames } from '../../services/customPayAccount.service.js';
 
 export const adminRatesRouter = Router();
 
@@ -22,8 +23,9 @@ adminRatesRouter.get(
   requirePermission('view_currency_configs'),
   async (_req, res, next) => {
     try {
+      const customCategories = await listCustomPayAccountCategoryNames();
       const paymentOptions = await listRatePaymentOptions();
-      res.json({ ok: true, paymentOptions });
+      res.json({ ok: true, paymentOptions, customCategories });
     } catch (error) {
       next(error);
     }
