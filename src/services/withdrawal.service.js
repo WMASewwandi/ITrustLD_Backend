@@ -240,14 +240,10 @@ async function fetchAdminNames(adminIds) {
 async function batchSimilarWithdrawals(rows, status) {
   if (!rows.length) return {};
 
-  const pairs = [
-    ...new Map(
-      rows.map((row) => [
-        `${row.cashout_method_id}_${row.cashout_account_id}`,
-        { methodId: row.cashout_method_id, accountId: row.cashout_account_id },
-      ]),
-    ).values(),
+  const accountIds = [
+    ...new Set(rows.map((row) => row.cashout_account_id).filter(Boolean).map(String)),
   ];
+  if (!accountIds.length) return {};
 
   const since = laravelSimilarCountSinceSql();
   const statusSql =
@@ -255,23 +251,21 @@ async function batchSimilarWithdrawals(rows, status) {
       ? `transaction_status = 'Completed'`
       : `transaction_status != 'Rejected'`;
 
-  const pairClauses = pairs.map(() => '(cashout_method_id = ? AND cashout_account_id = ?)').join(' OR ');
-  const pairValues = pairs.flatMap((pair) => [pair.methodId, pair.accountId]);
-
   const countRows = await query(
-    `SELECT cashout_method_id, cashout_account_id, COUNT(*) AS cnt
+    `SELECT cashout_account_id, COUNT(*) AS cnt
      FROM withdrawals
      WHERE cashout_payment_proof IS NOT NULL
        AND created_at >= ?
        AND ${statusSql}
-       AND (${pairClauses})
-     GROUP BY cashout_method_id, cashout_account_id`,
-    [since, ...pairValues],
+       AND cashout_account_id IN (${accountIds.map(() => '?').join(', ')})
+     GROUP BY cashout_account_id`,
+    [since, ...accountIds],
   );
 
   const result = {};
   for (const row of countRows) {
-    result[`${row.cashout_method_id}_${row.cashout_account_id}`] = Number(row.cnt) || 0;
+    if (!row.cashout_account_id) continue;
+    result[String(row.cashout_account_id)] = Number(row.cnt) || 0;
   }
   return result;
 }
@@ -312,8 +306,8 @@ function mapWithdrawalRow(row, adminUsers, assignedUsers, similarCounts) {
         ? row.pendings_by_admin
         : null;
   const adminName = lookupAdminName(adminUsers, assignedUsers, adminId) || 'NA';
-  const simKey = `${row.cashout_method_id}_${row.cashout_account_id}`;
-  const todayTxCount = similarCounts[simKey] || 0;
+  const simKey = row.cashout_account_id ? String(row.cashout_account_id) : '';
+  const todayTxCount = simKey ? similarCounts[simKey] || 0 : 0;
   const accountDetails = parseAccountDetailsLog(row.account_details_log);
   const selectedAccountType =
     row.selected_account_type || accountDetails?.account_type || '';
@@ -729,6 +723,10 @@ export async function listSimilarWithdrawalsToday(auth, { withdrawalId, transact
     throw error;
   }
 
+  if (!source.cashout_account_id) {
+    return { withdrawals: [] };
+  }
+
   const statusSql =
     source.transaction_status === 'Completed'
       ? `w.transaction_status = 'Completed'`
@@ -742,11 +740,10 @@ export async function listSimilarWithdrawalsToday(auth, { withdrawalId, transact
      ${WITHDRAWAL_LIST_JOINS}
      WHERE w.cashout_payment_proof IS NOT NULL
        AND w.created_at >= ?
-       AND w.cashout_method_id = ?
        AND w.cashout_account_id = ?
        AND ${statusSql}
      ORDER BY w.created_at DESC`,
-    [since, source.cashout_method_id, source.cashout_account_id],
+    [since, source.cashout_account_id],
   );
 
   const adminIds = rows.flatMap((row) => [
@@ -767,7 +764,7 @@ export async function listSimilarWithdrawalsToday(auth, { withdrawalId, transact
 
   const count = rows.length;
   const similarCounts = {
-    [`${source.cashout_method_id}_${source.cashout_account_id}`]: count,
+    [String(source.cashout_account_id)]: count,
   };
 
   return {

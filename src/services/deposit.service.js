@@ -92,14 +92,10 @@ async function fetchAdminNames(adminIds) {
 async function batchSimilarDeposits(rows, status) {
   if (!rows.length) return {};
 
-  const pairs = [
-    ...new Map(
-      rows.map((row) => [
-        `${row.topup_method_id}_${row.topup_account_id}`,
-        { methodId: row.topup_method_id, accountId: row.topup_account_id },
-      ]),
-    ).values(),
+  const accountIds = [
+    ...new Set(rows.map((row) => row.topup_account_id).filter(Boolean).map(String)),
   ];
+  if (!accountIds.length) return {};
 
   const since = laravelSimilarCountSinceSql();
   const statusSql =
@@ -107,23 +103,21 @@ async function batchSimilarDeposits(rows, status) {
       ? `transaction_status = 'Completed'`
       : `transaction_status != 'Rejected'`;
 
-  const pairClauses = pairs.map(() => '(topup_method_id = ? AND topup_account_id = ?)').join(' OR ');
-  const pairValues = pairs.flatMap((pair) => [pair.methodId, pair.accountId]);
-
   const countRows = await query(
-    `SELECT topup_method_id, topup_account_id, COUNT(*) AS cnt
+    `SELECT topup_account_id, COUNT(*) AS cnt
      FROM deposits
      WHERE payment_proof IS NOT NULL
        AND created_at >= ?
        AND ${statusSql}
-       AND (${pairClauses})
-     GROUP BY topup_method_id, topup_account_id`,
-    [since, ...pairValues],
+       AND topup_account_id IN (${accountIds.map(() => '?').join(', ')})
+     GROUP BY topup_account_id`,
+    [since, ...accountIds],
   );
 
   const result = {};
   for (const row of countRows) {
-    result[`${row.topup_method_id}_${row.topup_account_id}`] = Number(row.cnt) || 0;
+    if (!row.topup_account_id) continue;
+    result[String(row.topup_account_id)] = Number(row.cnt) || 0;
   }
   return result;
 }
@@ -141,8 +135,8 @@ function mapDepositRow(row, adminUsers, assignedUsers, similarCounts = {}) {
   const assignedName = row.assigned_to
     ? assignedUsers[row.assigned_to] || String(row.assigned_to)
     : '—';
-  const simKey = `${row.topup_method_id}_${row.topup_account_id}`;
-  const todayTxCount = similarCounts[simKey] || 0;
+  const simKey = row.topup_account_id ? String(row.topup_account_id) : '';
+  const todayTxCount = simKey ? similarCounts[simKey] || 0 : 0;
 
   return {
     id: row.transaction_id,
@@ -507,7 +501,7 @@ export async function listSimilarDepositsToday(auth, { depositId, transactionId 
     throw validationError('Deposit not found.', 404);
   }
 
-  if (!source.topup_method_id || !source.topup_account_id) {
+  if (!source.topup_account_id) {
     return { deposits: [] };
   }
 
@@ -530,11 +524,10 @@ export async function listSimilarDepositsToday(auth, { depositId, transactionId 
      ${joins}
      WHERE d.payment_proof IS NOT NULL
        AND d.created_at >= ?
-       AND d.topup_method_id = ?
        AND d.topup_account_id = ?
        AND ${statusSql}
      ORDER BY d.created_at DESC`,
-    [since, source.topup_method_id, source.topup_account_id],
+    [since, source.topup_account_id],
   );
 
   const adminIds = rows.flatMap((row) => [
@@ -554,7 +547,7 @@ export async function listSimilarDepositsToday(auth, { depositId, transactionId 
 
   const count = rows.length;
   const similarCounts = {
-    [`${source.topup_method_id}_${source.topup_account_id}`]: count,
+    [String(source.topup_account_id)]: count,
   };
 
   return {
