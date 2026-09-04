@@ -5,6 +5,7 @@ import { sendEmailAndSms } from './notification.service.js';
 import { rateChangeEmailHtml } from './mail.templates.js';
 import { fullyVerifiedAccountSql } from './accountHolder.service.js';
 import { ensureWalletCatalogLinksForRates } from './wallet.service.js';
+import { syncCustomPayAccountCategoryPaymentOptions } from './customPayAccount.service.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -71,6 +72,7 @@ async function resolvePaymentOptionByName(methodName) {
 }
 
 export async function listRatePaymentOptions() {
+  await syncCustomPayAccountCategoryPaymentOptions();
   const rows = await query(
     `SELECT id, payment_option_name, payment_option_currency
      FROM payment_options
@@ -334,6 +336,7 @@ function mapPointWithdrawalRateRow(row) {
 }
 
 export async function getRatesManagementData(methodName) {
+  await syncCustomPayAccountCategoryPaymentOptions();
   const paymentOption = await resolvePaymentOptionByName(methodName);
 
   const depositRows = await query(

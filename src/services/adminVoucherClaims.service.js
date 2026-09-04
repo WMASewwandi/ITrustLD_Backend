@@ -5,7 +5,11 @@ import {
   SYSTEM_USER_ACTIONS,
 } from './systemUserActionLog.service.js';
 import { assertCanUpdateRecordStatus } from './statusUpdateScope.service.js';
-import { isLoyaltySystemAdmin } from './loyaltyAssignment.service.js';
+import {
+  ensureLoyaltyAssignedToColumn,
+  isLoyaltySystemAdmin,
+  loyaltyAssignedToUserId,
+} from './loyaltyAssignment.service.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -137,6 +141,9 @@ async function processExpiredVoucherAutoRejection() {
 const VOUCHER_BASE_FROM = `
   FROM loyalty_client_bonus_vouchers v
   INNER JOIN account_holders ah ON ah.user_id = v.user_id
+    AND ah.id = (
+      SELECT MIN(ah2.id) FROM account_holders ah2 WHERE ah2.user_id = v.user_id
+    )
   LEFT JOIN topup_methods tm ON tm.id = v.topup_method_id
 `;
 
@@ -255,6 +262,13 @@ export async function listVoucherClaimsForAdmin(params = {}, auth = null) {
   const values = [];
 
   sql = applyVoucherStatusFilter(sql, values, statusInput);
+
+  const assignedToUserId = loyaltyAssignedToUserId(auth, statusInput);
+  if (assignedToUserId) {
+    await ensureLoyaltyAssignedToColumn('loyalty_client_bonus_vouchers');
+    sql += ` AND v.assigned_to = ?`;
+    values.push(assignedToUserId);
+  }
 
   if (fromDate) {
     sql += ` AND DATE(v.created_at) >= ?`;

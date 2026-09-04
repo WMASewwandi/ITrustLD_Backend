@@ -111,14 +111,30 @@ function hasLoyaltyOrderUpdatePermission(permissions = []) {
   return (permissions || []).includes(LOYALTY_ORDERS_UPDATE);
 }
 
-async function assertCanUpdateLoyaltyOrder(auth, currentStatus, nextStatus, makerCheckerEnabled) {
+function isBankTransferLoyaltyPayment(paymentOption) {
+  return String(paymentOption || '').trim().toUpperCase() === 'BANK TRANSFER';
+}
+
+async function assertCanUpdateLoyaltyOrder(
+  auth,
+  currentStatus,
+  nextStatus,
+  makerCheckerEnabled,
+  requiresAuthorization,
+) {
   const roles = auth?.roles || [];
   const permissions = auth?.permissions || [];
-  if (isLoyaltySystemAdmin(roles)) return;
+  if (isLoyaltySystemAdmin(roles)) {
+    if (nextStatus === 'Pending Authorization' && !requiresAuthorization) {
+      throw validationError('Only Bank Transfer loyalty orders can be sent for authorization.');
+    }
+    return;
+  }
 
   const canAuthorize = canAuthorizeLoyaltyOrders(permissions);
   const canUpdate = hasLoyaltyOrderUpdatePermission(permissions);
   const isAuthorizerOnly = canAuthorize && !canUpdate;
+  const authRequired = Boolean(makerCheckerEnabled && requiresAuthorization);
 
   if (isAuthorizerOnly) {
     if (nextStatus === 'Pending Authorization') {
@@ -131,8 +147,11 @@ async function assertCanUpdateLoyaltyOrder(auth, currentStatus, nextStatus, make
   }
 
   if (canUpdate) {
+    if (nextStatus === 'Pending Authorization' && !requiresAuthorization) {
+      throw validationError('Only Bank Transfer loyalty orders can be sent for authorization.');
+    }
     if (
-      makerCheckerEnabled &&
+      authRequired &&
       nextStatus === 'Approved' &&
       currentStatus !== 'Pending Authorization'
     ) {
@@ -142,7 +161,7 @@ async function assertCanUpdateLoyaltyOrder(auth, currentStatus, nextStatus, make
       );
     }
     if (nextStatus === 'Approved' && currentStatus === 'Pending Authorization') {
-      if (!canAuthorize) {
+      if (authRequired && !canAuthorize) {
         throw validationError('You do not have permission to authorize loyalty orders.', 403);
       }
       return;
@@ -1137,6 +1156,9 @@ export async function listLoyaltyOrdersForAdmin(params = {}, auth = null) {
                     CONCAT(ah.first_name, ' ', ah.last_name) AS customer_name
              FROM point_withdrawals pw
              INNER JOIN account_holders ah ON ah.user_id = pw.user_id
+               AND ah.id = (
+                 SELECT MIN(ah2.id) FROM account_holders ah2 WHERE ah2.user_id = pw.user_id
+               )
              WHERE 1=1`;
   const values = [];
 
@@ -1259,7 +1281,14 @@ export async function updateLoyaltyOrderStatus(authOrUserId, payload = {}) {
 
   const currentStatus = mapUserStatus(withdrawal.status);
   const makerCheckerEnabled = await hasActiveLoyaltyOrderAuthorizers();
-  await assertCanUpdateLoyaltyOrder(auth, currentStatus, nextStatus, makerCheckerEnabled);
+  const requiresAuthorization = isBankTransferLoyaltyPayment(withdrawal.payment_option);
+  await assertCanUpdateLoyaltyOrder(
+    auth,
+    currentStatus,
+    nextStatus,
+    makerCheckerEnabled,
+    requiresAuthorization,
+  );
   await assertCanUpdateRecordStatus(adminUserId, 'loyalty_order', currentStatus);
 
   const nowSl = nowSqlDateTime();
@@ -1450,6 +1479,9 @@ export async function listBonusClaimsForAdmin(params = {}, auth = null) {
                     CONCAT(ah.first_name, ' ', ah.last_name) AS customer_name
              FROM loyalty_bonus_collects lbc
              INNER JOIN account_holders ah ON ah.user_id = lbc.user_id
+               AND ah.id = (
+                 SELECT MIN(ah2.id) FROM account_holders ah2 WHERE ah2.user_id = lbc.user_id
+               )
              WHERE 1=1`;
   const values = [];
 

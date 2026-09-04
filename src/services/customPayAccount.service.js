@@ -1,9 +1,11 @@
 import { query } from '../config/database.js';
-import { createTableIfMissing } from '../db/helpers.js';
+import { addColumnIfMissing, createTableIfMissing } from '../db/helpers.js';
 
 const FIELD_TYPES = new Set(['text', 'email', 'number']);
 const RESERVED_SLUGS = new Set([
   'bank',
+  'bank-transfer',
+  'bank_transfer',
   'skrill',
   'neteller',
   'binance',
@@ -12,8 +14,10 @@ const RESERVED_SLUGS = new Set([
   'crypto',
   'perfect-money',
   'perfect_money',
+  'perfectmoney',
   'card-payment',
   'card_payment',
+  'cardpayment',
   'custom',
 ]);
 
@@ -156,6 +160,10 @@ export async function ensureCustomPayAccountSchema() {
       )
     `,
   });
+  await addColumnIfMissing('pay_account_categories', 'payment_option_id', {
+    mysql: 'payment_option_id BIGINT UNSIGNED NULL',
+    sqlite: 'payment_option_id INTEGER',
+  });
   schemaReady = true;
 }
 
@@ -226,6 +234,109 @@ async function loadRecords(categoryId, fields, { activeOnly = false } = {}) {
   sql += ' ORDER BY id ASC';
   const rows = await query(sql, [categoryId]);
   return rows.map((row) => mapRecord(row, fields));
+}
+
+async function defaultPaymentOptionCurrency() {
+  try {
+    const rows = await query(
+      `SELECT code
+       FROM currency_types
+       WHERE (is_deleted = 0 OR is_deleted IS NULL)
+         AND UPPER(status) = 'ACTIVE'
+       ORDER BY CASE WHEN UPPER(code) = 'USD' THEN 0 ELSE 1 END, id ASC
+       LIMIT 1`,
+    );
+    return String(rows[0]?.code || 'USD').trim() || 'USD';
+  } catch {
+    return 'USD';
+  }
+}
+
+async function findPaymentOptionByName(name) {
+  const rows = await query(
+    `SELECT id, payment_option_name
+     FROM payment_options
+     WHERE LOWER(TRIM(payment_option_name)) = LOWER(?)
+     ORDER BY CASE WHEN is_deleted = 0 OR is_deleted IS NULL THEN 0 ELSE 1 END, id ASC
+     LIMIT 1`,
+    [name],
+  );
+  return rows[0] || null;
+}
+
+async function ensurePaymentOptionForCategory(category) {
+  const name = String(category?.name || '').trim();
+  const categoryId = Number(category?.id);
+  if (!name || !Number.isInteger(categoryId) || categoryId <= 0) return null;
+
+  let optionId = Number(category.payment_option_id) || 0;
+  if (optionId) {
+    const linked = await query(`SELECT id FROM payment_options WHERE id = ? LIMIT 1`, [optionId]);
+    if (linked[0]) {
+      await query(
+        `UPDATE payment_options
+         SET payment_option_name = ?, availability = 'AVAILABLE', is_deleted = 0, updated_at = NOW()
+         WHERE id = ?`,
+        [name, optionId],
+      );
+      return optionId;
+    }
+  }
+
+  const byName = await findPaymentOptionByName(name);
+  if (byName) {
+    optionId = Number(byName.id);
+    await query(
+      `UPDATE payment_options
+       SET payment_option_name = ?, availability = 'AVAILABLE', is_deleted = 0, updated_at = NOW()
+       WHERE id = ?`,
+      [name, optionId],
+    );
+  } else {
+    const currency = await defaultPaymentOptionCurrency();
+    const result = await query(
+      `INSERT INTO payment_options
+        (payment_option_name, payment_option_currency, availability, priority,
+         minimum_limit, maximum_limit, is_deleted, created_at, updated_at)
+       VALUES (?, ?, 'AVAILABLE', 'NO', 1, 1000000, 0, NOW(), NOW())`,
+      [name, currency],
+    );
+    optionId = insertedId(result);
+  }
+
+  if (optionId && Number(category.payment_option_id) !== optionId) {
+    await query(
+      `UPDATE pay_account_categories
+       SET payment_option_id = ?, updated_at = NOW()
+       WHERE id = ?`,
+      [optionId, categoryId],
+    );
+  }
+  return optionId || null;
+}
+
+export async function syncCustomPayAccountCategoryPaymentOptions() {
+  await ensureCustomPayAccountSchema();
+  const categories = await query(
+    `SELECT id, name, payment_option_id
+     FROM pay_account_categories
+     WHERE is_deleted = 0
+     ORDER BY id ASC`,
+  );
+  for (const category of categories) {
+    await ensurePaymentOptionForCategory(category);
+  }
+}
+
+export async function listCustomPayAccountCategoryNames() {
+  await syncCustomPayAccountCategoryPaymentOptions();
+  const rows = await query(
+    `SELECT name
+     FROM pay_account_categories
+     WHERE is_deleted = 0
+     ORDER BY id ASC`,
+  );
+  return rows.map((row) => String(row.name || '').trim()).filter(Boolean);
 }
 
 async function assertUniqueSlug(slug, excludeId = null) {
@@ -307,6 +418,7 @@ export async function createCustomPayAccountCategory(payload) {
     [name, slug],
   );
   const newId = insertedId(result);
+  await ensurePaymentOptionForCategory({ id: newId, name, payment_option_id: null });
   const categories = await listCustomPayAccountCategories();
   return categories.find((item) => Number(item.id) === newId) || {
     id: newId,
@@ -338,6 +450,11 @@ export async function updateCustomPayAccountCategory(categoryId, payload) {
      WHERE id = ? AND is_deleted = 0`,
     [name, slug, id],
   );
+  await ensurePaymentOptionForCategory({
+    id,
+    name,
+    payment_option_id: existing.payment_option_id,
+  });
   const categories = await listCustomPayAccountCategories();
   return categories.find((item) => Number(item.id) === id);
 }

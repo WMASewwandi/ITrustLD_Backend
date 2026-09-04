@@ -397,7 +397,9 @@ export async function listGiftClaimsForAdmin(params = {}) {
     `SELECT COUNT(*) AS total
      FROM loyalty_gift_claims lgc
      INNER JOIN loyalty_gifts lg ON lg.id = lgc.gift_id
-     LEFT JOIN account_holders ah ON ah.user_id = lgc.user_id
+     LEFT JOIN account_holders ah ON ah.id = (
+       SELECT MIN(ah2.id) FROM account_holders ah2 WHERE ah2.user_id = lgc.user_id
+     )
      WHERE ${where}`,
     values,
   );
@@ -414,7 +416,9 @@ export async function listGiftClaimsForAdmin(params = {}) {
             u.name AS admin_name
      FROM loyalty_gift_claims lgc
      INNER JOIN loyalty_gifts lg ON lg.id = lgc.gift_id
-     LEFT JOIN account_holders ah ON ah.user_id = lgc.user_id
+     LEFT JOIN account_holders ah ON ah.id = (
+       SELECT MIN(ah2.id) FROM account_holders ah2 WHERE ah2.user_id = lgc.user_id
+     )
      LEFT JOIN users u ON u.id = lgc.processed_by
      WHERE ${where}
      ORDER BY lgc.id DESC
