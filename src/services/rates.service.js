@@ -1,5 +1,6 @@
 import { query } from '../config/database.js';
 import { env } from '../config/env.js';
+import { columnExists } from '../db/helpers.js';
 import { formatTimestampSl, formatYmdColombo, parseDbDateTime } from '../utils/slTime.js';
 import { sendEmailAndSms } from './notification.service.js';
 import { rateChangeEmailHtml } from './mail.templates.js';
@@ -98,26 +99,42 @@ export async function listRatePaymentOptions() {
   return paymentOptions;
 }
 
-export async function listWalletsForRates() {
+export async function listWalletsForRates(paymentOptionId) {
   await ensureWalletCatalogLinksForRates();
+  const optionId = Number(paymentOptionId);
+  if (!Number.isInteger(optionId) || optionId <= 0) {
+    throw validationError('Payment option is required.');
+  }
+
   const rows = await query(
     `SELECT w.id, w.wallet_name
      FROM wallets w
      WHERE EXISTS (
        SELECT 1
        FROM topup_methods t
+       INNER JOIN wallet_supported_payment_options wspo
+         ON wspo.wallet_id = t.id
+        AND wspo.wallet_type = 'topup'
        WHERE t.wallet_id = w.id
          AND (t.is_deleted = 0 OR t.is_deleted IS NULL)
          AND UPPER(t.availability) = 'AVAILABLE'
+         AND wspo.payment_option_id = ?
+         AND UPPER(wspo.status) = 'ACTIVE'
      )
      OR EXISTS (
        SELECT 1
        FROM cashout_methods c
+       INNER JOIN wallet_supported_payment_options wspo
+         ON wspo.wallet_id = c.id
+        AND wspo.wallet_type = 'cashout'
        WHERE c.wallet_id = w.id
          AND (c.is_deleted = 0 OR c.is_deleted IS NULL)
          AND UPPER(c.availability) = 'AVAILABLE'
+         AND wspo.payment_option_id = ?
+         AND UPPER(wspo.status) = 'ACTIVE'
      )
      ORDER BY w.wallet_name ASC, w.id ASC`,
+    [optionId, optionId],
   );
 
   return rows.map((row) => ({
@@ -126,32 +143,230 @@ export async function listWalletsForRates() {
   }));
 }
 
-async function getLatestTopupMethodForWallet(walletId) {
-  const rows = await query(
-    `SELECT id, topup_method_name, wallet_id
-     FROM topup_methods
-     WHERE wallet_id = ?
-       AND (is_deleted = 0 OR is_deleted IS NULL)
-       AND UPPER(availability) = 'AVAILABLE'
-     ORDER BY id DESC
+async function walletAllowsPaymentOption(walletId, paymentOptionId) {
+  const optionId = Number(paymentOptionId);
+  if (!Number.isInteger(optionId) || optionId <= 0) return false;
+
+  const topup = await query(
+    `SELECT t.id
+     FROM topup_methods t
+     INNER JOIN wallet_supported_payment_options wspo
+       ON wspo.wallet_id = t.id
+      AND wspo.wallet_type = 'topup'
+     WHERE t.wallet_id = ?
+       AND wspo.payment_option_id = ?
+       AND UPPER(wspo.status) = 'ACTIVE'
+       AND (t.is_deleted = 0 OR t.is_deleted IS NULL)
+       AND UPPER(t.availability) = 'AVAILABLE'
      LIMIT 1`,
-    [walletId],
+    [walletId, optionId],
   );
-  return rows[0] ?? null;
+  if (topup[0]) return true;
+
+  const cashout = await query(
+    `SELECT c.id
+     FROM cashout_methods c
+     INNER JOIN wallet_supported_payment_options wspo
+       ON wspo.wallet_id = c.id
+      AND wspo.wallet_type = 'cashout'
+     WHERE c.wallet_id = ?
+       AND wspo.payment_option_id = ?
+       AND UPPER(wspo.status) = 'ACTIVE'
+       AND (c.is_deleted = 0 OR c.is_deleted IS NULL)
+       AND UPPER(c.availability) = 'AVAILABLE'
+     LIMIT 1`,
+    [walletId, optionId],
+  );
+  return Boolean(cashout[0]);
 }
 
-async function getLatestCashoutMethodForWallet(walletId) {
-  const rows = await query(
-    `SELECT id, cashout_method_name, wallet_id
-     FROM cashout_methods
+function insertedId(result) {
+  const id = Number(result?.insertId ?? result?.lastInsertRowid ?? 0);
+  return Number.isInteger(id) && id > 0 ? id : 0;
+}
+
+const METHOD_NOT_DELETED_SQL = `(is_deleted = 0 OR is_deleted IS NULL)`;
+const METHOD_USABLE_SQL = `${METHOD_NOT_DELETED_SQL}
+       AND (availability IS NULL OR UPPER(TRIM(availability)) <> 'NOT_AVAILABLE')`;
+
+async function linkMethodWalletId(tableName, methodId, walletId) {
+  await query(
+    `UPDATE ${tableName}
+     SET wallet_id = ?, availability = 'AVAILABLE', updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+    [walletId, methodId],
+  );
+}
+
+async function findLatestMethodForWallet(kind, walletId, walletName) {
+  const table = kind === 'topup' ? 'topup_methods' : 'cashout_methods';
+  const nameColumn = kind === 'topup' ? 'topup_method_name' : 'cashout_method_name';
+
+  const byWallet = await query(
+    `SELECT id, ${nameColumn} AS method_name, wallet_id
+     FROM ${table}
      WHERE wallet_id = ?
-       AND (is_deleted = 0 OR is_deleted IS NULL)
-       AND UPPER(availability) = 'AVAILABLE'
+       AND ${METHOD_USABLE_SQL}
      ORDER BY id DESC
      LIMIT 1`,
     [walletId],
   );
-  return rows[0] ?? null;
+  if (byWallet[0]) return byWallet[0];
+
+  const name = String(walletName || '').trim();
+  if (!name) return null;
+
+  const byName = await query(
+    `SELECT id, ${nameColumn} AS method_name, wallet_id
+     FROM ${table}
+     WHERE UPPER(TRIM(${nameColumn})) = UPPER(?)
+       AND ${METHOD_NOT_DELETED_SQL}
+     ORDER BY id DESC
+     LIMIT 1`,
+    [name],
+  );
+  const row = byName[0];
+  if (!row) return null;
+
+  await linkMethodWalletId(table, row.id, walletId);
+  row.wallet_id = walletId;
+  return row;
+}
+
+async function resolvePayAccountForWalletName(walletName) {
+  const name = String(walletName || '').trim();
+  if (!name) return { type: null, id: null };
+  try {
+    const rows = await query(
+      `SELECT r.id
+       FROM pay_account_records r
+       INNER JOIN pay_account_categories c ON c.id = r.category_id
+       WHERE r.is_deleted = 0
+         AND c.is_deleted = 0
+         AND UPPER(TRIM(c.name)) = UPPER(?)
+       ORDER BY r.id ASC
+       LIMIT 1`,
+      [name],
+    );
+    const id = Number(rows[0]?.id);
+    if (Number.isInteger(id) && id > 0) {
+      return { type: 'custom', id };
+    }
+  } catch {
+    return { type: null, id: null };
+  }
+  return { type: null, id: null };
+}
+
+async function copyTopupPaymentOptionsToCashout(topupMethodId, cashoutMethodId) {
+  const options = await query(
+    `SELECT payment_option_id
+     FROM wallet_supported_payment_options
+     WHERE wallet_id = ?
+       AND wallet_type = 'topup'
+       AND UPPER(status) = 'ACTIVE'`,
+    [topupMethodId],
+  );
+  for (const option of options) {
+    const paymentOptionId = Number(option.payment_option_id);
+    if (!Number.isInteger(paymentOptionId) || paymentOptionId <= 0) continue;
+    const existing = await query(
+      `SELECT id
+       FROM wallet_supported_payment_options
+       WHERE wallet_id = ?
+         AND wallet_type = 'cashout'
+         AND payment_option_id = ?
+       LIMIT 1`,
+      [cashoutMethodId, paymentOptionId],
+    );
+    if (existing[0]) {
+      await query(
+        `UPDATE wallet_supported_payment_options
+         SET status = 'ACTIVE', updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [existing[0].id],
+      );
+      continue;
+    }
+    await query(
+      `INSERT INTO wallet_supported_payment_options
+         (wallet_id, wallet_type, payment_option_id, status, created_at, updated_at)
+       VALUES (?, 'cashout', ?, 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      [cashoutMethodId, paymentOptionId],
+    );
+  }
+}
+
+async function cloneTopupMethodAsCashout(topupMethod, walletId) {
+  const rows = await query(`SELECT * FROM topup_methods WHERE id = ? LIMIT 1`, [topupMethod.id]);
+  const src = rows[0];
+  if (!src) return null;
+
+  const insertColumns = [
+    'cashout_method_name',
+    'cashout_method_currency',
+    'cashout_method_id_type',
+    'platform_id_type',
+    'cashout_method_logo',
+    'availability',
+    'minimum_limit',
+    'maximum_limit',
+    'is_deleted',
+    'tnc',
+    'wallet_id',
+  ];
+  const insertValues = [
+    src.topup_method_name,
+    src.topup_method_currency,
+    src.topup_method_id_type,
+    src.platform_id_type,
+    src.topup_method_logo,
+    'AVAILABLE',
+    src.minimum_limit,
+    src.maximum_limit,
+    0,
+    src.tnc,
+    walletId,
+  ];
+
+  if (await columnExists('cashout_methods', 'pay_account_type')) {
+    const payAccount = await resolvePayAccountForWalletName(src.topup_method_name);
+    insertColumns.push('pay_account_type', 'pay_account_id');
+    insertValues.push(payAccount.type, payAccount.id);
+  }
+
+  if (await columnExists('cashout_methods', 'allow_navigate_button')) {
+    insertColumns.push('allow_navigate_button', 'navigate_url', 'navigate_button_label');
+    insertValues.push(
+      src.allow_navigate_button ?? 0,
+      src.navigate_url ?? null,
+      src.navigate_button_label ?? null,
+    );
+  }
+
+  const placeholders = [...insertValues.map(() => '?'), 'CURRENT_TIMESTAMP', 'CURRENT_TIMESTAMP'].join(', ');
+  const result = await query(
+    `INSERT INTO cashout_methods (${insertColumns.join(', ')}, created_at, updated_at)
+     VALUES (${placeholders})`,
+    insertValues,
+  );
+  const cashoutId = insertedId(result);
+  if (!cashoutId) return null;
+
+  await copyTopupPaymentOptionsToCashout(src.id, cashoutId);
+  return {
+    id: cashoutId,
+    method_name: src.topup_method_name,
+    wallet_id: walletId,
+  };
+}
+
+async function getLatestTopupMethodForWallet(walletId, walletName) {
+  return findLatestMethodForWallet('topup', walletId, walletName);
+}
+
+async function getLatestCashoutMethodForWallet(walletId, walletName) {
+  return findLatestMethodForWallet('cashout', walletId, walletName);
 }
 
 async function assertWalletForRates(walletId) {
@@ -163,8 +378,8 @@ async function assertWalletForRates(walletId) {
     throw validationError('No wallet for this id is available.');
   }
 
-  const topupMethod = await getLatestTopupMethodForWallet(walletId);
-  const cashoutMethod = await getLatestCashoutMethodForWallet(walletId);
+  const topupMethod = await getLatestTopupMethodForWallet(walletId, wallet.wallet_name);
+  const cashoutMethod = await getLatestCashoutMethodForWallet(walletId, wallet.wallet_name);
   if (!topupMethod && !cashoutMethod) {
     throw validationError('Selected wallet has no available topup or cashout methods.');
   }
@@ -348,7 +563,7 @@ export async function getRatesManagementData(methodName) {
        AND (dr.is_deleted = 0 OR dr.is_deleted IS NULL)
        AND tm.wallet_id IS NOT NULL
      ORDER BY dr.created_at DESC
-     LIMIT 5`,
+     LIMIT 10`,
     [paymentOption.id],
   );
 
@@ -361,7 +576,7 @@ export async function getRatesManagementData(methodName) {
        AND (wr.is_deleted = 0 OR wr.is_deleted IS NULL)
        AND cm.wallet_id IS NOT NULL
      ORDER BY wr.created_at DESC
-     LIMIT 5`,
+     LIMIT 10`,
     [paymentOption.id],
   );
 
@@ -371,11 +586,12 @@ export async function getRatesManagementData(methodName) {
      FROM point_withdrawal_rates pwr
      LEFT JOIN payment_options po ON po.id = pwr.payment_option_id
      WHERE pwr.payment_option_id = ?
-     ORDER BY pwr.applicable_date DESC`,
+     ORDER BY pwr.applicable_date DESC
+     LIMIT 10`,
     [paymentOption.id],
   );
 
-  const wallets = await listWalletsForRates();
+  const wallets = await listWalletsForRates(paymentOption.id);
 
   return {
     paymentOption,
@@ -392,7 +608,26 @@ export async function createRates(adminId, payload) {
   const depositRate = parseRate(payload.depositRate, 'Deposit rate');
   const withdrawalRate = parseRate(payload.withdrawalRate, 'Withdrawal rate');
 
-  const { wallet, topupMethod, cashoutMethod } = await assertWalletForRates(walletId);
+  let { wallet, topupMethod, cashoutMethod } = await assertWalletForRates(walletId);
+
+  if (!(await walletAllowsPaymentOption(walletId, paymentOptionId))) {
+    throw validationError('Selected wallet does not allow this payment method.');
+  }
+
+  if (withdrawalRate && !cashoutMethod && topupMethod) {
+    cashoutMethod = await cloneTopupMethodAsCashout(topupMethod, walletId);
+  }
+
+  if (depositRate && !topupMethod) {
+    throw validationError(
+      `No available top-up wallet named "${wallet.wallet_name}" to save the deposit rate.`,
+    );
+  }
+  if (withdrawalRate && !cashoutMethod) {
+    throw validationError(
+      `No available cash-out wallet named "${wallet.wallet_name}" to save the withdrawal rate.`,
+    );
+  }
 
   let savedDeposit = null;
   let savedWithdrawal = null;
