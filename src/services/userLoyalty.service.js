@@ -770,6 +770,7 @@ export async function getUserLoyaltySummary(userId) {
     eligible_gift_count: eligibleGiftCount,
     rate_label: buildRateLabel(isPartner),
     usd_value_of_earned: Number(((totals.earned / POINT_DIVIDER) * usdPerBlock).toFixed(2)),
+    usd_value_of_year: Number(((earnedForYear / POINT_DIVIDER) * usdPerBlock).toFixed(2)),
     minimum_points: MIN_POINTS,
     point_divider: POINT_DIVIDER,
     usd_per_block: usdPerBlock,

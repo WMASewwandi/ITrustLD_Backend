@@ -22,6 +22,7 @@ import {
   loadNamedCustomPayAccountsIfPresent,
 } from './customPayAccount.service.js';
 import { withPanelPaymentAccountExtras } from './builtinPayAccountMeta.service.js';
+import { listUserCustomReceivingAccounts, loadUserCustomReceivingAccount } from './userPaymentAccount.service.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -654,11 +655,28 @@ async function loadUserReceivingAccounts(userId, paymentOptionName) {
         }
         break;
       }
-      default:
+      default: {
+        const custom = await loadUserCustomReceivingAccount(refId);
+        if (custom) {
+          details = {
+            id: custom.id,
+            accountType: row.payment_option,
+            label: `${custom.categoryName} — ${custom.display || custom.primaryValue || custom.id}`,
+            accountId: custom.primaryValue || custom.display || String(custom.id),
+          };
+        }
         break;
+      }
     }
 
     if (details) accounts.push(details);
+  }
+
+  const customAccounts = await listUserCustomReceivingAccounts(userId, optionName);
+  for (const account of customAccounts) {
+    if (!accounts.some((item) => Number(item.id) === Number(account.id) && item.accountType === account.accountType)) {
+      accounts.push(account);
+    }
   }
 
   return accounts;
@@ -694,7 +712,7 @@ function validateCashoutAccountId(methodName, accountId) {
   return null;
 }
 
-async function buildAccountDetailsLog(selectedAccountType, selectedAccountId) {
+async function buildAccountDetailsLog(userId, selectedAccountType, selectedAccountId) {
   const accountType = String(selectedAccountType || '').trim();
   const accountId = Number(selectedAccountId);
   if (!accountType || !Number.isInteger(accountId) || accountId <= 0) {
@@ -750,7 +768,17 @@ async function buildAccountDetailsLog(selectedAccountType, selectedAccountId) {
   };
 
   const config = tableMap[accountType];
-  if (!config) throw validationError('Invalid receiving account type.');
+  if (!config) {
+    const custom = await loadUserCustomReceivingAccount(accountId);
+    if (!custom || Number(custom.userId) !== Number(userId)) {
+      throw validationError('Invalid receiving account type.');
+    }
+    return {
+      id: custom.id,
+      account_type: accountType,
+      account_id: custom.primaryValue || custom.display || String(custom.id),
+    };
+  }
 
   const rows = await query(`SELECT id, ${config.column} AS account_value FROM ${config.table} WHERE id = ? LIMIT 1`, [
     accountId,
@@ -1033,7 +1061,7 @@ export async function saveWithdrawalPaymentProof(userId, withdrawalId, file, pay
     };
   }
 
-  const accountDetailsLog = await buildAccountDetailsLog(selectedAccountType, selectedAccountId);
+  const accountDetailsLog = await buildAccountDetailsLog(userId, selectedAccountType, selectedAccountId);
   const filename = await storeWithdrawalProof(file);
 
   await query(
