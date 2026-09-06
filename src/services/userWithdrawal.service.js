@@ -19,6 +19,7 @@ import {
 import {
   loadCustomPayAccountByRecordId,
   loadCustomPayAccountsByCategoryName,
+  loadNamedCustomPayAccountsIfPresent,
 } from './customPayAccount.service.js';
 import { withPanelPaymentAccountExtras } from './builtinPayAccountMeta.service.js';
 
@@ -222,6 +223,9 @@ async function getCashoutMethodById(cashoutMethodId) {
 }
 
 async function loadCashoutMethodPaymentAccountsCore(cashoutMethodName) {
+  const namedCustom = await loadNamedCustomPayAccountsIfPresent(cashoutMethodName);
+  if (namedCustom) return namedCustom;
+
   const name = String(cashoutMethodName || '').trim().toLowerCase();
 
   if (name === 'bank transfer') {

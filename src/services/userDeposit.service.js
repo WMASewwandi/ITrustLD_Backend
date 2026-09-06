@@ -22,7 +22,7 @@ import {
   assertDepositMethodPendingLimit,
   getOpenDepositCountsByMethod,
 } from './pendingMethodLimit.service.js';
-import { loadCustomPayAccountsByCategoryName } from './customPayAccount.service.js';
+import { loadCustomPayAccountsByCategoryName, loadNamedCustomPayAccountsIfPresent } from './customPayAccount.service.js';
 import { withPanelPaymentAccountExtras } from './builtinPayAccountMeta.service.js';
 
 function validationError(message, status = 422) {
@@ -231,6 +231,9 @@ async function getTopupMethodById(topupMethodId) {
 }
 
 async function loadPaymentAccountsCore(paymentOptionName) {
+  const namedCustom = await loadNamedCustomPayAccountsIfPresent(paymentOptionName);
+  if (namedCustom) return namedCustom;
+
   const name = String(paymentOptionName || '').trim().toLowerCase();
 
   if (name === 'bank transfer') {

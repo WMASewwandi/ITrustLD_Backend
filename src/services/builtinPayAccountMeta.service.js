@@ -287,12 +287,44 @@ export async function getBuiltinPayAccountMetaMap() {
   return meta;
 }
 
+function normalizeCategoryName(name) {
+  return String(name || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+async function assertBuiltinDisplayNameAvailable(displayName, excludeType) {
+  const needle = normalizeCategoryName(displayName);
+  if (!needle) return;
+  const meta = await getBuiltinPayAccountMetaMap();
+  for (const type of BUILTIN_PAY_ACCOUNT_TYPES) {
+    if (type === excludeType) continue;
+    if (normalizeCategoryName(meta[type]?.displayName) === needle) {
+      throw validationError('A category with this name already exists.');
+    }
+  }
+  try {
+    const rows = await query(
+      `SELECT name
+       FROM pay_account_categories
+       WHERE is_deleted = 0`,
+    );
+    if (rows.some((row) => normalizeCategoryName(row.name) === needle)) {
+      throw validationError('A category with this name already exists.');
+    }
+  } catch (error) {
+    if (error?.status) throw error;
+  }
+}
+
 export async function renameBuiltinPayAccountDisplayName(accountType, payload) {
   await ensureBuiltinPayAccountMetaSchema();
   const type = parseBuiltinAccountType(accountType);
   const displayName = String(payload?.displayName ?? payload?.name ?? '').trim();
   if (!displayName) throw validationError('Display name is required.');
   if (displayName.length > 120) throw validationError('Display name is too long.');
+  await assertBuiltinDisplayNameAvailable(displayName, type);
 
   if (getDbDriver() === 'sqlite') {
     await query(
