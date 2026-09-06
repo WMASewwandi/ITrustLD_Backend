@@ -201,6 +201,41 @@ async function linkMethodWalletId(tableName, methodId, walletId) {
 async function findLatestMethodForWallet(kind, walletId, walletName) {
   const table = kind === 'topup' ? 'topup_methods' : 'cashout_methods';
   const nameColumn = kind === 'topup' ? 'topup_method_name' : 'cashout_method_name';
+  const name = String(walletName || '').trim();
+
+  // Prefer the method that is both linked to this catalog wallet AND named like it.
+  // Live data can put several cash-out rows on one wallet_id; ORDER BY id DESC
+  // used to attach XM withdrawal rates to a later ByBit row.
+  if (name) {
+    const byWalletAndName = await query(
+      `SELECT id, ${nameColumn} AS method_name, wallet_id
+       FROM ${table}
+       WHERE wallet_id = ?
+         AND UPPER(TRIM(${nameColumn})) = UPPER(?)
+         AND ${METHOD_USABLE_SQL}
+       ORDER BY id DESC
+       LIMIT 1`,
+      [walletId, name],
+    );
+    if (byWalletAndName[0]) return byWalletAndName[0];
+
+    const byName = await query(
+      `SELECT id, ${nameColumn} AS method_name, wallet_id
+       FROM ${table}
+       WHERE UPPER(TRIM(${nameColumn})) = UPPER(?)
+         AND ${METHOD_NOT_DELETED_SQL}
+       ORDER BY CASE WHEN wallet_id = ? THEN 0 ELSE 1 END, id DESC
+       LIMIT 1`,
+      [name, walletId],
+    );
+    if (byName[0]) {
+      await linkMethodWalletId(table, byName[0].id, walletId);
+      byName[0].wallet_id = walletId;
+      return byName[0];
+    }
+
+    return null;
+  }
 
   const byWallet = await query(
     `SELECT id, ${nameColumn} AS method_name, wallet_id
@@ -211,26 +246,7 @@ async function findLatestMethodForWallet(kind, walletId, walletName) {
      LIMIT 1`,
     [walletId],
   );
-  if (byWallet[0]) return byWallet[0];
-
-  const name = String(walletName || '').trim();
-  if (!name) return null;
-
-  const byName = await query(
-    `SELECT id, ${nameColumn} AS method_name, wallet_id
-     FROM ${table}
-     WHERE UPPER(TRIM(${nameColumn})) = UPPER(?)
-       AND ${METHOD_NOT_DELETED_SQL}
-     ORDER BY id DESC
-     LIMIT 1`,
-    [name],
-  );
-  const row = byName[0];
-  if (!row) return null;
-
-  await linkMethodWalletId(table, row.id, walletId);
-  row.wallet_id = walletId;
-  return row;
+  return byWallet[0] ?? null;
 }
 
 async function resolvePayAccountForWalletName(walletName) {
