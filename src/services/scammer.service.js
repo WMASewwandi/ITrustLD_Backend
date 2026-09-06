@@ -1,5 +1,5 @@
 import { query } from '../config/database.js';
-import { formatTimestampSl } from '../utils/slTime.js';
+import { formatUtcDatetimeSl } from '../utils/slTime.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -9,7 +9,7 @@ function validationError(message, status = 422) {
 
 function formatTimestamp(value) {
   if (!value) return '';
-  return formatTimestampSl(value) || String(value);
+  return formatUtcDatetimeSl(value) || String(value);
 }
 
 function escapeLike(value) {

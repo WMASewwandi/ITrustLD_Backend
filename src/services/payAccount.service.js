@@ -1,5 +1,12 @@
 import { query } from '../config/database.js';
 import {
+  attachExtraFieldsToAccounts,
+  DEFAULT_BUILTIN_DISPLAY_NAMES,
+  getBuiltinPayAccountMetaMap,
+  saveBuiltinExtraValues,
+  validateBuiltinExtraPayload,
+} from './builtinPayAccountMeta.service.js';
+import {
   customPayAccountExists,
   listCustomPayAccountCategories,
 } from './customPayAccount.service.js';
@@ -112,7 +119,9 @@ function validateBinancePayload(payload) {
   const binanceEmail = String(payload.binanceEmail ?? '').trim();
 
   if (!trc20WalletAddress) throw validationError('TRC20 wallet address is required.');
-  if (!binanceEmail) throw validationError('Binance email is required.');
+  if (binanceEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(binanceEmail)) {
+    throw validationError('Binance email must be a valid email.');
+  }
 
   return { trc20WalletAddress, binanceEmail };
 }
@@ -134,6 +143,32 @@ async function getAccountRow(accountType, accountId) {
     [accountId],
   );
   return rows[0] ?? null;
+}
+
+async function finalizeMappedAccount(accountType, mapped, payload) {
+  try {
+    await saveBuiltinExtraValues(accountType, mapped.id, payload);
+  } catch (error) {
+    if (error?.status) throw error;
+    console.error('[pay-accounts] extra values save skipped', error);
+  }
+  try {
+    const [enriched] = await attachExtraFieldsToAccounts(accountType, [mapped]);
+    return enriched || mapped;
+  } catch (error) {
+    console.error('[pay-accounts] extra fields attach skipped', error);
+    return mapped;
+  }
+}
+
+async function mapAccountList(accountType, rows) {
+  const mapped = rows.map(ACCOUNT_CONFIG[accountType].mapRow);
+  try {
+    return await attachExtraFieldsToAccounts(accountType, mapped);
+  } catch (error) {
+    console.error('[pay-accounts] extra fields attach skipped', error);
+    return mapped;
+  }
 }
 
 export async function listPayAccounts() {
@@ -177,25 +212,39 @@ export async function listPayAccounts() {
   ]);
 
   let customCategories = [];
+  let builtinMeta = {};
   try {
     customCategories = await listCustomPayAccountCategories();
   } catch (error) {
     console.error('[pay-accounts] failed to load custom categories', error);
   }
+  try {
+    builtinMeta = await getBuiltinPayAccountMetaMap();
+  } catch (error) {
+    console.error('[pay-accounts] failed to load builtin meta', error);
+    builtinMeta = Object.fromEntries(
+      Object.entries(DEFAULT_BUILTIN_DISPLAY_NAMES).map(([type, displayName]) => [
+        type,
+        { accountType: type, displayName, fields: [] },
+      ]),
+    );
+  }
 
   return {
-    banks: bankRows.map(ACCOUNT_CONFIG.bank.mapRow),
-    skrill: skrillRows.map(ACCOUNT_CONFIG.skrill.mapRow),
-    neteller: netellerRows.map(ACCOUNT_CONFIG.neteller.mapRow),
-    binance: binanceRows.map(ACCOUNT_CONFIG.binance.mapRow),
-    pm: pmRows.map(ACCOUNT_CONFIG.pm.mapRow),
-    xm: xmRows.map(ACCOUNT_CONFIG.xm.mapRow),
+    banks: await mapAccountList('bank', bankRows),
+    skrill: await mapAccountList('skrill', skrillRows),
+    neteller: await mapAccountList('neteller', netellerRows),
+    binance: await mapAccountList('binance', binanceRows),
+    pm: await mapAccountList('pm', pmRows),
+    xm: await mapAccountList('xm', xmRows),
     customCategories,
+    builtinMeta,
   };
 }
 
 export async function createBankAccount(userId, payload) {
   const { accountNumber, name, bank, branch } = validateBankPayload(payload);
+  await validateBuiltinExtraPayload('bank', payload);
 
   const result = await query(
     `INSERT INTO admin_bank_accounts
@@ -205,7 +254,7 @@ export async function createBankAccount(userId, payload) {
   );
 
   const row = await getAccountRow('bank', result.insertId);
-  return ACCOUNT_CONFIG.bank.mapRow(row);
+  return finalizeMappedAccount('bank', ACCOUNT_CONFIG.bank.mapRow(row), payload);
 }
 
 export async function updateBankAccount(accountId, userId, payload) {
@@ -214,6 +263,7 @@ export async function updateBankAccount(accountId, userId, payload) {
   if (!existing) throw validationError('Bank account not found.', 404);
 
   const { accountNumber, name, bank, branch } = validateBankPayload(payload);
+  await validateBuiltinExtraPayload('bank', payload);
 
   await query(
     `UPDATE admin_bank_accounts
@@ -228,7 +278,7 @@ export async function updateBankAccount(accountId, userId, payload) {
   );
 
   const row = await getAccountRow('bank', id);
-  return ACCOUNT_CONFIG.bank.mapRow(row);
+  return finalizeMappedAccount('bank', ACCOUNT_CONFIG.bank.mapRow(row), payload);
 }
 
 export async function createWalletAccount(accountType, userId, payload) {
@@ -238,6 +288,7 @@ export async function createWalletAccount(accountType, userId, payload) {
   }
 
   const { email } = validateEmailPayload(payload);
+  await validateBuiltinExtraPayload(type, payload);
   const config = ACCOUNT_CONFIG[type];
 
   const result = await query(
@@ -248,7 +299,7 @@ export async function createWalletAccount(accountType, userId, payload) {
   );
 
   const row = await getAccountRow(type, result.insertId);
-  return config.mapRow(row);
+  return finalizeMappedAccount(type, config.mapRow(row), payload);
 }
 
 export async function updateWalletAccount(accountType, accountId, userId, payload) {
@@ -262,6 +313,7 @@ export async function updateWalletAccount(accountType, accountId, userId, payloa
   if (!existing) throw validationError('Account not found.', 404);
 
   const { email } = validateEmailPayload(payload);
+  await validateBuiltinExtraPayload(type, payload);
   const config = ACCOUNT_CONFIG[type];
 
   await query(
@@ -274,11 +326,12 @@ export async function updateWalletAccount(accountType, accountId, userId, payloa
   );
 
   const row = await getAccountRow(type, id);
-  return config.mapRow(row);
+  return finalizeMappedAccount(type, config.mapRow(row), payload);
 }
 
 export async function createBinanceAccount(userId, payload) {
   const { trc20WalletAddress, binanceEmail } = validateBinancePayload(payload);
+  await validateBuiltinExtraPayload('binance', payload);
 
   const result = await query(
     `INSERT INTO admin_binance_accounts
@@ -288,7 +341,7 @@ export async function createBinanceAccount(userId, payload) {
   );
 
   const row = await getAccountRow('binance', result.insertId);
-  return ACCOUNT_CONFIG.binance.mapRow(row);
+  return finalizeMappedAccount('binance', ACCOUNT_CONFIG.binance.mapRow(row), payload);
 }
 
 export async function updateBinanceAccount(accountId, userId, payload) {
@@ -297,6 +350,7 @@ export async function updateBinanceAccount(accountId, userId, payload) {
   if (!existing) throw validationError('Binance account not found.', 404);
 
   const { trc20WalletAddress, binanceEmail } = validateBinancePayload(payload);
+  await validateBuiltinExtraPayload('binance', payload);
 
   await query(
     `UPDATE admin_binance_accounts
@@ -309,7 +363,7 @@ export async function updateBinanceAccount(accountId, userId, payload) {
   );
 
   const row = await getAccountRow('binance', id);
-  return ACCOUNT_CONFIG.binance.mapRow(row);
+  return finalizeMappedAccount('binance', ACCOUNT_CONFIG.binance.mapRow(row), payload);
 }
 
 export async function createAccountIdPayAccount(accountType, userId, payload) {
@@ -319,6 +373,7 @@ export async function createAccountIdPayAccount(accountType, userId, payload) {
   }
 
   const { accountId } = validateAccountIdPayload(payload);
+  await validateBuiltinExtraPayload(type, payload);
   const config = ACCOUNT_CONFIG[type];
 
   const result = await query(
@@ -329,7 +384,7 @@ export async function createAccountIdPayAccount(accountType, userId, payload) {
   );
 
   const row = await getAccountRow(type, result.insertId);
-  return config.mapRow(row);
+  return finalizeMappedAccount(type, config.mapRow(row), payload);
 }
 
 export async function updateAccountIdPayAccount(accountType, accountId, userId, payload) {
@@ -343,6 +398,7 @@ export async function updateAccountIdPayAccount(accountType, accountId, userId, 
   if (!existing) throw validationError('Account not found.', 404);
 
   const { accountId: nextAccountId } = validateAccountIdPayload(payload);
+  await validateBuiltinExtraPayload(type, payload);
   const config = ACCOUNT_CONFIG[type];
 
   await query(
@@ -355,7 +411,7 @@ export async function updateAccountIdPayAccount(accountType, accountId, userId, 
   );
 
   const row = await getAccountRow(type, id);
-  return config.mapRow(row);
+  return finalizeMappedAccount(type, config.mapRow(row), payload);
 }
 
 export async function deletePayAccount(accountType, accountId) {
@@ -393,7 +449,7 @@ export async function togglePayAccountStatus(accountType, accountId, active) {
   );
 
   const row = await getAccountRow(type, id);
-  return config.mapRow(row);
+  return finalizeMappedAccount(type, config.mapRow(row), {});
 }
 
 const PAY_ACCOUNT_GROUP_LABELS = {
@@ -405,7 +461,7 @@ const PAY_ACCOUNT_GROUP_LABELS = {
   xm: 'XM',
 };
 
-function formatPayAccountChoice(type, account) {
+function formatPayAccountChoice(type, account, displayName) {
   let detail = '';
   if (type === 'bank') {
     detail = [account.name, account.bank, account.accountNumber].filter(Boolean).join(' · ');
@@ -417,7 +473,7 @@ function formatPayAccountChoice(type, account) {
     detail = account.accountId || '';
   }
 
-  const group = PAY_ACCOUNT_GROUP_LABELS[type] || type;
+  const group = displayName || PAY_ACCOUNT_GROUP_LABELS[type] || type;
   const label = `${group}${detail ? ` · ${detail}` : ` · #${account.id}`}${
     account.active ? '' : ' (Inactive)'
   }`;
@@ -457,8 +513,9 @@ export async function listPayAccountChoices() {
 
   const choices = [];
   for (const [type, rows] of groups) {
+    const displayName = accounts.builtinMeta?.[type]?.displayName;
     for (const row of rows || []) {
-      choices.push(formatPayAccountChoice(type, row));
+      choices.push(formatPayAccountChoice(type, row, displayName));
     }
   }
 
