@@ -23,6 +23,7 @@ import {
   getOpenDepositCountsByMethod,
 } from './pendingMethodLimit.service.js';
 import { loadCustomPayAccountsByCategoryName } from './customPayAccount.service.js';
+import { withPanelPaymentAccountExtras } from './builtinPayAccountMeta.service.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -229,7 +230,7 @@ async function getTopupMethodById(topupMethodId) {
   return rows[0] ? mapTopupMethodRow(rows[0]) : null;
 }
 
-async function loadPaymentAccounts(paymentOptionName) {
+async function loadPaymentAccountsCore(paymentOptionName) {
   const name = String(paymentOptionName || '').trim().toLowerCase();
 
   if (name === 'bank transfer') {
@@ -260,11 +261,14 @@ async function loadPaymentAccounts(paymentOptionName) {
     );
     return {
       type: 'binance',
-      accounts: rows.map((row) => ({
-        id: row.id,
-        trc20WalletAddress: row.trc20_wallet_address,
-        binanceEmail: row.binance_email,
-      })),
+      accounts: rows.map((row) => {
+        const binanceEmail = String(row.binance_email || '').trim();
+        return {
+          id: row.id,
+          trc20WalletAddress: row.trc20_wallet_address,
+          ...(binanceEmail ? { binanceEmail } : {}),
+        };
+      }),
     };
   }
 
@@ -354,6 +358,11 @@ async function loadPaymentAccounts(paymentOptionName) {
   }
 
   return { type: 'unknown', accounts: [] };
+}
+
+async function loadPaymentAccounts(paymentOptionName) {
+  const result = await loadPaymentAccountsCore(paymentOptionName);
+  return withPanelPaymentAccountExtras(result);
 }
 
 export async function getDepositBootstrap(userId) {

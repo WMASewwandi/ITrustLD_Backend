@@ -1,5 +1,5 @@
 import { query } from '../config/database.js';
-import { formatTimestampSl, formatYmdColombo, parseDbDateTime } from '../utils/slTime.js';
+import { formatUtcDatetimeSl, formatYmdColombo, parseDbDateTime } from '../utils/slTime.js';
 import {
   resolveBlogBannerPublicUrl,
   storeBlogBanner,
@@ -14,7 +14,7 @@ function validationError(message, status = 422) {
 
 function formatTimestamp(value) {
   if (!value) return '';
-  return formatTimestampSl(value) || String(value);
+  return formatUtcDatetimeSl(value) || String(value);
 }
 
 export function mapPublishedState(isPublished) {

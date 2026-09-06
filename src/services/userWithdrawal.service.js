@@ -20,6 +20,7 @@ import {
   loadCustomPayAccountByRecordId,
   loadCustomPayAccountsByCategoryName,
 } from './customPayAccount.service.js';
+import { withPanelPaymentAccountExtras } from './builtinPayAccountMeta.service.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -220,7 +221,7 @@ async function getCashoutMethodById(cashoutMethodId) {
   return rows[0] ? mapCashoutMethodRow(rows[0]) : null;
 }
 
-async function loadCashoutMethodPaymentAccounts(cashoutMethodName) {
+async function loadCashoutMethodPaymentAccountsCore(cashoutMethodName) {
   const name = String(cashoutMethodName || '').trim().toLowerCase();
 
   if (name === 'bank transfer') {
@@ -251,11 +252,14 @@ async function loadCashoutMethodPaymentAccounts(cashoutMethodName) {
     );
     return {
       type: 'binance',
-      accounts: rows.map((row) => ({
-        id: row.id,
-        trc20WalletAddress: row.trc20_wallet_address,
-        binanceEmail: row.binance_email,
-      })),
+      accounts: rows.map((row) => {
+        const binanceEmail = String(row.binance_email || '').trim();
+        return {
+          id: row.id,
+          trc20WalletAddress: row.trc20_wallet_address,
+          ...(binanceEmail ? { binanceEmail } : {}),
+        };
+      }),
     };
   }
 
@@ -347,6 +351,11 @@ async function loadCashoutMethodPaymentAccounts(cashoutMethodName) {
   return { type: 'unknown', accounts: [] };
 }
 
+async function loadCashoutMethodPaymentAccounts(cashoutMethodName) {
+  const result = await loadCashoutMethodPaymentAccountsCore(cashoutMethodName);
+  return withPanelPaymentAccountExtras(result);
+}
+
 const LINKED_PAY_ACCOUNT_PANEL_TYPE = {
   bank: 'bank_transfer',
   skrill: 'skrill',
@@ -356,7 +365,7 @@ const LINKED_PAY_ACCOUNT_PANEL_TYPE = {
   pm: 'perfect_money',
 };
 
-async function loadPayAccountByTypeAndId(accountType, accountId) {
+async function loadPayAccountByTypeAndIdCore(accountType, accountId) {
   const type = String(accountType || '').trim().toLowerCase();
   const id = Number(accountId);
   if (type === 'custom') {
@@ -404,13 +413,14 @@ async function loadPayAccountByTypeAndId(accountType, accountId) {
       [id],
     );
     if (!rows[0]) return { type: panelType, accounts: [] };
+    const binanceEmail = String(rows[0].binance_email || '').trim();
     return {
       type: panelType,
       accounts: [
         {
           id: rows[0].id,
           trc20WalletAddress: rows[0].trc20_wallet_address,
-          binanceEmail: rows[0].binance_email,
+          ...(binanceEmail ? { binanceEmail } : {}),
         },
       ],
     };
@@ -485,6 +495,11 @@ async function loadPayAccountByTypeAndId(accountType, accountId) {
   }
 
   return { type: panelType, accounts: [] };
+}
+
+async function loadPayAccountByTypeAndId(accountType, accountId) {
+  const result = await loadPayAccountByTypeAndIdCore(accountType, accountId);
+  return withPanelPaymentAccountExtras(result);
 }
 
 async function loadLinkedCashoutPayAccount(cashoutMethodId) {

@@ -255,6 +255,33 @@ export function formatTimestampSl(value) {
   return `${parts.year}-${pad2(parts.month)}-${pad2(parts.day)} ${pad2(parts.hour)}:${pad2(parts.minute)}:${pad2(parts.second)}`;
 }
 
+/**
+ * Format DATETIME written by MySQL NOW()/CURRENT_TIMESTAMP while the pool
+ * session is UTC. Laravel / nowSqlDateTime() values stay on formatTimestampSl.
+ */
+export function formatUtcDatetimeSl(value) {
+  if (value == null || value === '') return '';
+  if (value instanceof Date) {
+    return formatTimestampSl(value);
+  }
+  const raw = String(value).trim();
+  if (!raw) return '';
+  if (/[zZ]$/.test(raw) || /[+-]\d{2}:\d{2}$/.test(raw)) {
+    return formatTimestampSl(raw);
+  }
+  const naive = raw.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})(?::(\d{2}))?/);
+  if (!naive) {
+    return formatTimestampSl(value) || String(value);
+  }
+  const seconds = naive[3] || '00';
+  const asUtc = new Date(`${naive[1]}T${naive[2]}:${seconds}Z`);
+  if (Number.isNaN(asUtc.getTime())) {
+    return formatTimestampSl(value) || String(value);
+  }
+  const parts = getColomboDateParts(asUtc);
+  return `${parts.year}-${pad2(parts.month)}-${pad2(parts.day)} ${pad2(parts.hour)}:${pad2(parts.minute)}:${pad2(parts.second)}`;
+}
+
 export function formatDateTimeParts(value) {
   const date = parseDbDateTime(value);
   if (!date) {

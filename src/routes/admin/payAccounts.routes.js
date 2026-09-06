@@ -26,6 +26,12 @@ import {
   updateCustomPayAccountField,
   updateCustomPayAccountRecord,
 } from '../../services/customPayAccount.service.js';
+import {
+  createBuiltinPayAccountField,
+  deleteBuiltinPayAccountField,
+  renameBuiltinPayAccountDisplayName,
+  updateBuiltinPayAccountField,
+} from '../../services/builtinPayAccountMeta.service.js';
 
 export const adminPayAccountsRouter = Router();
 
@@ -173,6 +179,58 @@ adminPayAccountsRouter.post(
         req.body?.active === '1';
       const account = await toggleCustomPayAccountRecord(req.params.recordId, active);
       res.json({ ok: true, account });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminPayAccountsRouter.post(
+  '/builtin/:accountType/rename',
+  requirePermission('change_account_configs'),
+  async (req, res, next) => {
+    try {
+      const meta = await renameBuiltinPayAccountDisplayName(req.params.accountType, req.body);
+      res.json({ ok: true, meta });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminPayAccountsRouter.post(
+  '/builtin/:accountType/fields',
+  requirePermission('change_account_configs'),
+  async (req, res, next) => {
+    try {
+      const field = await createBuiltinPayAccountField(req.params.accountType, req.body);
+      res.status(201).json({ ok: true, field });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminPayAccountsRouter.post(
+  '/builtin-fields/:fieldId/update',
+  requirePermission('change_account_configs'),
+  async (req, res, next) => {
+    try {
+      const field = await updateBuiltinPayAccountField(req.params.fieldId, req.body);
+      res.json({ ok: true, field });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminPayAccountsRouter.post(
+  '/builtin-fields/:fieldId/delete',
+  requirePermission('change_account_configs'),
+  async (req, res, next) => {
+    try {
+      const result = await deleteBuiltinPayAccountField(req.params.fieldId);
+      res.json(result);
     } catch (error) {
       next(error);
     }

@@ -1,7 +1,7 @@
 import { query } from '../config/database.js';
 import { env } from '../config/env.js';
 import { columnExists } from '../db/helpers.js';
-import { formatTimestampSl, formatYmdColombo, parseDbDateTime } from '../utils/slTime.js';
+import { formatUtcDatetimeSl, formatYmdColombo, parseDbDateTime } from '../utils/slTime.js';
 import { sendEmailAndSms } from './notification.service.js';
 import { rateChangeEmailHtml } from './mail.templates.js';
 import { fullyVerifiedAccountSql } from './accountHolder.service.js';
@@ -32,7 +32,7 @@ function parseRate(value, label) {
 
 function formatTimestamp(value) {
   if (!value) return '';
-  return formatTimestampSl(value) || String(value);
+  return formatUtcDatetimeSl(value) || String(value);
 }
 
 function formatDateOnly(value) {
