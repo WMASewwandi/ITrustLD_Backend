@@ -1,5 +1,9 @@
 import { query } from '../config/database.js';
 import { addColumnIfMissing, createTableIfMissing } from '../db/helpers.js';
+import {
+  DEFAULT_BUILTIN_DISPLAY_NAMES,
+  getBuiltinPayAccountMetaMap,
+} from './builtinPayAccountMeta.service.js';
 
 const FIELD_TYPES = new Set(['text', 'email', 'number']);
 const RESERVED_SLUGS = new Set([
@@ -20,6 +24,21 @@ const RESERVED_SLUGS = new Set([
   'cardpayment',
   'custom',
 ]);
+const HARD_RESERVED_SLUGS = new Set(['custom', 'card-payment', 'card_payment', 'cardpayment']);
+const SLUG_TO_BUILTIN_TYPE = {
+  bank: 'bank',
+  'bank-transfer': 'bank',
+  bank_transfer: 'bank',
+  skrill: 'skrill',
+  neteller: 'neteller',
+  binance: 'binance',
+  crypto: 'binance',
+  pm: 'pm',
+  xm: 'xm',
+  'perfect-money': 'pm',
+  perfect_money: 'pm',
+  perfectmoney: 'pm',
+};
 
 let schemaReady = false;
 
@@ -339,7 +358,14 @@ export async function listCustomPayAccountCategoryNames() {
   return rows.map((row) => String(row.name || '').trim()).filter(Boolean);
 }
 
-async function assertUniqueSlug(slug, excludeId = null) {
+function normalizeCategoryName(name) {
+  return String(name || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+async function slugTaken(slug, excludeId = null) {
   const params = [slug];
   let sql = `
     SELECT id
@@ -353,9 +379,82 @@ async function assertUniqueSlug(slug, excludeId = null) {
   }
   sql += ' LIMIT 1';
   const rows = await query(sql, params);
-  if (rows[0]) {
+  return Boolean(rows[0]);
+}
+
+async function assertUniqueCategoryName(name, excludeId = null) {
+  const needle = normalizeCategoryName(name);
+  if (!needle) throw validationError('Category name is required.');
+
+  let sql = `
+    SELECT id, name
+    FROM pay_account_categories
+    WHERE is_deleted = 0
+  `;
+  const params = [];
+  if (excludeId) {
+    sql += ' AND id <> ?';
+    params.push(excludeId);
+  }
+  const rows = await query(sql, params);
+  if (rows.some((row) => normalizeCategoryName(row.name) === needle)) {
     throw validationError('A category with this name already exists.');
   }
+
+  try {
+    const meta = await getBuiltinPayAccountMetaMap();
+    for (const type of Object.keys(DEFAULT_BUILTIN_DISPLAY_NAMES)) {
+      if (normalizeCategoryName(meta[type]?.displayName) === needle) {
+        throw validationError('A category with this name already exists.');
+      }
+    }
+  } catch (error) {
+    if (error?.status) throw error;
+  }
+}
+
+async function builtinStillUsesReservedName(name, slug) {
+  const type = SLUG_TO_BUILTIN_TYPE[slug];
+  if (!type) return null;
+  let display = DEFAULT_BUILTIN_DISPLAY_NAMES[type] || type;
+  try {
+    const meta = await getBuiltinPayAccountMetaMap();
+    display = meta[type]?.displayName || display;
+  } catch {
+    // Keep the default label if overlay meta is unavailable.
+  }
+  const displaySlug = slugify(display);
+  const defaultSlug = slugify(DEFAULT_BUILTIN_DISPLAY_NAMES[type] || '');
+  const requested = String(name || '').trim().toLowerCase();
+  const displayLower = String(display || '').trim().toLowerCase();
+  if (displayLower === requested || displaySlug === slug) return display;
+  if (displaySlug === defaultSlug) return display;
+  return null;
+}
+
+async function resolveCustomCategorySlug(name, excludeId = null) {
+  const slug = slugify(name);
+  if (!slug) throw validationError('Category name is invalid.');
+  if (HARD_RESERVED_SLUGS.has(slug)) {
+    throw validationError('That category name is reserved.');
+  }
+  await assertUniqueCategoryName(name, excludeId);
+  if (RESERVED_SLUGS.has(slug)) {
+    const occupiedBy = await builtinStillUsesReservedName(name, slug);
+    if (occupiedBy) {
+      throw validationError(
+        `"${name}" is still used by the original ${occupiedBy} category. Rename that category first, or choose a different name.`,
+      );
+    }
+  }
+
+  let candidate = RESERVED_SLUGS.has(slug) ? `${slug}-custom` : slug;
+  let suffix = 2;
+  while (await slugTaken(candidate, excludeId)) {
+    candidate = RESERVED_SLUGS.has(slug) ? `${slug}-custom-${suffix}` : `${slug}-${suffix}`;
+    suffix += 1;
+  }
+  return candidate;
 }
 
 async function assertUniqueFieldKey(categoryId, fieldKey, excludeId = null) {
@@ -405,12 +504,7 @@ export async function createCustomPayAccountCategory(payload) {
   await ensureCustomPayAccountSchema();
   const name = String(payload.name ?? '').trim();
   if (!name) throw validationError('Category name is required.');
-  const slug = slugify(name);
-  if (!slug) throw validationError('Category name is invalid.');
-  if (RESERVED_SLUGS.has(slug)) {
-    throw validationError('That category name is reserved.');
-  }
-  await assertUniqueSlug(slug);
+  const slug = await resolveCustomCategorySlug(name);
 
   const result = await query(
     `INSERT INTO pay_account_categories (name, slug, is_deleted, created_at, updated_at)
@@ -437,12 +531,7 @@ export async function updateCustomPayAccountCategory(categoryId, payload) {
 
   const name = String(payload.name ?? '').trim();
   if (!name) throw validationError('Category name is required.');
-  const slug = slugify(name);
-  if (!slug) throw validationError('Category name is invalid.');
-  if (RESERVED_SLUGS.has(slug)) {
-    throw validationError('That category name is reserved.');
-  }
-  await assertUniqueSlug(slug, id);
+  const slug = await resolveCustomCategorySlug(name, id);
 
   await query(
     `UPDATE pay_account_categories
@@ -714,4 +803,12 @@ export async function loadCustomPayAccountsByCategoryName(name) {
     type: 'custom',
     accounts: accounts.map((account) => ({ ...account, categoryName: categories[0].name })),
   };
+}
+
+export async function loadNamedCustomPayAccountsIfPresent(name) {
+  const custom = await loadCustomPayAccountsByCategoryName(name);
+  if (custom.type === 'custom' && Array.isArray(custom.accounts) && custom.accounts.length) {
+    return custom;
+  }
+  return null;
 }
