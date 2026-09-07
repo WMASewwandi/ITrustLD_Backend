@@ -9,6 +9,7 @@ import { clientBonusVoucherEmailHtml } from './mail.templates.js';
 import { sendEmailAndSms } from './notification.service.js';
 import { getUserPointLevel } from './pointEarning.service.js';
 import { ensureTopupWalletVoucherFlagSchema } from './wallet.service.js';
+import { bumpAdminNavCounts } from './adminNavCountsRevision.service.js';
 import {
   SL_TIMEZONE,
   addColomboDays,
@@ -515,6 +516,8 @@ export async function createUserClientBonusVoucher(userId, payload = {}) {
 
   const voucherId = insert.insertId;
   const voucherUrl = `${env.userAppUrl}/dashboard/earnings/vouchers/${token}`;
+
+  bumpAdminNavCounts();
 
   await notifyClientBonusVoucherIssued({
     userId,

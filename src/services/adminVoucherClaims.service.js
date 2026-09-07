@@ -5,11 +5,8 @@ import {
   SYSTEM_USER_ACTIONS,
 } from './systemUserActionLog.service.js';
 import { assertCanUpdateRecordStatus } from './statusUpdateScope.service.js';
-import {
-  ensureLoyaltyAssignedToColumn,
-  isLoyaltySystemAdmin,
-  loyaltyAssignedToUserId,
-} from './loyaltyAssignment.service.js';
+import { isLoyaltySystemAdmin } from './loyaltyAssignment.service.js';
+import { bumpAdminNavCounts } from './adminNavCountsRevision.service.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -113,7 +110,7 @@ function applyVoucherStatusFilter(sql, values, statusInput) {
       OR (v.is_claimed = 0 AND DATEDIFF(NOW(), v.created_at) >= 30)
     )`;
   }
-  return `${sql} AND v.is_claimed = 0 AND v.rejection_reason IS NULL`;
+  return `${sql} AND v.is_claimed = 0 AND (v.rejection_reason IS NULL OR v.rejection_reason = '')`;
 }
 
 const DUPLICATE_VOUCHER_SCOPE = `
@@ -263,13 +260,6 @@ export async function listVoucherClaimsForAdmin(params = {}, auth = null) {
 
   sql = applyVoucherStatusFilter(sql, values, statusInput);
 
-  const assignedToUserId = loyaltyAssignedToUserId(auth, statusInput);
-  if (assignedToUserId) {
-    await ensureLoyaltyAssignedToColumn('loyalty_client_bonus_vouchers');
-    sql += ` AND v.assigned_to = ?`;
-    values.push(assignedToUserId);
-  }
-
   if (fromDate) {
     sql += ` AND DATE(v.created_at) >= ?`;
     values.push(fromDate);
@@ -296,8 +286,8 @@ export async function listVoucherClaimsForAdmin(params = {}, auth = null) {
   const total = Number(countRows[0]?.total || 0);
 
   const orderBy =
-    statusInput === 'Pending'
-      ? 'v.updated_at ASC, v.id ASC'
+    String(statusInput).trim().toLowerCase() === 'pending'
+      ? 'v.created_at DESC, v.id DESC'
       : 'v.updated_at DESC, v.id DESC';
 
   const rows = await query(`${sql} ORDER BY ${orderBy} LIMIT ? OFFSET ?`, [
@@ -363,6 +353,8 @@ export async function completeVoucherClaim(adminUserId, payload = {}) {
 
   await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.VOUCHER_CLAIM_APPROVE);
 
+  bumpAdminNavCounts();
+
   return {
     ok: true,
     error: false,
@@ -407,6 +399,8 @@ export async function rejectVoucherClaim(adminUserId, payload = {}) {
   );
 
   await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.VOUCHER_CLAIM_REJECT);
+
+  bumpAdminNavCounts();
 
   return {
     ok: true,

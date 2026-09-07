@@ -533,18 +533,6 @@ export async function getPendingCountForRole(userId, roles, roleName) {
     return Number(rows[0]?.total) || 0;
   }
 
-  if (roleName === 'loyalty-voucher') {
-    const rows = await query(
-      `SELECT COUNT(*) AS total
-       FROM loyalty_client_bonus_vouchers
-       WHERE assigned_to = ?
-         AND is_claimed = 0
-         AND (rejection_reason IS NULL OR rejection_reason = '')`,
-      [userId],
-    );
-    return Number(rows[0]?.total) || 0;
-  }
-
   const rows = await query(
     `SELECT
        (SELECT COUNT(*)

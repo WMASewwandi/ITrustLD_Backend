@@ -154,19 +154,13 @@ async function countPendingBonusClaims(userId, roles) {
   }
 }
 
-async function countPendingVoucherClaims(userId, roles) {
-  const conditions = ['is_claimed = 0', 'rejection_reason IS NULL'];
-  const values = [];
-  if (!isSystemAdminRole(roles) && userId) {
-    conditions.push('assigned_to = ?');
-    values.push(userId);
-  }
+async function countPendingVoucherClaims(_userId, _roles) {
   try {
     const rows = await query(
       `SELECT COUNT(*) AS total
        FROM loyalty_client_bonus_vouchers
-       WHERE ${conditions.join(' AND ')}`,
-      values,
+       WHERE is_claimed = 0
+         AND (rejection_reason IS NULL OR rejection_reason = '')`,
     );
     return Number(rows[0]?.total ?? 0);
   } catch {

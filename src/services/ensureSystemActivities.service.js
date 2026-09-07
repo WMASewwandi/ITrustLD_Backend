@@ -4,7 +4,13 @@ import {
   SYSTEM_ACTIVITIES,
   SYSTEM_ACTIVITY_CATEGORIES,
 } from '../constants/systemActivityCatalog.js';
-import { LOYALTY_ORDERS_READ, LOYALTY_ORDERS_UPDATE, AUTHORIZE_LOYALTY_ORDERS } from '../constants/loyaltyPermissions.js';
+import {
+  AUTHORIZE_LOYALTY_ORDERS,
+  LOYALTY_ORDERS_READ,
+  LOYALTY_ORDERS_UPDATE,
+  LOYALTY_VOUCHER_READ,
+  LOYALTY_VOUCHER_UPDATE,
+} from '../constants/loyaltyPermissions.js';
 import { nowSqlDateTime } from '../utils/slTime.js';
 import { syncRolePermissions, normalizeToActivityIdentifier } from './role.service.js';
 
@@ -101,8 +107,16 @@ export async function ensureSystemActivitiesCatalog() {
   await grantLoyaltyAuthorizeToWithdrawalAuthorizers();
   await revokeLoyaltyAuthorizeFromAdminRoles();
   await grantMobileVerificationPendingToExistingAccountReaders();
-  await grantLoyaltyOrderAccessToRole('withdrawal-executive');
-  await grantLoyaltyOrderAccessToRole('deposit-executive');
+  await grantLoyaltyPermissionsToRole('withdrawal-executive', [
+    LOYALTY_ORDERS_READ,
+    LOYALTY_ORDERS_UPDATE,
+  ]);
+  await grantLoyaltyPermissionsToRole('deposit-executive', [
+    LOYALTY_ORDERS_READ,
+    LOYALTY_ORDERS_UPDATE,
+    LOYALTY_VOUCHER_READ,
+    LOYALTY_VOUCHER_UPDATE,
+  ]);
 
   syncReady = true;
 }
@@ -209,12 +223,12 @@ async function grantMobileVerificationPendingToExistingAccountReaders() {
   }
 }
 
-async function grantLoyaltyOrderAccessToRole(roleName) {
+async function grantLoyaltyPermissionsToRole(roleName, permissions = []) {
   const roleRows = await query(
     `SELECT id FROM roles WHERE name = ? AND guard_name = ? LIMIT 1`,
     [roleName, GUARD_NAME],
   );
-  if (!roleRows[0]) return;
+  if (!roleRows[0] || !permissions.length) return;
 
   const currentRows = await query(
     `SELECT p.name
@@ -224,9 +238,7 @@ async function grantLoyaltyOrderAccessToRole(roleName) {
     [roleRows[0].id],
   );
   const current = currentRows.map((row) => normalizeToActivityIdentifier(row.name));
-  const missing = [LOYALTY_ORDERS_READ, LOYALTY_ORDERS_UPDATE].filter(
-    (permission) => !current.includes(permission),
-  );
+  const missing = permissions.filter((permission) => !current.includes(permission));
   if (!missing.length) return;
 
   await syncRolePermissions(roleName, [...current, ...missing]);
