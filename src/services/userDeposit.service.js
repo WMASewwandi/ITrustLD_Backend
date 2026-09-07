@@ -22,7 +22,7 @@ import {
   assertDepositMethodPendingLimit,
   getOpenDepositCountsByMethod,
 } from './pendingMethodLimit.service.js';
-import { loadCustomPayAccountsByCategoryName, loadNamedCustomPayAccountsIfPresent } from './customPayAccount.service.js';
+import { loadCustomPayAccountsByCategoryName, loadNamedCustomPayAccountsIfPresent, getHiddenUserPayAccountNames, isHiddenPayAccountName } from './customPayAccount.service.js';
 import { withPanelPaymentAccountExtras } from './builtinPayAccountMeta.service.js';
 
 function validationError(message, status = 422) {
@@ -212,8 +212,13 @@ async function loadSupportedPaymentOptions(topupMethodId, topupMethodName) {
   );
 
   const methodName = String(topupMethodName || '').trim().toLowerCase();
+  const hidden = await getHiddenUserPayAccountNames();
   return rows
-    .filter((row) => String(row.payment_option_name || '').trim().toLowerCase() !== methodName)
+    .filter((row) => {
+      const name = String(row.payment_option_name || '').trim().toLowerCase();
+      if (name === methodName) return false;
+      return !isHiddenPayAccountName(row.payment_option_name, hidden);
+    })
     .map(mapPaymentOptionRow);
 }
 
@@ -706,6 +711,10 @@ export async function createUserDeposit(userId, payload) {
 
   const paymentOption = await getPaymentOptionById(paymentOptionId);
   if (!paymentOption) {
+    throw validationError('Selected payment option is not available.');
+  }
+  const hiddenPayAccounts = await getHiddenUserPayAccountNames();
+  if (isHiddenPayAccountName(paymentOption.payment_option_name, hiddenPayAccounts)) {
     throw validationError('Selected payment option is not available.');
   }
   if (isGiftVoucherPaymentOption(paymentOption.payment_option_name)) {

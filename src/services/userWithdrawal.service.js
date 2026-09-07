@@ -17,6 +17,8 @@ import {
   getOpenWithdrawalCountsByMethod,
 } from './pendingMethodLimit.service.js';
 import {
+  getHiddenUserPayAccountNames,
+  isHiddenPayAccountName,
   loadCustomPayAccountByRecordId,
   loadCustomPayAccountsByCategoryName,
   loadNamedCustomPayAccountsIfPresent,
@@ -205,8 +207,13 @@ async function loadSupportedReceivingOptions(cashoutMethodId, cashoutMethodName)
   );
 
   const methodName = String(cashoutMethodName || '').trim().toLowerCase();
+  const hidden = await getHiddenUserPayAccountNames();
   return rows
-    .filter((row) => String(row.payment_option_name || '').trim().toLowerCase() !== methodName)
+    .filter((row) => {
+      const name = String(row.payment_option_name || '').trim().toLowerCase();
+      if (name === methodName) return false;
+      return !isHiddenPayAccountName(row.payment_option_name, hidden);
+    })
     .map(mapPaymentOptionRow);
 }
 
@@ -917,6 +924,15 @@ export async function createUserWithdrawal(userId, payload) {
   const cashoutMethod = await getCashoutMethodById(cashoutMethodId);
   if (!cashoutMethod) {
     throw validationError('Selected cash-out method is not available.');
+  }
+
+  const receivingOptionRows = await query(
+    `SELECT payment_option_name FROM payment_options WHERE id = ? LIMIT 1`,
+    [receivingPaymentOptionId],
+  );
+  const hiddenPayAccounts = await getHiddenUserPayAccountNames();
+  if (isHiddenPayAccountName(receivingOptionRows[0]?.payment_option_name, hiddenPayAccounts)) {
+    throw validationError('Selected receiving payment option is not available.');
   }
 
   await assertWithdrawalMethodPendingLimit(userId, cashoutMethodId, cashoutMethod.name);

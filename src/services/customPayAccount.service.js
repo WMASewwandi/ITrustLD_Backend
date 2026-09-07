@@ -1,6 +1,7 @@
 import { query } from '../config/database.js';
 import { addColumnIfMissing, createTableIfMissing } from '../db/helpers.js';
 import {
+  BUILTIN_PAY_ACCOUNT_TYPES,
   DEFAULT_BUILTIN_DISPLAY_NAMES,
   getBuiltinPayAccountMetaMap,
 } from './builtinPayAccountMeta.service.js';
@@ -46,6 +47,14 @@ function validationError(message, status = 422) {
   const error = new Error(message);
   error.status = status;
   return error;
+}
+
+function isActiveFlag(value) {
+  if (value === undefined || value === null || value === '') return true;
+  if (typeof value === 'boolean') return value;
+  const normalized = String(value).trim().toLowerCase();
+  if (['0', 'false', 'no', 'off', 'inactive'].includes(normalized)) return false;
+  return Number(value) !== 0;
 }
 
 function slugify(value) {
@@ -182,6 +191,10 @@ export async function ensureCustomPayAccountSchema() {
   await addColumnIfMissing('pay_account_categories', 'payment_option_id', {
     mysql: 'payment_option_id BIGINT UNSIGNED NULL',
     sqlite: 'payment_option_id INTEGER',
+  });
+  await addColumnIfMissing('pay_account_categories', 'is_active', {
+    mysql: 'is_active TINYINT(1) NOT NULL DEFAULT 1',
+    sqlite: 'is_active INTEGER NOT NULL DEFAULT 1',
   });
   schemaReady = true;
 }
@@ -493,6 +506,7 @@ export async function listCustomPayAccountCategories() {
       id: category.id,
       name: category.name,
       slug: category.slug,
+      isActive: isActiveFlag(category.is_active),
       fields,
       accounts,
     });
@@ -518,6 +532,7 @@ export async function createCustomPayAccountCategory(payload) {
     id: newId,
     name,
     slug,
+    isActive: true,
     fields: [],
     accounts: [],
   };
@@ -544,6 +559,23 @@ export async function updateCustomPayAccountCategory(categoryId, payload) {
     name,
     payment_option_id: existing.payment_option_id,
   });
+  const categories = await listCustomPayAccountCategories();
+  return categories.find((item) => Number(item.id) === id);
+}
+
+export async function toggleCustomPayAccountCategory(categoryId, active) {
+  await ensureCustomPayAccountSchema();
+  const id = parseId(categoryId, 'Category id');
+  const existing = await getCategoryRow(id);
+  if (!existing) throw validationError('Category not found.', 404);
+
+  const nextActive = active ? 1 : 0;
+  await query(
+    `UPDATE pay_account_categories
+     SET is_active = ?, updated_at = NOW()
+     WHERE id = ? AND is_deleted = 0`,
+    [nextActive, id],
+  );
   const categories = await listCustomPayAccountCategories();
   return categories.find((item) => Number(item.id) === id);
 }
@@ -811,4 +843,48 @@ export async function loadNamedCustomPayAccountsIfPresent(name) {
     return custom;
   }
   return null;
+}
+
+const BUILTIN_OPTION_ALIASES = {
+  bank: ['bank transfer', 'bank'],
+  skrill: ['skrill'],
+  neteller: ['neteller'],
+  binance: ['binance', 'crypto'],
+  pm: ['perfect money'],
+  xm: ['xm'],
+};
+
+export async function getHiddenUserPayAccountNames() {
+  await ensureCustomPayAccountSchema();
+  const hidden = new Set();
+  const meta = await getBuiltinPayAccountMetaMap();
+  for (const type of BUILTIN_PAY_ACCOUNT_TYPES) {
+    if (meta[type]?.isActive === false) {
+      for (const alias of BUILTIN_OPTION_ALIASES[type] || []) {
+        hidden.add(alias);
+      }
+      hidden.add(normalizeCategoryName(meta[type]?.displayName));
+    }
+  }
+  const rows = await query(
+    `SELECT name, slug, is_active
+     FROM pay_account_categories
+     WHERE is_deleted = 0`,
+  );
+  for (const row of rows) {
+    if (isActiveFlag(row.is_active)) continue;
+    hidden.add(normalizeCategoryName(row.name));
+    hidden.add(normalizeCategoryName(String(row.slug || '').replace(/-/g, ' ')));
+  }
+  hidden.delete('');
+  return hidden;
+}
+
+export function isHiddenPayAccountName(name, hiddenNames) {
+  return hiddenNames.has(
+    String(name || '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, ' '),
+  );
 }
