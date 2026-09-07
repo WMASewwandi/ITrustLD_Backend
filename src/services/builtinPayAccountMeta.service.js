@@ -1,5 +1,5 @@
 import { getDbDriver, query } from '../config/database.js';
-import { createTableIfMissing } from '../db/helpers.js';
+import { addColumnIfMissing, createTableIfMissing } from '../db/helpers.js';
 
 const FIELD_TYPES = new Set(['text', 'email', 'number']);
 
@@ -139,6 +139,10 @@ export async function ensureBuiltinPayAccountMetaSchema() {
       )
     `,
   });
+  await addColumnIfMissing('pay_account_builtin_meta', 'is_active', {
+    mysql: 'is_active TINYINT(1) NOT NULL DEFAULT 1',
+    sqlite: 'is_active INTEGER NOT NULL DEFAULT 1',
+  });
   await createTableIfMissing('pay_account_builtin_fields', {
     mysql: `
       CREATE TABLE pay_account_builtin_fields (
@@ -266,14 +270,19 @@ function assertNotReservedKey(accountType, fieldKey) {
 export async function getBuiltinPayAccountMetaMap() {
   await ensureBuiltinPayAccountMetaSchema();
   const [metaRows, fieldsByType] = await Promise.all([
-    query(`SELECT account_type, display_name FROM pay_account_builtin_meta`),
+    query(`SELECT account_type, display_name, is_active FROM pay_account_builtin_meta`),
     loadAllFieldsByType(),
   ]);
   const displayByType = {};
+  const activeByType = {};
   for (const row of metaRows) {
     const type = String(row.account_type || '').trim().toLowerCase();
     const name = String(row.display_name || '').trim();
     if (type && name) displayByType[type] = name;
+    if (type) {
+      activeByType[type] =
+        row.is_active === undefined || row.is_active === null ? true : Number(row.is_active) !== 0;
+    }
   }
 
   const meta = {};
@@ -281,6 +290,7 @@ export async function getBuiltinPayAccountMetaMap() {
     meta[type] = {
       accountType: type,
       displayName: displayByType[type] || DEFAULT_BUILTIN_DISPLAY_NAMES[type] || type,
+      isActive: activeByType[type] !== false,
       fields: fieldsByType[type] || [],
     };
   }
@@ -346,6 +356,35 @@ export async function renameBuiltinPayAccountDisplayName(accountType, payload) {
 
   const meta = await getBuiltinPayAccountMetaMap();
   return meta[type];
+}
+
+export async function setBuiltinPayAccountActive(accountType, active) {
+  await ensureBuiltinPayAccountMetaSchema();
+  const type = parseBuiltinAccountType(accountType);
+  const nextActive = parseBooleanFlag(active, false) ? 1 : 0;
+  const meta = await getBuiltinPayAccountMetaMap();
+  const displayName = meta[type]?.displayName || DEFAULT_BUILTIN_DISPLAY_NAMES[type] || type;
+
+  if (getDbDriver() === 'sqlite') {
+    await query(
+      `INSERT INTO pay_account_builtin_meta (account_type, display_name, is_active, created_at, updated_at)
+       VALUES (?, ?, ?, datetime('now'), datetime('now'))
+       ON CONFLICT(account_type) DO UPDATE SET
+         is_active = excluded.is_active,
+         updated_at = datetime('now')`,
+      [type, displayName, nextActive],
+    );
+  } else {
+    await query(
+      `INSERT INTO pay_account_builtin_meta (account_type, display_name, is_active, created_at, updated_at)
+       VALUES (?, ?, ?, NOW(), NOW())
+       ON DUPLICATE KEY UPDATE is_active = VALUES(is_active), updated_at = NOW()`,
+      [type, displayName, nextActive],
+    );
+  }
+
+  const nextMeta = await getBuiltinPayAccountMetaMap();
+  return nextMeta[type];
 }
 
 export async function createBuiltinPayAccountField(accountType, payload) {

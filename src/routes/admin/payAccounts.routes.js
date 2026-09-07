@@ -21,6 +21,7 @@ import {
   deleteCustomPayAccountCategory,
   deleteCustomPayAccountField,
   deleteCustomPayAccountRecord,
+  toggleCustomPayAccountCategory,
   toggleCustomPayAccountRecord,
   updateCustomPayAccountCategory,
   updateCustomPayAccountField,
@@ -30,6 +31,7 @@ import {
   createBuiltinPayAccountField,
   deleteBuiltinPayAccountField,
   renameBuiltinPayAccountDisplayName,
+  setBuiltinPayAccountActive,
   updateBuiltinPayAccountField,
 } from '../../services/builtinPayAccountMeta.service.js';
 
@@ -69,6 +71,24 @@ adminPayAccountsRouter.post(
   async (req, res, next) => {
     try {
       const category = await updateCustomPayAccountCategory(req.params.categoryId, req.body);
+      res.json({ ok: true, category });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminPayAccountsRouter.post(
+  '/categories/:categoryId/toggle-status',
+  requirePermission('change_account_configs'),
+  async (req, res, next) => {
+    try {
+      const active =
+        req.body?.active === true ||
+        req.body?.active === 'true' ||
+        req.body?.active === 1 ||
+        req.body?.active === '1';
+      const category = await toggleCustomPayAccountCategory(req.params.categoryId, active);
       res.json({ ok: true, category });
     } catch (error) {
       next(error);
@@ -191,6 +211,24 @@ adminPayAccountsRouter.post(
   async (req, res, next) => {
     try {
       const meta = await renameBuiltinPayAccountDisplayName(req.params.accountType, req.body);
+      res.json({ ok: true, meta });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+adminPayAccountsRouter.post(
+  '/builtin/:accountType/toggle-status',
+  requirePermission('change_account_configs'),
+  async (req, res, next) => {
+    try {
+      const active =
+        req.body?.active === true ||
+        req.body?.active === 'true' ||
+        req.body?.active === 1 ||
+        req.body?.active === '1';
+      const meta = await setBuiltinPayAccountActive(req.params.accountType, active);
       res.json({ ok: true, meta });
     } catch (error) {
       next(error);

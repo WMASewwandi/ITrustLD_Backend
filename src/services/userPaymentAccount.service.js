@@ -22,6 +22,10 @@ const BUILTIN_TO_USER_ACCOUNT_TYPE = {
   xm: 'XM',
 };
 
+const USER_ACCOUNT_TYPE_TO_BUILTIN = Object.fromEntries(
+  Object.entries(BUILTIN_TO_USER_ACCOUNT_TYPE).map(([type, name]) => [name, type]),
+);
+
 let customUserSchemaReady = false;
 
 function validationError(message, status = 422) {
@@ -237,6 +241,24 @@ async function findCustomCategoryByAccountType(accountType) {
   );
 }
 
+async function rejectIfPayAccountCategoryHidden(accountType) {
+  const userType = normalizeAccountType(accountType);
+  if (!userType || userType === 'CARD PAYMENT') return null;
+  const builtinType = USER_ACCOUNT_TYPE_TO_BUILTIN[userType];
+  if (builtinType) {
+    const meta = await getBuiltinPayAccountMetaMap();
+    if (meta[builtinType]?.isActive === false) {
+      return jsonError('This account type is not available.');
+    }
+    return null;
+  }
+  const category = await findCustomCategoryByAccountType(accountType);
+  if (category && category.isActive === false) {
+    return jsonError('This account type is not available.');
+  }
+  return null;
+}
+
 async function listPayAccountTypeOptions() {
   const [meta, customCategories] = await Promise.all([
     getBuiltinPayAccountMetaMap(),
@@ -247,6 +269,7 @@ async function listPayAccountTypeOptions() {
   for (const builtinType of BUILTIN_PAY_ACCOUNT_TYPES) {
     const userType = BUILTIN_TO_USER_ACCOUNT_TYPE[builtinType];
     if (!userType) continue;
+    if (meta[builtinType]?.isActive === false) continue;
     const displayName = meta[builtinType]?.displayName || userType;
     options.push({
       id: `builtin:${builtinType}`,
@@ -262,6 +285,7 @@ async function listPayAccountTypeOptions() {
   }
 
   for (const category of customCategories) {
+    if (category.isActive === false) continue;
     const fields = customFieldDefs(category);
     options.push({
       id: `custom:${category.id}`,
@@ -395,6 +419,7 @@ async function loadAllCustomUserAccountGroups(userId, optionLimitsByName, rateBy
   const categories = await listCustomPayAccountCategories();
   const groups = [];
   for (const category of categories) {
+    if (category.isActive === false) continue;
     const accounts = (await loadCustomUserAccounts(userId, category.name)).map((account) =>
       attachAccountFieldState(account),
     );
@@ -601,7 +626,13 @@ export async function listUserPaymentAccounts(userId) {
   }
 
   const accountGroups = [];
+  const visibleTypeKeys = new Set(
+    typeOptions.map((option) => String(option.name || '').trim().toUpperCase()),
+  );
+  visibleTypeKeys.add('CARD PAYMENT');
   for (const row of groupRows) {
+      const optionKey = String(row.payment_option || '').trim().toUpperCase();
+      if (!visibleTypeKeys.has(optionKey)) continue;
       const accounts = (await loadAccountsForType(userId, row.payment_option)).map((account) =>
         attachAccountFieldState(account),
       );
@@ -655,6 +686,9 @@ export async function createUserPaymentAccount(userId, payload) {
   if (!accountType) {
     return jsonError('Account type is required.');
   }
+
+  const hiddenError = await rejectIfPayAccountCategoryHidden(accountType);
+  if (hiddenError) return hiddenError;
 
   switch (accountType) {
     case 'XM': {
@@ -919,6 +953,9 @@ export async function updateUserPaymentAccount(userId, payload) {
   if (!accountType || !Number.isInteger(accountId) || accountId <= 0) {
     return jsonError('Account type and account id are required.');
   }
+
+  const hiddenError = await rejectIfPayAccountCategoryHidden(accountType);
+  if (hiddenError) return hiddenError;
 
   switch (accountType) {
     case 'XM': {
