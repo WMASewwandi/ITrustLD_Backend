@@ -9,6 +9,7 @@ import {
   getDepositBootstrap,
   getDepositMethodDetails,
   getDepositPaymentProofContext,
+  updatePendingDepositPaymentChoice,
   getUserDepositTransaction,
   listUserDepositTransactions,
   listUserDepositTransactionsForPrint,
@@ -110,6 +111,19 @@ userDepositsRouter.post('/', async (req, res, next) => {
 userDepositsRouter.get('/:depositId/payment-proof', async (req, res, next) => {
   try {
     const data = await getDepositPaymentProofContext(req.auth.userId, req.params.depositId);
+    res.json(data);
+  } catch (error) {
+    next(error);
+  }
+});
+
+userDepositsRouter.patch('/:depositId/payment-choice', async (req, res, next) => {
+  try {
+    const data = await updatePendingDepositPaymentChoice(
+      req.auth.userId,
+      req.params.depositId,
+      req.body ?? {},
+    );
     res.json(data);
   } catch (error) {
     next(error);

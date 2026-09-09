@@ -779,6 +779,61 @@ async function getUserDepositById(userId, depositId) {
   return rows[0] ?? null;
 }
 
+export async function updatePendingDepositPaymentChoice(userId, depositId, payload = {}) {
+  await assertDepositAccess(userId);
+  const deposit = await getUserDepositById(userId, depositId);
+  if (!deposit) throw validationError('Deposit not found.', 404);
+  if (String(deposit.transaction_status) !== 'Pending' || deposit.payment_proof) {
+    throw validationError('This deposit can no longer be changed.');
+  }
+
+  const paymentOptionId = Number(payload.payment_option_id ?? payload.payment_option);
+  const paymentAmount = Number(payload.payment_amount);
+  const paymentOptionRate = Number(payload.payment_option_rate);
+  const paymentOptionRateId = Number(payload.payment_option_rate_id);
+  const paymentAmountCurrency = String(payload.payment_amount_currency || '').trim();
+
+  if (!Number.isInteger(paymentOptionId) || paymentOptionId <= 0) {
+    throw validationError('Payment option is required.');
+  }
+  if (!paymentAmountCurrency) throw validationError('Payment amount currency is required.');
+  if (!Number.isFinite(paymentAmount) || paymentAmount <= 0) {
+    throw validationError('Payment amount must be greater than zero.');
+  }
+  if (!Number.isFinite(paymentOptionRate) || paymentOptionRate <= 0) {
+    throw validationError('Payment option rate is required.');
+  }
+  if (!Number.isInteger(paymentOptionRateId) || paymentOptionRateId <= 0) {
+    throw validationError('Payment option rate id is required.');
+  }
+
+  const paymentOption = await getPaymentOptionById(paymentOptionId);
+  if (!paymentOption) throw validationError('Selected payment option is not available.');
+
+  await query(
+    `UPDATE deposits
+     SET payment_option_id = ?,
+         payment_amount_currency = ?,
+         payment_amount = ?,
+         applied_payment_option_rate = ?,
+         applied_payment_option_rate_id = ?,
+         updated_at = ?
+     WHERE id = ? AND user_id = ?`,
+    [
+      paymentOptionId,
+      paymentAmountCurrency,
+      paymentAmount,
+      paymentOptionRate,
+      paymentOptionRateId,
+      nowSqlDateTime(),
+      deposit.id,
+      userId,
+    ],
+  );
+
+  return { id: deposit.id, transaction_id: deposit.transaction_id };
+}
+
 export async function getDepositPaymentProofContext(userId, depositId) {
   await assertDepositAccess(userId);
   const deposit = await getUserDepositById(userId, depositId);

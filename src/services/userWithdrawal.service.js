@@ -990,6 +990,68 @@ async function getUserWithdrawalById(userId, withdrawalId) {
   return rows[0] ?? null;
 }
 
+export async function updatePendingWithdrawalPaymentChoice(userId, withdrawalId, payload = {}) {
+  await assertWithdrawalAccess(userId);
+  const withdrawal = await getUserWithdrawalById(userId, withdrawalId);
+  if (!withdrawal) throw validationError('Withdrawal not found.', 404);
+  if (String(withdrawal.transaction_status) !== 'Pending' || withdrawal.cashout_payment_proof) {
+    throw validationError('This cash-out can no longer be changed.');
+  }
+
+  const receivingPaymentOptionId = Number(
+    payload.receiving_payment_option_id ?? payload.payment_option_id,
+  );
+  const receivingAmount = Number(payload.receiving_amount ?? payload.receiving_payment_amount);
+  const paymentOptionRate = Number(
+    payload.receiving_payment_option_rate ?? payload.payment_option_rate,
+  );
+  const paymentOptionRateId = Number(
+    payload.receiving_payment_option_rate_id ?? payload.payment_option_rate_id,
+  );
+  const receivingAmountCurrency = String(
+    payload.receiving_amount_currency ?? payload.receiving_payment_amount_currency ?? '',
+  ).trim();
+
+  if (!Number.isInteger(receivingPaymentOptionId) || receivingPaymentOptionId <= 0) {
+    throw validationError('Receiving payment option is required.');
+  }
+  if (!receivingAmountCurrency) {
+    throw validationError('Receiving payment amount currency is required.');
+  }
+  if (!Number.isFinite(receivingAmount) || receivingAmount <= 0) {
+    throw validationError('Receiving payment amount must be greater than zero.');
+  }
+  if (!Number.isFinite(paymentOptionRate) || paymentOptionRate <= 0) {
+    throw validationError('Receiving payment option rate is required.');
+  }
+  if (!Number.isInteger(paymentOptionRateId) || paymentOptionRateId <= 0) {
+    throw validationError('Receiving payment option rate id is required.');
+  }
+
+  await query(
+    `UPDATE withdrawals
+     SET receiving_payment_option_id = ?,
+         receiving_amount_currency = ?,
+         receiving_amount = ?,
+         applied_payment_option_rate = ?,
+         applied_payment_option_rate_id = ?,
+         updated_at = ?
+     WHERE id = ? AND user_id = ?`,
+    [
+      receivingPaymentOptionId,
+      receivingAmountCurrency,
+      receivingAmount,
+      paymentOptionRate,
+      paymentOptionRateId,
+      nowSqlDateTime(),
+      withdrawal.id,
+      userId,
+    ],
+  );
+
+  return { id: withdrawal.id, transaction_id: withdrawal.transaction_id };
+}
+
 export async function getWithdrawalPaymentProofContext(userId, withdrawalId) {
   await assertWithdrawalAccess(userId);
   const withdrawal = await getUserWithdrawalById(userId, withdrawalId);
