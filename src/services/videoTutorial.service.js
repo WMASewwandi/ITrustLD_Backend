@@ -115,15 +115,6 @@ async function seedDefaultTutorials() {
   }
 }
 
-async function updateAccountHolderAddress() {
-  await query(
-    `UPDATE account_holders
-     SET address_number = ?
-     WHERE user_id = ?`,
-    ['Boralu Kanda, Bulanawewa, Dewahuwa', 29124],
-  );
-}
-
 export async function ensureVideoTutorialsSchema() {
   if (schemaReady) return;
 
@@ -165,7 +156,6 @@ export async function ensureVideoTutorialsSchema() {
   }
 
   await seedDefaultTutorials();
-  await updateAccountHolderAddress();
   schemaReady = true;
 }
 

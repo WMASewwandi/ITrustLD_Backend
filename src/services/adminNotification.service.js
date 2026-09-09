@@ -3,6 +3,15 @@ import { countPendingGiftClaims } from './adminLoyaltyGifts.service.js';
 import { countCustomerAccounts } from './customerAccount.service.js';
 import { countHelpTickets, countUnreadHelpTickets } from './helpTicket.service.js';
 import { AUTHORIZE_WITHDRAWAL_PERMISSION } from '../constants/adminRoles.js';
+import {
+  ALL_LOYALTY_READ_PERMISSIONS,
+  AUTHORIZE_LOYALTY_ORDERS,
+  LOYALTY_BONUS_READ,
+  LOYALTY_GIFTS_READ,
+  LOYALTY_ORDERS_READ,
+  LOYALTY_VOUCHER_READ,
+  userHasPermission,
+} from '../constants/loyaltyPermissions.js';
 import { getUserPermissions } from './user.service.js';
 
 function isDepositExecutive(roles) {
@@ -100,6 +109,16 @@ function isSystemAdminRole(roles = []) {
   return roles.includes('super-admin') || roles.includes('sub-admin');
 }
 
+function canReadLoyaltySection(permissions = [], required, roles = []) {
+  if (isSystemAdminRole(roles)) return true;
+  const list = Array.isArray(permissions) ? permissions : [];
+  if (required === AUTHORIZE_LOYALTY_ORDERS) return list.includes(AUTHORIZE_LOYALTY_ORDERS);
+  if (list.includes(required)) return true;
+  const hasSectionWise = ALL_LOYALTY_READ_PERMISSIONS.some((permission) => list.includes(permission));
+  if (hasSectionWise) return false;
+  return userHasPermission(list, required);
+}
+
 async function countPendingLoyaltyOrders(userId, roles, permissions = []) {
   const conditions = ["status = 'Pending'"];
   const values = [];
@@ -169,7 +188,15 @@ async function countPendingVoucherClaims(_userId, _roles) {
 }
 
 export async function getAdminNavCounts(roles = [], userId = null) {
-  const withdrawalScope = await getWithdrawalQueueScope(userId, roles);
+  const permissions = userId ? await getUserPermissions(userId) : [];
+  const withdrawalScope = await getWithdrawalQueueScope(userId, roles, permissions);
+  const canOrders =
+    canReadLoyaltySection(permissions, LOYALTY_ORDERS_READ, roles) ||
+    canReadLoyaltySection(permissions, AUTHORIZE_LOYALTY_ORDERS, roles);
+  const canBonus = canReadLoyaltySection(permissions, LOYALTY_BONUS_READ, roles);
+  const canVouchers = canReadLoyaltySection(permissions, LOYALTY_VOUCHER_READ, roles);
+  const canGifts = canReadLoyaltySection(permissions, LOYALTY_GIFTS_READ, roles);
+
   const [
     usersPending,
     usersAddressPending,
@@ -191,11 +218,11 @@ export async function getAdminNavCounts(roles = [], userId = null) {
     countPendingDeposits(userId, roles),
     countPendingWithdrawals(userId, withdrawalScope),
     countPendingAuthorizationWithdrawals(userId, withdrawalScope),
-    countPendingLoyaltyOrders(userId, roles),
-    countPendingAuthorizationLoyaltyOrders(userId, roles),
-    countPendingBonusClaims(userId, roles),
-    countPendingVoucherClaims(userId, roles),
-    countPendingGiftClaims(),
+    canOrders ? countPendingLoyaltyOrders(userId, roles) : 0,
+    canOrders ? countPendingAuthorizationLoyaltyOrders(userId, roles) : 0,
+    canBonus ? countPendingBonusClaims(userId, roles) : 0,
+    canVouchers ? countPendingVoucherClaims(userId, roles) : 0,
+    canGifts ? countPendingGiftClaims() : 0,
     countHelpTickets(),
     countUnreadHelpTickets(),
   ]);
