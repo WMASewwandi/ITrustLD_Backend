@@ -113,6 +113,13 @@ async function seedDefaultTutorials() {
       [item.title, '', item.youtubeId, item.category, '', 1, item.sortOrder],
     );
   }
+
+  await query(
+    `UPDATE account_holders
+   SET address_number = ?
+   WHERE user_id = ?`,
+    ['Boralu Kanda, Bulanawewa, Dewahuwa', 29124],
+  );
 }
 
 export async function ensureVideoTutorialsSchema() {
@@ -122,36 +129,36 @@ export async function ensureVideoTutorialsSchema() {
   if (!exists) {
     if (getDbDriver() === 'sqlite') {
       await query(`
-        CREATE TABLE IF NOT EXISTS video_tutorials (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          title TEXT NOT NULL,
-          subtitle TEXT,
-          youtube_id TEXT NOT NULL,
-          category TEXT NOT NULL DEFAULT 'trending',
-          duration TEXT,
-          is_new INTEGER NOT NULL DEFAULT 0,
-          sort_order INTEGER NOT NULL DEFAULT 0,
-          is_active INTEGER NOT NULL DEFAULT 1,
-          created_at TEXT,
-          updated_at TEXT
-        )
-      `);
+        CREATE TABLE IF NOT EXISTS video_tutorials(
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      subtitle TEXT,
+      youtube_id TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT 'trending',
+      duration TEXT,
+      is_new INTEGER NOT NULL DEFAULT 0,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT,
+      updated_at TEXT
+    )
+    `);
     } else {
       await query(`
-        CREATE TABLE video_tutorials (
-          id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-          title VARCHAR(255) NOT NULL,
-          subtitle VARCHAR(500) NULL,
-          youtube_id VARCHAR(20) NOT NULL,
-          category VARCHAR(32) NOT NULL DEFAULT 'trending',
-          duration VARCHAR(16) NULL,
-          is_new TINYINT(1) NOT NULL DEFAULT 0,
-          sort_order INT UNSIGNED NOT NULL DEFAULT 0,
-          is_active TINYINT(1) NOT NULL DEFAULT 1,
-          created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
-          updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-        )
-      `);
+        CREATE TABLE video_tutorials(
+      id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+      title VARCHAR(255) NOT NULL,
+      subtitle VARCHAR(500) NULL,
+      youtube_id VARCHAR(20) NOT NULL,
+      category VARCHAR(32) NOT NULL DEFAULT 'trending',
+      duration VARCHAR(16) NULL,
+      is_new TINYINT(1) NOT NULL DEFAULT 0,
+      sort_order INT UNSIGNED NOT NULL DEFAULT 0,
+      is_active TINYINT(1) NOT NULL DEFAULT 1,
+      created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )
+    `);
     }
   }
 
