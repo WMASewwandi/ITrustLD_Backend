@@ -8,13 +8,17 @@ const projectRoot = path.resolve(__dirname, '../..');
 dotenv.config({ path: path.join(projectRoot, '.env') });
 dotenv.config({ path: path.join(projectRoot, '../ITrustLD_Existing/.env'), override: false });
 
+function parseCsvList(value) {
+  return String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function parseCorsOrigins(value) {
   const defaults =
-    'http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001';
-  return (value || defaults)
-    .split(',')
-    .map((origin) => origin.trim())
-    .filter(Boolean);
+    'http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001,http://localhost:5000,http://127.0.0.1:5000';
+  return parseCsvList(value || defaults);
 }
 
 const isProduction = (process.env.NODE_ENV || 'development') === 'production';
@@ -101,4 +105,19 @@ export const env = {
   /** Sri Lanka wall-clock for shifts, business days, and display (mirrors Laravel app.shift_timezone). */
   shiftTimezone:
     process.env.APP_TIMEZONE || process.env.SHIFT_TIMEZONE || 'Asia/Colombo',
+  partnerPay: {
+    name: process.env.PARTNER_PAY_NAME || 'Default Partner',
+    apiKey:
+      process.env.PARTNER_PAY_API_KEY ||
+      (isProduction ? '' : 'itrustld_partner_dev_key'),
+    apiSecret:
+      process.env.PARTNER_PAY_API_SECRET ||
+      (isProduction ? '' : 'itrustld_partner_dev_secret'),
+    tokenSecret:
+      process.env.PARTNER_PAY_TOKEN_SECRET ||
+      process.env.JWT_SECRET ||
+      'change-me-in-production',
+    tokenTtlSeconds: Number(process.env.PARTNER_PAY_TOKEN_TTL || 900),
+    allowedReturnUrls: parseCsvList(process.env.PARTNER_PAY_ALLOWED_RETURN_URLS),
+  },
 };

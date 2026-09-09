@@ -8,6 +8,7 @@ import {
   getWithdrawalBootstrap,
   getWithdrawalMethodDetails,
   getWithdrawalPaymentProofContext,
+  updatePendingWithdrawalPaymentChoice,
   getUserWithdrawalTransaction,
   listUserWithdrawalTransactions,
   listUserWithdrawalTransactionsForPrint,
@@ -97,6 +98,19 @@ userWithdrawalsRouter.post('/', async (req, res, next) => {
 userWithdrawalsRouter.get('/:withdrawalId/payment-proof', async (req, res, next) => {
   try {
     const data = await getWithdrawalPaymentProofContext(req.auth.userId, req.params.withdrawalId);
+    res.json(data);
+  } catch (error) {
+    next(error);
+  }
+});
+
+userWithdrawalsRouter.patch('/:withdrawalId/payment-choice', async (req, res, next) => {
+  try {
+    const data = await updatePendingWithdrawalPaymentChoice(
+      req.auth.userId,
+      req.params.withdrawalId,
+      req.body ?? {},
+    );
     res.json(data);
   } catch (error) {
     next(error);
