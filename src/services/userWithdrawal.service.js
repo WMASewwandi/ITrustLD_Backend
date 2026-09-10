@@ -24,6 +24,7 @@ import {
 import { withPanelPaymentAccountExtras } from './builtinPayAccountMeta.service.js';
 import { listUserCustomReceivingAccounts, loadUserCustomReceivingAccount } from './userPaymentAccount.service.js';
 import { matchesPartnerCheckout } from '../utils/partnerPayToken.js';
+import { savePartnerReturnFromCheckout } from './partnerPayReturn.service.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -968,6 +969,16 @@ export async function createUserWithdrawal(userId, payload) {
   );
 
   bumpAdminNavCounts();
+
+  if (skipAccountFormat) {
+    await savePartnerReturnFromCheckout({
+      userId,
+      type: 'withdrawal',
+      transactionId,
+      gatewayToken: payload.gateway_token ?? payload.partner_checkout_token,
+      methodId: cashoutMethodId,
+    });
+  }
 
   return {
     id: result.insertId,

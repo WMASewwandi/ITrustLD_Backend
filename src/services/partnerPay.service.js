@@ -5,6 +5,8 @@ import { query } from '../config/database.js';
 import { getDepositMethodDetails } from './userDeposit.service.js';
 import { getWithdrawalMethodDetails } from './userWithdrawal.service.js';
 import { verifyGatewayToken } from '../utils/partnerPayToken.js';
+import { findAccountHolderByEmail, findAccountHolderByUserId } from './accountHolder.service.js';
+import { findUserByEmail, findUserById } from './user.service.js';
 
 function apiError(message, status = 422, code) {
   const error = new Error(message);
@@ -171,11 +173,52 @@ function buildWithdrawalFields(payload = {}) {
   };
 }
 
+function requiredEmail(value) {
+  const email = String(value || '').trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw apiError('A valid email is required.');
+  }
+  return email;
+}
+
+async function assertRegisteredEmail(email) {
+  const user = await findUserByEmail(email);
+  const holder = await findAccountHolderByEmail(email);
+  if (!user && !holder) {
+    throw apiError('No iTrustLD account found for this email.', 422, 'NO_ACCOUNT');
+  }
+}
+
+async function assertCheckoutEmailMatchesUser(userId, checkoutEmail) {
+  const expected = String(checkoutEmail || '').trim().toLowerCase();
+  if (!expected) return;
+  const [holder, user] = await Promise.all([
+    findAccountHolderByUserId(userId),
+    findUserById(userId),
+  ]);
+  const actual = String(holder?.email || user?.email || '')
+    .trim()
+    .toLowerCase();
+  if (actual !== expected) {
+    throw apiError('This checkout is for a different iTrustLD account.', 403, 'EMAIL_MISMATCH');
+  }
+}
+
+function continuePath(type, token) {
+  const encoded = encodeURIComponent(token);
+  return type === 'withdrawal'
+    ? `/dashboard/withdrawal?gateway=${encoded}`
+    : `/dashboard/deposit?gateway=${encoded}`;
+}
+
 export async function createGatewayCheckout(partner, kind, payload = {}) {
   const type = String(kind || '').toLowerCase() === 'withdrawal' ? 'withdrawal' : 'deposit';
   const returnUrl = requiredHttpUrl(payload.return_url, 'return_url');
+  const email = requiredEmail(payload.email);
+  await assertRegisteredEmail(email);
 
   const fields = type === 'deposit' ? buildDepositFields(payload) : buildWithdrawalFields(payload);
+  fields.email = email;
   await assertGatewayAmountLimits(type, fields);
   const ttl = Math.min(
     Math.max(Number(payload.expires_in_seconds || env.partnerPay.tokenTtlSeconds) || 900, 60),
@@ -194,25 +237,47 @@ export async function createGatewayCheckout(partner, kind, payload = {}) {
     { expiresIn: ttl },
   );
 
-  const path =
-    type === 'deposit'
-      ? `/dashboard/deposit?gateway=${encodeURIComponent(token)}`
-      : `/dashboard/withdrawal?gateway=${encodeURIComponent(token)}`;
+  const entryPath = `/partner-pay?gateway=${encodeURIComponent(token)}`;
 
   return {
     ok: true,
     type,
     token,
     expires_in: ttl,
-    checkout_url: `${env.userAppUrl}${path}`,
-    login_url: `${env.userAppUrl}/login?redirect=${encodeURIComponent(path)}`,
+    checkout_url: `${env.userAppUrl}${entryPath}`,
+    login_url: `${env.userAppUrl}${entryPath}`,
   };
+}
+
+export async function previewGatewayCheckout(rawToken) {
+  const payload = verifyGatewayToken(rawToken);
+  const type = payload.typ === 'gateway_withdrawal' ? 'withdrawal' : 'deposit';
+  const email = String(payload.fields?.email || '').trim().toLowerCase();
+  const path = continuePath(type, rawToken);
+
+  if (!email) {
+    return { ok: true, has_account: true, type, continue_path: path };
+  }
+
+  const user = await findUserByEmail(email);
+  const holder = await findAccountHolderByEmail(email);
+  if (!user && !holder) {
+    return {
+      ok: false,
+      has_account: false,
+      type,
+      message: 'No iTrustLD account found for this email.',
+    };
+  }
+
+  return { ok: true, has_account: true, type, continue_path: path };
 }
 
 export async function claimGatewayCheckout(userId, rawToken) {
   const payload = verifyGatewayToken(rawToken);
   const type = payload.typ === 'gateway_withdrawal' ? 'withdrawal' : 'deposit';
   const fields = payload.fields || {};
+  await assertCheckoutEmailMatchesUser(userId, fields.email);
   await assertGatewayAmountLimits(type, fields);
 
   if (type === 'deposit') {

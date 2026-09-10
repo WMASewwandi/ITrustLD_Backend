@@ -4,9 +4,18 @@ import {
   createGatewayCheckout,
   getGatewayTransactionStatus,
   listGatewayCatalog,
+  previewGatewayCheckout,
 } from '../services/partnerPay.service.js';
 
 export const partnerPayRouter = Router();
+
+partnerPayRouter.get('/checkout-preview', async (req, res, next) => {
+  try {
+    res.json(await previewGatewayCheckout(req.query.token || req.query.gateway));
+  } catch (error) {
+    next(error);
+  }
+});
 
 partnerPayRouter.use(requirePartnerApiKey);
 
