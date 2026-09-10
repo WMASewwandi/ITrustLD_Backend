@@ -1,10 +1,11 @@
 import jwt from 'jsonwebtoken';
 import { env } from '../config/env.js';
+import { PartnerPayCode } from './partnerPayCodes.js';
 
 function expiredTokenError() {
   const error = new Error('Expired Token — please restart payment from the partner platform.');
   error.status = 401;
-  error.code = 'EXPIRED_TOKEN';
+  error.code = PartnerPayCode.EXPIRED_TOKEN;
   return error;
 }
 
@@ -16,7 +17,7 @@ export function verifyGatewayToken(rawToken) {
     }
     return payload;
   } catch (error) {
-    if (error.code === 'EXPIRED_TOKEN') throw error;
+    if (error.code === PartnerPayCode.EXPIRED_TOKEN) throw error;
     throw expiredTokenError();
   }
 }
