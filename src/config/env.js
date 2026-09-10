@@ -107,17 +107,12 @@ export const env = {
     process.env.APP_TIMEZONE || process.env.SHIFT_TIMEZONE || 'Asia/Colombo',
   partnerPay: {
     name: process.env.PARTNER_PAY_NAME || 'Default Partner',
-    apiKey:
-      process.env.PARTNER_PAY_API_KEY ||
-      (isProduction ? '' : 'itrustld_partner_dev_key'),
-    apiSecret:
-      process.env.PARTNER_PAY_API_SECRET ||
-      (isProduction ? '' : 'itrustld_partner_dev_secret'),
+    apiKey: process.env.PARTNER_PAY_API_KEY || 'itrustld_partner_dev_key',
+    apiSecret: process.env.PARTNER_PAY_API_SECRET || 'itrustld_partner_dev_secret',
     tokenSecret:
       process.env.PARTNER_PAY_TOKEN_SECRET ||
       process.env.JWT_SECRET ||
       'change-me-in-production',
     tokenTtlSeconds: Number(process.env.PARTNER_PAY_TOKEN_TTL || 900),
-    allowedReturnUrls: parseCsvList(process.env.PARTNER_PAY_ALLOWED_RETURN_URLS),
   },
 };
