@@ -25,6 +25,7 @@ import {
 import { loadCustomPayAccountsByCategoryName, loadNamedCustomPayAccountsIfPresent } from './customPayAccount.service.js';
 import { withPanelPaymentAccountExtras } from './builtinPayAccountMeta.service.js';
 import { matchesPartnerCheckout } from '../utils/partnerPayToken.js';
+import { savePartnerReturnFromCheckout } from './partnerPayReturn.service.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -757,6 +758,16 @@ export async function createUserDeposit(userId, payload) {
   );
 
   bumpAdminNavCounts();
+
+  if (skipAccountFormat) {
+    await savePartnerReturnFromCheckout({
+      userId,
+      type: 'deposit',
+      transactionId,
+      gatewayToken: payload.gateway_token ?? payload.partner_checkout_token,
+      methodId: topupMethodId,
+    });
+  }
 
   return {
     id: result.insertId,
