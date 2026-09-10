@@ -4,6 +4,7 @@ import { env } from '../config/env.js';
 import { query } from '../config/database.js';
 import { getDepositMethodDetails } from './userDeposit.service.js';
 import { getWithdrawalMethodDetails } from './userWithdrawal.service.js';
+import { verifyGatewayToken } from '../utils/partnerPayToken.js';
 
 function apiError(message, status = 422, code) {
   const error = new Error(message);
@@ -19,21 +20,18 @@ function secretsEqual(left, right) {
   return crypto.timingSafeEqual(a, b);
 }
 
-function isLocalDevReturnUrl(url) {
+function requiredHttpUrl(value, label) {
+  const text = String(value || '').trim();
+  if (!text) throw apiError(`${label} is required.`);
   try {
-    const parsed = new URL(url);
-    return ['localhost', '127.0.0.1'].includes(parsed.hostname);
+    const parsed = new URL(text);
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      throw new Error('invalid');
+    }
   } catch {
-    return false;
+    throw apiError(`${label} must be a valid http or https URL.`);
   }
-}
-
-function returnUrlAllowed(url, extraPrefixes = []) {
-  const prefixes = [...(env.partnerPay.allowedReturnUrls || []), ...extraPrefixes].filter(Boolean);
-  if (prefixes.length) {
-    return prefixes.some((prefix) => url === prefix || url.startsWith(prefix));
-  }
-  return env.nodeEnv !== 'production' && isLocalDevReturnUrl(url);
+  return text;
 }
 
 async function findDbPartnerByApiKey(apiKey) {
@@ -69,10 +67,6 @@ export async function authenticatePartner(apiKey, apiSecret) {
       name: dbPartner.name,
       apiKey: dbPartner.api_key,
       apiSecret: dbPartner.api_secret,
-      allowedReturnUrls: String(dbPartner.allowed_return_urls || '')
-        .split(',')
-        .map((item) => item.trim())
-        .filter(Boolean),
       webhookUrl: dbPartner.webhook_url || null,
     };
   }
@@ -87,7 +81,6 @@ export async function authenticatePartner(apiKey, apiSecret) {
       name: env.partnerPay.name,
       apiKey: env.partnerPay.apiKey,
       apiSecret: env.partnerPay.apiSecret,
-      allowedReturnUrls: env.partnerPay.allowedReturnUrls,
       webhookUrl: null,
     };
   }
@@ -180,10 +173,7 @@ function buildWithdrawalFields(payload = {}) {
 
 export async function createGatewayCheckout(partner, kind, payload = {}) {
   const type = String(kind || '').toLowerCase() === 'withdrawal' ? 'withdrawal' : 'deposit';
-  const returnUrl = requiredText(payload.return_url, 'return_url');
-  if (!returnUrlAllowed(returnUrl, partner.allowedReturnUrls)) {
-    throw apiError('return_url is not on the partner allowlist.');
-  }
+  const returnUrl = requiredHttpUrl(payload.return_url, 'return_url');
 
   const fields = type === 'deposit' ? buildDepositFields(payload) : buildWithdrawalFields(payload);
   await assertGatewayAmountLimits(type, fields);
@@ -217,19 +207,6 @@ export async function createGatewayCheckout(partner, kind, payload = {}) {
     checkout_url: `${env.userAppUrl}${path}`,
     login_url: `${env.userAppUrl}/login?redirect=${encodeURIComponent(path)}`,
   };
-}
-
-function verifyGatewayToken(rawToken) {
-  try {
-    const payload = jwt.verify(String(rawToken || ''), env.partnerPay.tokenSecret);
-    if (!String(payload.typ || '').startsWith('gateway_') || !payload.fields) {
-      throw apiError('Expired Token — please restart payment from the partner platform.', 401, 'EXPIRED_TOKEN');
-    }
-    return payload;
-  } catch (error) {
-    if (error.code === 'EXPIRED_TOKEN') throw error;
-    throw apiError('Expired Token — please restart payment from the partner platform.', 401, 'EXPIRED_TOKEN');
-  }
 }
 
 export async function claimGatewayCheckout(userId, rawToken) {

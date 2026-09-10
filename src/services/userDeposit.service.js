@@ -24,6 +24,7 @@ import {
 } from './pendingMethodLimit.service.js';
 import { loadCustomPayAccountsByCategoryName, loadNamedCustomPayAccountsIfPresent } from './customPayAccount.service.js';
 import { withPanelPaymentAccountExtras } from './builtinPayAccountMeta.service.js';
+import { matchesPartnerCheckout } from '../utils/partnerPayToken.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -701,7 +702,14 @@ export async function createUserDeposit(userId, payload) {
 
   await assertDepositMethodPendingLimit(userId, topupMethodId, topupMethod.name);
 
-  const accountError = validateTopupAccountId(topupMethod.name, topupAccountId);
+  const skipAccountFormat = matchesPartnerCheckout(
+    payload.gateway_token ?? payload.partner_checkout_token,
+    'deposit',
+    topupMethodId,
+  );
+  const accountError = skipAccountFormat
+    ? (topupAccountId ? null : 'Top-up account ID is required.')
+    : validateTopupAccountId(topupMethod.name, topupAccountId);
   if (accountError) throw validationError(accountError);
 
   const paymentOption = await getPaymentOptionById(paymentOptionId);

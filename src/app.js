@@ -23,22 +23,38 @@ export function createApp() {
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: true }));
 
-  app.use(
-    cors({
-      origin(origin, callback) {
-        if (!origin) {
-          callback(null, true);
-          return;
+  app.use((req, res, next) => {
+    const isPartnerPay = req.path.startsWith('/api/v1/partner-pay');
+    const corsOptions = isPartnerPay
+      ? {
+          origin: true,
+          credentials: false,
+          methods: ['GET', 'POST', 'OPTIONS'],
+          allowedHeaders: [
+            'Content-Type',
+            'Authorization',
+            'X-API-Key',
+            'X-API-Secret',
+            'X-iTrustLD-API-Key',
+            'X-iTrustLD-API-Secret',
+          ],
         }
-        if (env.corsAllowedOrigins.includes(origin) || localhostOriginPattern.test(origin)) {
-          callback(null, true);
-          return;
-        }
-        callback(new Error(`CORS blocked for origin: ${origin}`));
-      },
-      credentials: true,
-    }),
-  );
+      : {
+          origin(origin, callback) {
+            if (!origin) {
+              callback(null, true);
+              return;
+            }
+            if (env.corsAllowedOrigins.includes(origin) || localhostOriginPattern.test(origin)) {
+              callback(null, true);
+              return;
+            }
+            callback(new Error(`CORS blocked for origin: ${origin}`));
+          },
+          credentials: true,
+        };
+    return cors(corsOptions)(req, res, next);
+  });
 
   app.use(withRequestContext);
   app.use('/api/v1', apiRouter);

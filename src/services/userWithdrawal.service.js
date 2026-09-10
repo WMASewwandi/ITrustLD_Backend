@@ -23,6 +23,7 @@ import {
 } from './customPayAccount.service.js';
 import { withPanelPaymentAccountExtras } from './builtinPayAccountMeta.service.js';
 import { listUserCustomReceivingAccounts, loadUserCustomReceivingAccount } from './userPaymentAccount.service.js';
+import { matchesPartnerCheckout } from '../utils/partnerPayToken.js';
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -921,7 +922,14 @@ export async function createUserWithdrawal(userId, payload) {
 
   await assertWithdrawalMethodPendingLimit(userId, cashoutMethodId, cashoutMethod.name);
 
-  const accountError = validateCashoutAccountId(cashoutMethod.name, cashoutAccountId);
+  const skipAccountFormat = matchesPartnerCheckout(
+    payload.gateway_token ?? payload.partner_checkout_token,
+    'withdrawal',
+    cashoutMethodId,
+  );
+  const accountError = skipAccountFormat
+    ? (cashoutAccountId ? null : 'Cash-out account ID is required.')
+    : validateCashoutAccountId(cashoutMethod.name, cashoutAccountId);
   if (accountError) throw validationError(accountError);
 
   if (cashoutAmount < cashoutMethod.minLimit || cashoutAmount > cashoutMethod.maxLimit) {
