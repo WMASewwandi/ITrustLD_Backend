@@ -5,13 +5,14 @@ import { query } from '../config/database.js';
 import { getDepositMethodDetails } from './userDeposit.service.js';
 import { getWithdrawalMethodDetails } from './userWithdrawal.service.js';
 import { verifyGatewayToken } from '../utils/partnerPayToken.js';
+import { PartnerPayCode } from '../utils/partnerPayCodes.js';
 import { findAccountHolderByEmail, findAccountHolderByUserId } from './accountHolder.service.js';
 import { findUserByEmail, findUserById } from './user.service.js';
 
-function apiError(message, status = 422, code) {
+function apiError(message, status = 422, code = PartnerPayCode.VALIDATION_ERROR) {
   const error = new Error(message);
   error.status = status;
-  if (code) error.code = code;
+  error.code = code;
   return error;
 }
 
@@ -24,14 +25,14 @@ function secretsEqual(left, right) {
 
 function requiredHttpUrl(value, label) {
   const text = String(value || '').trim();
-  if (!text) throw apiError(`${label} is required.`);
+  if (!text) throw apiError(`${label} is required.`, 422, PartnerPayCode.RETURN_URL_REQUIRED);
   try {
     const parsed = new URL(text);
     if (!['http:', 'https:'].includes(parsed.protocol)) {
       throw new Error('invalid');
     }
   } catch {
-    throw apiError(`${label} must be a valid http or https URL.`);
+    throw apiError(`${label} must be a valid http or https URL.`, 422, PartnerPayCode.RETURN_URL_INVALID);
   }
   return text;
 }
@@ -59,7 +60,7 @@ export async function authenticatePartner(apiKey, apiSecret) {
   const key = String(apiKey || '').trim();
   const secret = String(apiSecret || '').trim();
   if (!key || !secret) {
-    throw apiError('Invalid API credentials.', 401, 'LOGIN_FAILURE');
+    throw apiError('Invalid API credentials.', 401, PartnerPayCode.LOGIN_FAILURE);
   }
 
   const dbPartner = await findDbPartnerByApiKey(key);
@@ -87,24 +88,24 @@ export async function authenticatePartner(apiKey, apiSecret) {
     };
   }
 
-  throw apiError('Invalid API credentials.', 401, 'LOGIN_FAILURE');
+  throw apiError('Invalid API credentials.', 401, PartnerPayCode.LOGIN_FAILURE);
 }
 
-function requiredNumber(value, label) {
+function requiredNumber(value, label, code = PartnerPayCode.AMOUNT_REQUIRED) {
   const n = Number(value);
-  if (!Number.isFinite(n) || n <= 0) throw apiError(`${label} is required.`);
+  if (!Number.isFinite(n) || n <= 0) throw apiError(`${label} is required.`, 422, code);
   return n;
 }
 
-function requiredInt(value, label) {
+function requiredInt(value, label, code = PartnerPayCode.TOPUP_METHOD_ID_REQUIRED) {
   const n = Number(value);
-  if (!Number.isInteger(n) || n <= 0) throw apiError(`${label} is required.`);
+  if (!Number.isInteger(n) || n <= 0) throw apiError(`${label} is required.`, 422, code);
   return n;
 }
 
-function requiredText(value, label) {
+function requiredText(value, label, code = PartnerPayCode.PLATFORM_ID_REQUIRED) {
   const text = String(value || '').trim();
-  if (!text) throw apiError(`${label} is required.`);
+  if (!text) throw apiError(`${label} is required.`, 422, code);
   return text;
 }
 
@@ -112,6 +113,7 @@ function platformIdFrom(payload, labels) {
   return requiredText(
     payload.topup_account_id ?? payload.cashout_account_id ?? payload.platform_id ?? payload.plat_id,
     labels,
+    PartnerPayCode.PLATFORM_ID_REQUIRED,
   );
 }
 
@@ -120,7 +122,11 @@ function assertAmountInRange(amount, minLimit, maxLimit, kindLabel) {
   const max = Number(maxLimit);
   if (!Number.isFinite(min) || !Number.isFinite(max)) return;
   if (amount < min || amount > max) {
-    throw apiError(`${kindLabel} amount must be between USD ${min} and USD ${max}.`);
+    throw apiError(
+      `${kindLabel} amount must be between USD ${min} and USD ${max}.`,
+      422,
+      PartnerPayCode.AMOUNT_OUT_OF_RANGE,
+    );
   }
 }
 
@@ -135,7 +141,7 @@ async function assertGatewayAmountLimits(type, fields) {
        LIMIT 1`,
       [fields.topup_method_id],
     );
-    if (!rows[0]) throw apiError('Selected top-up method is not available.');
+    if (!rows[0]) throw apiError('Selected top-up method is not available.', 422, PartnerPayCode.METHOD_UNAVAILABLE);
     assertAmountInRange(fields.deposit_amount, rows[0].minimum_limit, rows[0].maximum_limit, 'Deposit');
     return;
   }
@@ -149,15 +155,15 @@ async function assertGatewayAmountLimits(type, fields) {
      LIMIT 1`,
     [fields.cashout_method_id],
   );
-  if (!rows[0]) throw apiError('Selected cash-out method is not available.');
+  if (!rows[0]) throw apiError('Selected cash-out method is not available.', 422, PartnerPayCode.METHOD_UNAVAILABLE);
   assertAmountInRange(fields.cashout_amount, rows[0].minimum_limit, rows[0].maximum_limit, 'Cash-out');
 }
 
 function buildDepositFields(payload = {}) {
   return {
-    topup_method_id: requiredInt(payload.topup_method_id, 'topup_method_id'),
+    topup_method_id: requiredInt(payload.topup_method_id, 'topup_method_id', PartnerPayCode.TOPUP_METHOD_ID_REQUIRED),
     topup_account_id: platformIdFrom(payload, 'platform_id'),
-    deposit_amount: requiredNumber(payload.deposit_amount ?? payload.amount, 'amount'),
+    deposit_amount: requiredNumber(payload.deposit_amount ?? payload.amount, 'amount', PartnerPayCode.AMOUNT_REQUIRED),
     deposit_amount_currency: 'USD',
     currency: String(payload.currency || payload.deposit_amount_currency || 'USD').trim() || 'USD',
   };
@@ -165,9 +171,9 @@ function buildDepositFields(payload = {}) {
 
 function buildWithdrawalFields(payload = {}) {
   return {
-    cashout_method_id: requiredInt(payload.cashout_method_id, 'cashout_method_id'),
+    cashout_method_id: requiredInt(payload.cashout_method_id, 'cashout_method_id', PartnerPayCode.CASHOUT_METHOD_ID_REQUIRED),
     cashout_account_id: platformIdFrom(payload, 'platform_id'),
-    cashout_amount: requiredNumber(payload.cashout_amount ?? payload.amount, 'amount'),
+    cashout_amount: requiredNumber(payload.cashout_amount ?? payload.amount, 'amount', PartnerPayCode.AMOUNT_REQUIRED),
     cashout_amount_currency: 'USD',
     currency: String(payload.currency || payload.cashout_amount_currency || 'USD').trim() || 'USD',
   };
@@ -175,8 +181,9 @@ function buildWithdrawalFields(payload = {}) {
 
 function requiredEmail(value) {
   const email = String(value || '').trim().toLowerCase();
+  if (!email) throw apiError('A valid email is required.', 422, PartnerPayCode.EMAIL_REQUIRED);
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    throw apiError('A valid email is required.');
+    throw apiError('A valid email is required.', 422, PartnerPayCode.EMAIL_INVALID);
   }
   return email;
 }
@@ -185,7 +192,7 @@ async function assertRegisteredEmail(email) {
   const user = await findUserByEmail(email);
   const holder = await findAccountHolderByEmail(email);
   if (!user && !holder) {
-    throw apiError('No iTrustLD account found for this email.', 422, 'NO_ACCOUNT');
+    throw apiError('No iTrustLD account found for this email.', 422, PartnerPayCode.NO_ACCOUNT);
   }
 }
 
@@ -200,7 +207,7 @@ async function assertCheckoutEmailMatchesUser(userId, checkoutEmail) {
     .trim()
     .toLowerCase();
   if (actual !== expected) {
-    throw apiError('This checkout is for a different iTrustLD account.', 403, 'EMAIL_MISMATCH');
+    throw apiError('This checkout is for a different iTrustLD account.', 403, PartnerPayCode.EMAIL_MISMATCH);
   }
 }
 
@@ -266,11 +273,12 @@ export async function previewGatewayCheckout(rawToken) {
       ok: false,
       has_account: false,
       type,
+      code: PartnerPayCode.NO_ACCOUNT,
       message: 'No iTrustLD account found for this email.',
     };
   }
 
-  return { ok: true, has_account: true, type, continue_path: path };
+  return { ok: true, has_account: true, type, continue_path: path, email };
 }
 
 export async function claimGatewayCheckout(userId, rawToken) {
@@ -309,7 +317,7 @@ export async function claimGatewayCheckout(userId, rawToken) {
 
 export async function getGatewayTransactionStatus(type, transactionId) {
   const id = String(transactionId || '').trim();
-  if (!id) throw apiError('Transaction id is required.');
+  if (!id) throw apiError('Transaction id is required.', 422, PartnerPayCode.TRANSACTION_ID_REQUIRED);
   if (type === 'withdrawal') {
     const rows = await query(
       `SELECT transaction_id, transaction_status, cashout_amount, cashout_amount_currency,
@@ -319,7 +327,7 @@ export async function getGatewayTransactionStatus(type, transactionId) {
        LIMIT 1`,
       [id],
     );
-    if (!rows[0]) throw apiError('Payment not found.', 404);
+    if (!rows[0]) throw apiError('Payment not found.', 404, PartnerPayCode.PAYMENT_NOT_FOUND);
     const row = rows[0];
     return {
       ok: true,
@@ -341,7 +349,7 @@ export async function getGatewayTransactionStatus(type, transactionId) {
      LIMIT 1`,
     [id],
   );
-  if (!rows[0]) throw apiError('Payment not found.', 404);
+  if (!rows[0]) throw apiError('Payment not found.', 404, PartnerPayCode.PAYMENT_NOT_FOUND);
   const row = rows[0];
   return {
     ok: true,
