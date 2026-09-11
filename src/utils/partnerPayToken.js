@@ -22,18 +22,29 @@ export function verifyGatewayToken(rawToken) {
   }
 }
 
-export function partnerCheckoutMeta(rawToken, type, methodId) {
+function signedGatewayPayload(rawToken) {
   try {
-    const payload = verifyGatewayToken(rawToken);
-    const expected = type === 'withdrawal' ? 'gateway_withdrawal' : 'gateway_deposit';
-    if (payload.typ !== expected) return { ok: false, returnUrl: '' };
-    const fieldId =
-      type === 'withdrawal' ? payload.fields?.cashout_method_id : payload.fields?.topup_method_id;
-    if (Number(fieldId) !== Number(methodId)) return { ok: false, returnUrl: '' };
-    return { ok: true, returnUrl: String(payload.return_url || '').trim() };
+    return jwt.verify(String(rawToken || ''), env.partnerPay.tokenSecret);
   } catch {
-    return { ok: false, returnUrl: '' };
+    try {
+      return jwt.verify(String(rawToken || ''), env.partnerPay.tokenSecret, {
+        ignoreExpiration: true,
+      });
+    } catch {
+      return null;
+    }
   }
+}
+
+export function partnerCheckoutMeta(rawToken, type, methodId) {
+  const payload = signedGatewayPayload(rawToken);
+  if (!payload || !payload.fields) return { ok: false, returnUrl: '' };
+  const expected = type === 'withdrawal' ? 'gateway_withdrawal' : 'gateway_deposit';
+  if (payload.typ !== expected) return { ok: false, returnUrl: '' };
+  const fieldId =
+    type === 'withdrawal' ? payload.fields?.cashout_method_id : payload.fields?.topup_method_id;
+  if (Number(fieldId) !== Number(methodId)) return { ok: false, returnUrl: '' };
+  return { ok: true, returnUrl: String(payload.return_url || '').trim() };
 }
 
 export function matchesPartnerCheckout(rawToken, type, methodId) {
