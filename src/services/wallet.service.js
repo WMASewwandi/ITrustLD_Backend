@@ -1,5 +1,6 @@
+import crypto from 'node:crypto';
 import { getDbDriver, query } from '../config/database.js';
-import { columnExists } from '../db/helpers.js';
+import { addColumnIfMissing, columnExists } from '../db/helpers.js';
 import { listPayAccountChoices, payAccountExists } from './payAccount.service.js';
 import { resolveWalletLogoPublicUrl, storeWalletLogo } from './walletLogoStorage.service.js';
 
@@ -26,6 +27,7 @@ let topupVoucherFlagSchemaReady = false;
 let walletNavigateSchemaReady = false;
 let walletPayAccountSchemaReady = false;
 let walletCatalogFkSchemaReady = false;
+let walletGuidSchemaReady = false;
 
 function validationError(message, status = 422) {
   const error = new Error(message);
@@ -406,10 +408,32 @@ export async function ensureWalletCatalogFkSchema() {
   walletCatalogFkSchemaReady = true;
 }
 
+export async function ensureWalletGuidSchema() {
+  if (walletGuidSchemaReady) return;
+
+  for (const table of ['topup_methods', 'cashout_methods']) {
+    await addColumnIfMissing(table, 'guid', {
+      mysql: 'guid CHAR(36) NULL',
+      sqlite: 'guid TEXT NULL',
+    });
+    const rows = await query(`SELECT id FROM ${table} WHERE guid IS NULL OR guid = ''`);
+    for (const row of rows) {
+      await query(`UPDATE ${table} SET guid = ? WHERE id = ?`, [crypto.randomUUID(), row.id]);
+    }
+  }
+
+  walletGuidSchemaReady = true;
+}
+
+function newMethodGuid() {
+  return crypto.randomUUID();
+}
+
 async function ensureWalletMethodSchema() {
   await ensureWalletNavigateSchema();
   await ensureWalletPayAccountSchema();
   await ensureWalletCatalogFkSchema();
+  await ensureWalletGuidSchema();
 }
 
 async function loadPayAccountIndex() {
@@ -649,6 +673,7 @@ async function mapWalletRow(row, kind, payAccountIndex = null) {
 
   return {
     id: row.id,
+    guid: row.guid || '',
     name: row[config.nameColumn] || '',
     currency: row[config.currencyColumn] || '',
     platformType: platformTypes.join(','),
@@ -844,6 +869,7 @@ export async function createTopupWallet(payload, logoFile) {
     'navigate_url',
     'navigate_button_label',
     config.logoColumn,
+    'guid',
     'is_deleted',
     'created_at',
     'updated_at',
@@ -862,6 +888,7 @@ export async function createTopupWallet(payload, logoFile) {
     navigate.navigateUrl,
     navigate.navigateButtonLabel,
     logo,
+    newMethodGuid(),
     0,
   ];
 
@@ -918,6 +945,7 @@ export async function createCashoutWallet(payload, logoFile) {
     'navigate_url',
     'navigate_button_label',
     config.logoColumn,
+    'guid',
     'is_deleted',
     'created_at',
     'updated_at',
@@ -935,6 +963,7 @@ export async function createCashoutWallet(payload, logoFile) {
     navigate.navigateUrl,
     navigate.navigateButtonLabel,
     logo,
+    newMethodGuid(),
     0,
   ];
 
