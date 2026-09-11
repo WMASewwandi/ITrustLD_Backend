@@ -8,6 +8,7 @@ import { verifyGatewayToken } from '../utils/partnerPayToken.js';
 import { PartnerPayCode } from '../utils/partnerPayCodes.js';
 import { findAccountHolderByEmail, findAccountHolderByUserId } from './accountHolder.service.js';
 import { findUserByEmail, findUserById } from './user.service.js';
+import { ensureWalletGuidSchema } from './wallet.service.js';
 
 function apiError(message, status = 422, code = PartnerPayCode.VALIDATION_ERROR) {
   const error = new Error(message);
@@ -97,10 +98,34 @@ function requiredNumber(value, label, code = PartnerPayCode.AMOUNT_REQUIRED) {
   return n;
 }
 
-function requiredInt(value, label, code = PartnerPayCode.TOPUP_METHOD_ID_REQUIRED) {
-  const n = Number(value);
-  if (!Number.isInteger(n) || n <= 0) throw apiError(`${label} is required.`, 422, code);
-  return n;
+function isMethodGuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    String(value || '').trim(),
+  );
+}
+
+async function resolveMethodIdFromGuid(kind, payload) {
+  await ensureWalletGuidSchema();
+  const isDeposit = kind === 'deposit';
+  const guid = String(
+    (isDeposit
+      ? payload.topup_method_guid ?? payload.topup_method_id
+      : payload.cashout_method_guid ?? payload.cashout_method_id) || '',
+  ).trim();
+  const missingCode = isDeposit
+    ? PartnerPayCode.TOPUP_METHOD_ID_REQUIRED
+    : PartnerPayCode.CASHOUT_METHOD_ID_REQUIRED;
+  if (!isMethodGuid(guid)) {
+    throw apiError(
+      isDeposit ? 'topup_method_guid is required.' : 'cashout_method_guid is required.',
+      422,
+      missingCode,
+    );
+  }
+  const table = isDeposit ? 'topup_methods' : 'cashout_methods';
+  const rows = await query(`SELECT id FROM ${table} WHERE guid = ? LIMIT 1`, [guid]);
+  if (!rows[0]) throw apiError('Selected method is not available.', 422, PartnerPayCode.METHOD_UNAVAILABLE);
+  return Number(rows[0].id);
 }
 
 function requiredText(value, label, code = PartnerPayCode.PLATFORM_ID_REQUIRED) {
@@ -159,9 +184,9 @@ async function assertGatewayAmountLimits(type, fields) {
   assertAmountInRange(fields.cashout_amount, rows[0].minimum_limit, rows[0].maximum_limit, 'Cash-out');
 }
 
-function buildDepositFields(payload = {}) {
+async function buildDepositFields(payload = {}) {
   return {
-    topup_method_id: requiredInt(payload.topup_method_id, 'topup_method_id', PartnerPayCode.TOPUP_METHOD_ID_REQUIRED),
+    topup_method_id: await resolveMethodIdFromGuid('deposit', payload),
     topup_account_id: platformIdFrom(payload, 'platform_id'),
     deposit_amount: requiredNumber(payload.deposit_amount ?? payload.amount, 'amount', PartnerPayCode.AMOUNT_REQUIRED),
     deposit_amount_currency: 'USD',
@@ -169,9 +194,9 @@ function buildDepositFields(payload = {}) {
   };
 }
 
-function buildWithdrawalFields(payload = {}) {
+async function buildWithdrawalFields(payload = {}) {
   return {
-    cashout_method_id: requiredInt(payload.cashout_method_id, 'cashout_method_id', PartnerPayCode.CASHOUT_METHOD_ID_REQUIRED),
+    cashout_method_id: await resolveMethodIdFromGuid('withdrawal', payload),
     cashout_account_id: platformIdFrom(payload, 'platform_id'),
     cashout_amount: requiredNumber(payload.cashout_amount ?? payload.amount, 'amount', PartnerPayCode.AMOUNT_REQUIRED),
     cashout_amount_currency: 'USD',
@@ -224,7 +249,7 @@ export async function createGatewayCheckout(partner, kind, payload = {}) {
   const email = requiredEmail(payload.email);
   await assertRegisteredEmail(email);
 
-  const fields = type === 'deposit' ? buildDepositFields(payload) : buildWithdrawalFields(payload);
+  const fields = type === 'deposit' ? await buildDepositFields(payload) : await buildWithdrawalFields(payload);
   fields.email = email;
   await assertGatewayAmountLimits(type, fields);
   const ttl = Math.min(
@@ -364,25 +389,27 @@ export async function getGatewayTransactionStatus(type, transactionId) {
 }
 
 export async function listGatewayCatalog() {
+  await ensureWalletGuidSchema();
   const [topupMethods, cashoutMethods, depositRates, withdrawalRates] = await Promise.all([
     query(
-      `SELECT id, topup_method_name AS name, minimum_limit, maximum_limit
+      `SELECT guid, topup_method_name AS name, minimum_limit, maximum_limit
        FROM topup_methods
        WHERE UPPER(availability) = 'AVAILABLE'
          AND (is_deleted = 0 OR is_deleted IS NULL)
        ORDER BY id ASC`,
     ),
     query(
-      `SELECT id, cashout_method_name AS name, minimum_limit, maximum_limit
+      `SELECT guid, cashout_method_name AS name, minimum_limit, maximum_limit
        FROM cashout_methods
        WHERE UPPER(availability) = 'AVAILABLE'
          AND (is_deleted = 0 OR is_deleted IS NULL)
        ORDER BY id ASC`,
     ),
     query(
-      `SELECT dr.id, dr.topup_method_id, dr.payment_option_id, dr.rate,
+      `SELECT dr.id, tm.guid AS topup_method_guid, dr.payment_option_id, dr.rate,
               po.payment_option_name, po.payment_option_currency
        FROM deposit_rates dr
+       INNER JOIN topup_methods tm ON tm.id = dr.topup_method_id
        INNER JOIN payment_options po ON po.id = dr.payment_option_id
        WHERE (dr.is_deleted = 0 OR dr.is_deleted IS NULL)
          AND UPPER(po.availability) = 'AVAILABLE'
@@ -390,9 +417,10 @@ export async function listGatewayCatalog() {
        ORDER BY dr.id DESC`,
     ),
     query(
-      `SELECT wr.id, wr.cashout_method_id, wr.payment_option_id, wr.rate,
+      `SELECT wr.id, cm.guid AS cashout_method_guid, wr.payment_option_id, wr.rate,
               po.payment_option_name, po.payment_option_currency
        FROM withdrawal_rates wr
+       INNER JOIN cashout_methods cm ON cm.id = wr.cashout_method_id
        INNER JOIN payment_options po ON po.id = wr.payment_option_id
        WHERE (wr.is_deleted = 0 OR wr.is_deleted IS NULL)
          AND UPPER(po.availability) = 'AVAILABLE'
@@ -404,7 +432,7 @@ export async function listGatewayCatalog() {
   const latestDeposit = [];
   const seenDeposit = new Set();
   for (const row of depositRates) {
-    const key = `${row.topup_method_id}:${row.payment_option_id}`;
+    const key = `${row.topup_method_guid}:${row.payment_option_id}`;
     if (seenDeposit.has(key)) continue;
     seenDeposit.add(key);
     latestDeposit.push(row);
@@ -413,7 +441,7 @@ export async function listGatewayCatalog() {
   const latestWithdrawal = [];
   const seenWithdrawal = new Set();
   for (const row of withdrawalRates) {
-    const key = `${row.cashout_method_id}:${row.payment_option_id}`;
+    const key = `${row.cashout_method_guid}:${row.payment_option_id}`;
     if (seenWithdrawal.has(key)) continue;
     seenWithdrawal.add(key);
     latestWithdrawal.push(row);
