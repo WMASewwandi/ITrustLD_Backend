@@ -1296,6 +1296,9 @@ export async function updateLoyaltyOrderStatus(authOrUserId, payload = {}) {
   if (nextStatus === 'Pending') {
     const revertingFromAuthorization = String(withdrawal.status) === 'Pending Authorization';
     const previousAdmin = Number(withdrawal.pendings_by_admin) || null;
+    const authorizerId = revertingFromAuthorization
+      ? Number(withdrawal.assigned_to) || null
+      : null;
     const assignTo = revertingFromAuthorization ? previousAdmin || null : withdrawal.assigned_to ?? null;
     const pendingByAdmin = revertingFromAuthorization && previousAdmin ? previousAdmin : adminUserId;
     await query(
@@ -1305,6 +1308,13 @@ export async function updateLoyaltyOrderStatus(authOrUserId, payload = {}) {
       [nextStatus, pendingByAdmin, assignTo, nowSl, withdrawalId],
     );
     await logSystemUserAction(adminUserId, SYSTEM_USER_ACTIONS.LOYALTY_ORDER_PENDING);
+    if (revertingFromAuthorization) {
+      try {
+        await refillLoyaltyOrderAuthorization(authorizerId || adminUserId);
+      } catch (error) {
+        console.error('[loyalty-order:refill-auth]', error.message);
+      }
+    }
   } else if (nextStatus === 'Pending Authorization') {
     await query(
       `UPDATE point_withdrawals
