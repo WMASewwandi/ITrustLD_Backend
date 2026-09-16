@@ -1766,38 +1766,62 @@ async function isBonusCollectAvailable(userId, isPartner, pointsRemaining) {
     };
   }
 
-  const lastRows = await query(
-    `SELECT created_at, status
+  const bonusType = isPartner ? 'partner' : 'standard';
+  const activatedAt = masterConfig.date_activated ? parseDbDateTime(masterConfig.date_activated) : null;
+  // Reactivating the master config starts a fresh cycle: anything claimed before
+  // that moment no longer counts against the user.
+  const countsForThisCycle = (createdAt) => {
+    const claimedAt = parseDbDateTime(createdAt);
+    return !(activatedAt && claimedAt && claimedAt < activatedAt);
+  };
+
+  const pendingRows = await query(
+    `SELECT created_at
      FROM loyalty_bonus_collects
      WHERE user_id = ?
-       AND status != 'Rejected'
+       AND status = 'Pending'
      ORDER BY id DESC
      LIMIT 1`,
     [userId],
   );
-  const lastCollect = lastRows[0];
-  if (!lastCollect) {
-    return { available: true, bonus: activeBonus, bonusType: isPartner ? 'partner' : 'standard' };
+  if (pendingRows[0] && countsForThisCycle(pendingRows[0].created_at)) {
+    return {
+      available: false,
+      reason: 'Your bonus claim is pending approval.',
+      alreadyClaimed: true,
+      bonusType,
+    };
   }
 
-  const activatedAt = masterConfig.date_activated ? parseDbDateTime(masterConfig.date_activated) : null;
-  const lastCreatedAt = parseDbDateTime(lastCollect.created_at);
-  if (activatedAt && lastCreatedAt && lastCreatedAt < activatedAt) {
-    return { available: true, bonus: activeBonus, bonusType: isPartner ? 'partner' : 'standard' };
+  // Each membership tier has its own bonus amount, so only a claim already made
+  // for the tier the user sits in now should block them. Claims whose tier
+  // cannot be resolved (legacy rows) keep blocking, as they did before.
+  const tier = String(activeBonus.membership_tier || '').trim().toUpperCase();
+  const claimedRows = await query(
+    `SELECT lbc.created_at
+     FROM loyalty_bonus_collects lbc
+     LEFT JOIN loyalty_management_bonuses lmb ON lmb.id = lbc.loyalty_management_bonus_id
+     WHERE lbc.user_id = ?
+       AND lbc.status != 'Rejected'
+       AND (
+         lmb.id IS NULL
+         OR COALESCE(lmb.membership_tier, '') = ''
+         OR (lmb.is_affiliate = ? AND UPPER(lmb.membership_tier) = ?)
+       )
+     ORDER BY lbc.id DESC
+     LIMIT 1`,
+    [userId, isPartner ? 1 : 0, tier],
+  );
+  if (claimedRows[0] && countsForThisCycle(claimedRows[0].created_at)) {
+    return {
+      available: false,
+      reason: 'You have already claimed this bonus.',
+      alreadyClaimed: true,
+      bonusType,
+    };
   }
 
-  const lastStatus = String(lastCollect.status || '');
-  const reason =
-    lastStatus === 'Pending'
-      ? 'Your bonus claim is pending approval.'
-      : 'You have already claimed this bonus.';
-
-  return {
-    available: false,
-    reason,
-    alreadyClaimed: true,
-    bonusType: isPartner ? 'partner' : 'standard',
-  };
+  return { available: true, bonus: activeBonus, bonusType };
 }
 
 export async function getBonusSummaryForUser(userId, isPartner, pointsRemaining) {

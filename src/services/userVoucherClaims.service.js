@@ -30,8 +30,22 @@ function formatYmdHis(value) {
   return formatted.slice(0, 16);
 }
 
-function hasDiamondTierBenefits(levelId) {
-  return [4, 5, 6].includes(Number(levelId));
+/**
+ * Each partner level reads its own client bonus configuration. Diamond, VIP and
+ * VVIP used to share the Diamond row, which meant the VIP/VVIP amounts admins
+ * configured were never applied.
+ */
+const VOUCHER_TIERS = [
+  { key: 'silver', label: 'Silver', pointLevelId: 2, configId: 'SILVER-BONUS', loyaltyLevel: 'SILVER' },
+  { key: 'gold', label: 'Gold', pointLevelId: 3, configId: 'GOLD-BONUS', loyaltyLevel: 'GOLD' },
+  { key: 'diamond', label: 'Diamond', pointLevelId: 4, configId: 'DIAMOND-BONUS', loyaltyLevel: 'DIAMOND' },
+  { key: 'vip', label: 'VIP', pointLevelId: 5, configId: 'VIP-BONUS', loyaltyLevel: 'VIP' },
+  { key: 'vvip', label: 'VVIP', pointLevelId: 6, configId: 'VVIP-BONUS', loyaltyLevel: 'VVIP' },
+];
+
+function voucherTierForPointLevel(levelId) {
+  const level = Number(levelId) || 1;
+  return VOUCHER_TIERS.find((tier) => tier.pointLevelId === level) || null;
 }
 
 const VOUCHER_VALIDITY_DAYS = 30;
@@ -110,14 +124,11 @@ async function getIssuedVoucherCount(userId, lmcbId) {
   return Number(rows[0]?.total || 0);
 }
 
-function buildTierSummary(available, loyaltyLevel, issuedCount, tierKey) {
+function buildTierSummary(available, loyaltyLevel, issuedCount, tier) {
   const clientCount = Number(loyaltyLevel?.client_count) || 0;
   const bonusAmount = Number(loyaltyLevel?.client_bonus_amount) || 0;
   const remaining = loyaltyLevel ? Math.max(0, clientCount - issuedCount) : 0;
   const amountPerClient = clientCount > 0 ? bonusAmount / clientCount : 0;
-  const label = tierKey
-    ? tierKey.charAt(0).toUpperCase() + tierKey.slice(1)
-    : null;
 
   return {
     available: Boolean(available && remaining > 0),
@@ -127,8 +138,8 @@ function buildTierSummary(available, loyaltyLevel, issuedCount, tierKey) {
     total_pool: Number(bonusAmount.toFixed(2)),
     amount_per_client: Number(amountPerClient.toFixed(2)),
     loyalty_level_id: loyaltyLevel?.id || null,
-    tier: tierKey,
-    label,
+    tier: tier?.key || null,
+    label: tier?.label || null,
   };
 }
 
@@ -146,11 +157,7 @@ async function getLastPromotionForUser(userId) {
 }
 
 function tierKeyForPointLevel(levelId) {
-  const level = Number(levelId) || 1;
-  if (level === 2) return 'silver';
-  if (level === 3) return 'gold';
-  if (hasDiamondTierBenefits(level)) return 'diamond';
-  return null;
+  return voucherTierForPointLevel(levelId)?.key || null;
 }
 
 export async function getClientBonusSummaryForUser(userId, isPartner) {
@@ -167,6 +174,7 @@ export async function getClientBonusSummaryForUser(userId, isPartner) {
   };
 
   if (!isPartner) {
+    const summaries = Object.fromEntries(VOUCHER_TIERS.map((tier) => [tier.key, emptyTier]));
     return {
       can_issue: false,
       remaining_slots: 0,
@@ -174,79 +182,45 @@ export async function getClientBonusSummaryForUser(userId, isPartner) {
       tier: null,
       loyalty_management_client_bonus_id: null,
       new_tier_bonus: null,
-      silver: emptyTier,
-      gold: emptyTier,
-      diamond: emptyTier,
+      ...summaries,
     };
   }
 
-  const [
-    pointLevel,
-    silverMaster,
-    goldMaster,
-    diamondMaster,
-    silverLevel,
-    goldLevel,
-    diamondLevel,
-    lastPromotion,
-  ] = await Promise.all([
+  const [pointLevel, lastPromotion, tierData] = await Promise.all([
     getUserPointLevel(userId),
-    fetchMasterConfig('SILVER-BONUS'),
-    fetchMasterConfig('GOLD-BONUS'),
-    fetchMasterConfig('DIAMOND-BONUS'),
-    getActiveLevelData('SILVER'),
-    getActiveLevelData('GOLD'),
-    getActiveLevelData('DIAMOND'),
     getLastPromotionForUser(userId),
+    Promise.all(
+      VOUCHER_TIERS.map(async (tier) => {
+        const [master, levelRow] = await Promise.all([
+          fetchMasterConfig(tier.configId),
+          getActiveLevelData(tier.loyaltyLevel),
+        ]);
+        const issued = levelRow ? await getIssuedVoucherCount(userId, levelRow.id) : 0;
+        return { tier, master, levelRow, issued };
+      }),
+    ),
   ]);
 
   const level = Number(pointLevel?.point_level_id) || 1;
-  const [silverIssued, goldIssued, diamondIssued] = await Promise.all([
-    silverLevel ? getIssuedVoucherCount(userId, silverLevel.id) : Promise.resolve(0),
-    goldLevel ? getIssuedVoucherCount(userId, goldLevel.id) : Promise.resolve(0),
-    diamondLevel ? getIssuedVoucherCount(userId, diamondLevel.id) : Promise.resolve(0),
-  ]);
-
-  const silverEligible =
-    Boolean(silverMaster?.is_active) && Boolean(silverLevel?.is_active) && level === 2;
-  const goldEligible =
-    Boolean(goldMaster?.is_active) && Boolean(goldLevel?.is_active) && level === 3;
-  const diamondEligible =
-    Boolean(diamondMaster?.is_active) &&
-    Boolean(diamondLevel?.is_active) &&
-    hasDiamondTierBenefits(level);
-
-  const silver = buildTierSummary(
-    silverEligible && silverIssued < Number(silverLevel?.client_count || 0),
-    silverLevel,
-    silverIssued,
-    'silver',
-  );
-  const gold = buildTierSummary(
-    goldEligible && goldIssued < Number(goldLevel?.client_count || 0),
-    goldLevel,
-    goldIssued,
-    'gold',
-  );
-  const diamond = buildTierSummary(
-    diamondEligible && diamondIssued < Number(diamondLevel?.client_count || 0),
-    diamondLevel,
-    diamondIssued,
-    'diamond',
-  );
-
+  const summaries = {};
   let activeTier = null;
   let activeSummary = null;
 
-  if (level === 2 && silver.available) {
-    activeTier = 'silver';
-    activeSummary = silver;
-  } else if (level === 3 && gold.available) {
-    activeTier = 'gold';
-    activeSummary = gold;
-  } else if (hasDiamondTierBenefits(level) && diamond.available) {
-    activeTier = 'diamond';
-    activeSummary = diamond;
+  for (const { tier, master, levelRow, issued } of tierData) {
+    const eligible =
+      Boolean(master?.is_active) && Boolean(levelRow?.is_active) && level === tier.pointLevelId;
+    const summary = buildTierSummary(
+      eligible && issued < Number(levelRow?.client_count || 0),
+      levelRow,
+      issued,
+      tier,
+    );
+    summaries[tier.key] = summary;
+
+    if (level === tier.pointLevelId && summary.available) {
+      activeTier = tier.key;
+      activeSummary = summary;
+    }
   }
 
   // Newly unlocked tier bonus: promoted into this voucher tier and still has unused slots.
@@ -297,9 +271,7 @@ export async function getClientBonusSummaryForUser(userId, isPartner) {
     tier: activeTier,
     loyalty_management_client_bonus_id: activeSummary?.loyalty_level_id || null,
     new_tier_bonus: newTierBonus,
-    silver,
-    gold,
-    diamond,
+    ...summaries,
   };
 }
 
@@ -319,7 +291,8 @@ function mapUserVoucherRow(row) {
     : null;
 
   const tierRaw = String(row.loyalty_level || '').trim().toLowerCase();
-  const tier = ['silver', 'gold', 'diamond'].includes(tierRaw) ? tierRaw : null;
+  const tierMeta = VOUCHER_TIERS.find((entry) => entry.key === tierRaw) || null;
+  const tier = tierMeta?.key || null;
 
   return {
     id: String(row.id),
@@ -337,7 +310,7 @@ function mapUserVoucherRow(row) {
     valid_until: validUntilLabel,
     validity_days: VOUCHER_VALIDITY_DAYS,
     tier,
-    tier_label: tier ? tier.charAt(0).toUpperCase() + tier.slice(1) : null,
+    tier_label: tierMeta?.label || null,
     loyalty_management_client_bonus_id: row.loyalty_management_client_bonus_id || null,
     voucher_url: token ? `${env.userAppUrl}/dashboard/earnings/vouchers/${token}` : null,
     rejectReason:
