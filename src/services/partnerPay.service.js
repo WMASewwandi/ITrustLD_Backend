@@ -124,8 +124,26 @@ async function resolveMethodIdFromGuid(kind, payload) {
   }
   const table = isDeposit ? 'topup_methods' : 'cashout_methods';
   const rows = await query(`SELECT id FROM ${table} WHERE guid = ? LIMIT 1`, [guid]);
-  if (!rows[0]) throw apiError('Selected method is not available.', 422, PartnerPayCode.METHOD_UNAVAILABLE);
-  return Number(rows[0].id);
+  if (rows[0]) return Number(rows[0].id);
+
+  const methodId = await resolveMethodIdFromAlias(isDeposit ? 'deposit' : 'withdrawal', guid);
+  if (methodId) return methodId;
+
+  throw apiError('Selected method is not available.', 422, PartnerPayCode.METHOD_UNAVAILABLE);
+}
+
+async function resolveMethodIdFromAlias(kind, guid) {
+  try {
+    const rows = await query(
+      `SELECT method_id FROM partner_pay_method_aliases
+       WHERE guid = ? AND kind = ? AND is_active = 1
+       LIMIT 1`,
+      [guid, kind],
+    );
+    return rows[0] ? Number(rows[0].method_id) : null;
+  } catch {
+    return null;
+  }
 }
 
 function requiredText(value, label, code = PartnerPayCode.PLATFORM_ID_REQUIRED) {
