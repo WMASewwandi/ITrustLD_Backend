@@ -582,7 +582,7 @@ async function findRecentCompletedGiftVoucherDeposit(userId) {
      INNER JOIN payment_options po ON po.id = d.payment_option_id
      WHERE d.user_id = ?
        AND ${GIFT_VOUCHER_OPTION_SQL}
-       AND d.transaction_status = 'Completed'
+       AND d.transaction_status IN ('Pending', 'Completed')
        AND COALESCE(d.approved_date, d.updated_at, d.created_at) >= DATE_SUB(NOW(), INTERVAL ? DAY)
      ORDER BY COALESCE(d.approved_date, d.updated_at, d.created_at) DESC
      LIMIT 1`,
