@@ -398,6 +398,15 @@ function formatMoney(currency, amount) {
   return code ? `${code} ${value}` : value;
 }
 
+const REJECT_TRANSACTION_NOTE = 'Your transaction has been rejected';
+
+function transactionNote(message, status) {
+  const text = String(message || '').trim();
+  if (text) return text;
+  if (status === 'Rejected') return REJECT_TRANSACTION_NOTE;
+  return '—';
+}
+
 function statusValueColor(status) {
   const value = String(status || '');
   if (value === 'Completed') return '#0D9F1B';
@@ -444,7 +453,7 @@ function depositDetailsTable({ firstName, deposit }) {
     ['Time', timeText],
     ['Account', deposit.topup_account_id || '—'],
     ['Reference', deposit.transaction_id],
-    ['Note', deposit.message || '—'],
+    ['Note', transactionNote(deposit.message, status)],
   ];
   if (status === 'Rejected' && (deposit.rejected_reason_message || deposit.rejected_reason)) {
     rows.push([
@@ -496,7 +505,7 @@ function withdrawalDetailsTable({ firstName, withdrawal }) {
     ['Time', timeText],
     ['Account', withdrawal.cashout_account_id || '—'],
     ['Reference', withdrawal.transaction_id],
-    ['Note', withdrawal.message || '—'],
+    ['Note', transactionNote(withdrawal.message, status)],
   ];
   if (status === 'Rejected' && (withdrawal.rejected_reason_message || withdrawal.rejected_reason)) {
     rows.push([
