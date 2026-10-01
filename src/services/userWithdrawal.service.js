@@ -5,6 +5,10 @@ import {
   needsVerification,
 } from './accountHolder.service.js';
 import { resolveWalletLogoPublicUrl } from './walletLogoStorage.service.js';
+import {
+  parsePlatformTypes,
+  validatePlatformAccountId,
+} from '../utils/platformAccountId.js';
 import { ensureWalletNavigateSchema, ensureWalletPayAccountSchema } from './wallet.service.js';
 import { autoAssignWithdrawal } from './withdrawalAssignment.service.js';
 import { storeWithdrawalProof } from './withdrawalProofStorage.service.js';
@@ -63,11 +67,14 @@ function mapCashoutMethodRow(row) {
     ? String(row.navigate_button_label || '').trim() || null
     : null;
 
+  const platformTypes = parsePlatformTypes(row.platform_id_type || row.cashout_method_id_type || '');
+
   return {
     id: row.id,
     name: row.cashout_method_name,
     currency: row.cashout_method_currency || 'USD',
-    platformType: row.cashout_method_id_type || '',
+    platformType: platformTypes.join(','),
+    platformTypes,
     minLimit: Number(row.minimum_limit ?? 0),
     maxLimit: Number(row.maximum_limit ?? 0),
     terms: row.tnc || '',
@@ -684,34 +691,8 @@ async function loadUserReceivingAccounts(userId, paymentOptionName) {
   return accounts;
 }
 
-function validateCashoutAccountId(methodName, accountId) {
-  const value = String(accountId || '').trim();
-  const name = String(methodName || '').trim().toLowerCase();
-
-  if (!value) return 'Cash-out account ID is required.';
-
-  if (name === 'xm') {
-    if (value.length < 7 || value.length > 9) {
-      return 'Account ID must be between 7 and 9 characters long.';
-    }
-    return null;
-  }
-
-  if (name === 'skrill' || name === 'neteller' || name === 'binance') {
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
-      return 'Please enter a valid email address.';
-    }
-    return null;
-  }
-
-  if (name === 'perfect money') {
-    if (!/^U\d{8}$/.test(value)) {
-      return 'Account ID must start with "U" followed by 8 digits.';
-    }
-    return null;
-  }
-
-  return null;
+function validateCashoutAccountId(method, accountId) {
+  return validatePlatformAccountId(accountId, method, 'Cash-out account ID is required.');
 }
 
 async function buildAccountDetailsLog(userId, selectedAccountType, selectedAccountId) {
@@ -930,7 +911,7 @@ export async function createUserWithdrawal(userId, payload) {
   );
   const accountError = skipAccountFormat
     ? (cashoutAccountId ? null : 'Cash-out account ID is required.')
-    : validateCashoutAccountId(cashoutMethod.name, cashoutAccountId);
+    : validateCashoutAccountId(cashoutMethod, cashoutAccountId);
   if (accountError) throw validationError(accountError);
 
   if (cashoutAmount < cashoutMethod.minLimit || cashoutAmount > cashoutMethod.maxLimit) {

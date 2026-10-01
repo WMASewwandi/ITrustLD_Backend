@@ -9,6 +9,10 @@ import { storeDepositProof } from './depositProofStorage.service.js';
 import { formatCustomerRejectReason } from '../constants/rejectReasons.js';
 import { bumpAdminNavCounts } from './adminNavCountsRevision.service.js';
 import { resolveWalletLogoPublicUrl } from './walletLogoStorage.service.js';
+import {
+  parsePlatformTypes,
+  validatePlatformAccountId,
+} from '../utils/platformAccountId.js';
 import { ensureWalletNavigateSchema } from './wallet.service.js';
 import {
   formatDateTimeParts,
@@ -58,11 +62,7 @@ async function assertDepositAccess(userId) {
 }
 
 function mapTopupMethodRow(row) {
-  const platformTypeRaw = row.platform_id_type || row.topup_method_id_type || '';
-  const platformTypes = String(platformTypeRaw)
-    .split(/[,|]/)
-    .map((item) => item.trim())
-    .filter(Boolean);
+  const platformTypes = parsePlatformTypes(row.platform_id_type || row.topup_method_id_type || '');
   const allowNavigateButton = Boolean(Number(row.allow_navigate_button));
   const navigateUrl = allowNavigateButton ? String(row.navigate_url || '').trim() || null : null;
   const navigateButtonLabel = allowNavigateButton
@@ -73,7 +73,7 @@ function mapTopupMethodRow(row) {
     id: row.id,
     name: row.topup_method_name,
     currency: row.topup_method_currency || 'USD',
-    platformType: platformTypes.join(',') || platformTypeRaw,
+    platformType: platformTypes.join(','),
     platformTypes,
     minLimit: Number(row.minimum_limit ?? 0),
     maxLimit: Number(row.maximum_limit ?? 0),
@@ -443,34 +443,8 @@ export async function getDepositMethodDetails(userId, { topupMethodId, depositAm
   };
 }
 
-function validateTopupAccountId(methodName, accountId) {
-  const value = String(accountId || '').trim();
-  const name = String(methodName || '').trim().toLowerCase();
-
-  if (!value) return 'Top-up account ID is required.';
-
-  if (name === 'xm') {
-    if (value.length < 7 || value.length > 9) {
-      return 'Account ID must be between 7 and 9 characters long.';
-    }
-    return null;
-  }
-
-  if (name === 'skrill' || name === 'neteller' || name === 'binance') {
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
-      return 'Please enter a valid email address.';
-    }
-    return null;
-  }
-
-  if (name === 'perfect money') {
-    if (!/^U\d{8}$/.test(value)) {
-      return 'Account ID must start with "U" followed by 8 digits.';
-    }
-    return null;
-  }
-
-  return null;
+function validateTopupAccountId(method, accountId) {
+  return validatePlatformAccountId(accountId, method, 'Top-up account ID is required.');
 }
 
 const GIFT_VOUCHER_PLATFORM_REUSE_DAYS = 30;
@@ -710,7 +684,7 @@ export async function createUserDeposit(userId, payload) {
   );
   const accountError = skipAccountFormat
     ? (topupAccountId ? null : 'Top-up account ID is required.')
-    : validateTopupAccountId(topupMethod.name, topupAccountId);
+    : validateTopupAccountId(topupMethod, topupAccountId);
   if (accountError) throw validationError(accountError);
 
   const paymentOption = await getPaymentOptionById(paymentOptionId);
