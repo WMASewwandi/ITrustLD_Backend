@@ -15,7 +15,9 @@ import {
 } from '../utils/platformAccountId.js';
 import { ensureWalletNavigateSchema } from './wallet.service.js';
 import {
+  addColomboDays,
   formatDateTimeParts,
+  formatTimestampSl,
   nowSqlDateTime,
   parseDbDateTime,
   resolveFilterDateRange,
@@ -470,6 +472,15 @@ function remainingGiftVoucherCooldownDays(claimedAt) {
   return GIFT_VOUCHER_PLATFORM_REUSE_DAYS - elapsedDays;
 }
 
+/** Colombo calendar start of the day that is still inside the 30-day window. */
+function giftVoucherWindowStartSql() {
+  return formatTimestampSl(addColomboDays(startOfColomboDay(), -GIFT_VOUCHER_PLATFORM_REUSE_DAYS));
+}
+
+function isInsideGiftVoucherCooldown(timestamp) {
+  return remainingGiftVoucherCooldownDays(timestamp) > 0;
+}
+
 export function isGiftVoucherPaymentOption(name) {
   return String(name || '')
     .toLowerCase()
@@ -493,17 +504,17 @@ async function findRecentGiftVoucherDepositByPlatformId(platformId) {
   const accountId = String(platformId || '').trim();
   if (!accountId) return null;
   const rows = await query(
-    `SELECT d.id
+    `SELECT d.id, d.created_at
      FROM deposits d
      INNER JOIN payment_options po ON po.id = d.payment_option_id
      WHERE d.topup_account_id = ?
        AND ${GIFT_VOUCHER_OPTION_SQL}
        AND d.transaction_status != 'Rejected'
-       AND d.created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
-     LIMIT 1`,
-    [accountId, GIFT_VOUCHER_PLATFORM_REUSE_DAYS],
+       AND d.created_at >= ?
+     ORDER BY d.created_at DESC`,
+    [accountId, giftVoucherWindowStartSql()],
   );
-  return rows[0] || null;
+  return rows.find((row) => isInsideGiftVoucherCooldown(row.created_at)) || null;
 }
 
 async function collectUserPlatformIds(userId) {
@@ -537,12 +548,12 @@ async function findRecentClaimedVoucherForUser(userId, extraPlatformId = '') {
          AND claimed_at IS NOT NULL
          AND (rejection_reason IS NULL OR TRIM(rejection_reason) = '')
          AND platform_id IN (${placeholders})
-         AND claimed_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+         AND claimed_at >= ?
        ORDER BY claimed_at DESC
        LIMIT 1`,
-      [...uniqueIds, GIFT_VOUCHER_PLATFORM_REUSE_DAYS],
+      [...uniqueIds, giftVoucherWindowStartSql()],
     );
-    return voucherRows[0] || null;
+    return voucherRows.find((row) => isInsideGiftVoucherCooldown(row.claimed_at)) || null;
   } catch (error) {
     console.error('[gift-voucher-cooldown:vouchers]', error.message);
     return null;
@@ -557,12 +568,11 @@ async function findRecentCompletedGiftVoucherDeposit(userId) {
      WHERE d.user_id = ?
        AND ${GIFT_VOUCHER_OPTION_SQL}
        AND d.transaction_status IN ('Pending', 'Completed')
-       AND COALESCE(d.approved_date, d.updated_at, d.created_at) >= DATE_SUB(NOW(), INTERVAL ? DAY)
-     ORDER BY COALESCE(d.approved_date, d.updated_at, d.created_at) DESC
-     LIMIT 1`,
-    [userId, GIFT_VOUCHER_PLATFORM_REUSE_DAYS],
+       AND COALESCE(d.approved_date, d.updated_at, d.created_at) >= ?
+     ORDER BY COALESCE(d.approved_date, d.updated_at, d.created_at) DESC`,
+    [userId, giftVoucherWindowStartSql()],
   );
-  return rows[0] || null;
+  return rows.find((row) => isInsideGiftVoucherCooldown(row.claimed_at)) || null;
 }
 
 async function getGiftVoucherCooldown(userId, extraPlatformId = '') {
