@@ -452,12 +452,6 @@ async function listWithdrawalsQuery({
 
   if (keyword?.trim()) {
     const like = `%${escapeLike(keyword.trim())}%`;
-    const adminColumn =
-      normalizedStatus === 'Pending' || normalizedStatus === 'Pending Authorization'
-        ? 'w.pendings_by_admin'
-        : normalizedStatus === 'Completed'
-          ? 'w.approved_by_admin'
-          : 'w.rejected_by_admin';
     const keywordParts = [
       'w.transaction_id LIKE ? ESCAPE \'\\\\\'',
       'w.cashout_account_id LIKE ? ESCAPE \'\\\\\'',
@@ -472,38 +466,25 @@ async function listWithdrawalsQuery({
     ];
     const keywordValues = [like, like, like, like];
 
-    if (
-      normalizedStatus === 'Pending' ||
-      normalizedStatus === 'Pending Authorization' ||
-      normalizedStatus === 'All'
-    ) {
-      keywordParts.push(
-        `EXISTS (
-          SELECT 1 FROM users exec
-          WHERE exec.id = w.assigned_to AND exec.name LIKE ? ESCAPE '\\\\'
-        )`,
-      );
-      keywordValues.push(like);
-    }
-
-    if (normalizedStatus === 'All') {
+    for (const adminColumnSql of [
+      'w.assigned_to',
+      'w.pendings_by_admin',
+      'w.approved_by_admin',
+      'w.rejected_by_admin',
+    ]) {
       keywordParts.push(
         `EXISTS (
           SELECT 1 FROM users admin_user
-          WHERE admin_user.id IN (w.pendings_by_admin, w.approved_by_admin, w.rejected_by_admin)
-            AND admin_user.name LIKE ? ESCAPE '\\\\'
+          WHERE admin_user.id = ${adminColumnSql}
+            AND (
+              admin_user.name LIKE ? ESCAPE '\\\\'
+              OR admin_user.email LIKE ? ESCAPE '\\\\'
+              OR SUBSTRING_INDEX(admin_user.email, '@', 1) LIKE ? ESCAPE '\\\\'
+            )
         )`,
       );
-    } else {
-      keywordParts.push(
-        `EXISTS (
-          SELECT 1 FROM users admin_user
-          WHERE admin_user.id = ${adminColumn}
-            AND admin_user.name LIKE ? ESCAPE '\\\\'
-        )`,
-      );
+      keywordValues.push(like, like, like);
     }
-    keywordValues.push(like);
 
     pushAmountKeywordClauses(
       keywordParts,

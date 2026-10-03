@@ -916,7 +916,7 @@ export async function createUserWithdrawal(userId, payload) {
 
   if (cashoutAmount < cashoutMethod.minLimit || cashoutAmount > cashoutMethod.maxLimit) {
     throw validationError(
-      `Cash-out amount must be between USD ${cashoutMethod.minLimit} and USD ${cashoutMethod.maxLimit}.`,
+      `Cash-out amount must be between ${cashoutMethod.currency || "USD"} ${cashoutMethod.minLimit} and ${cashoutMethod.currency || "USD"} ${cashoutMethod.maxLimit}.`,
     );
   }
 

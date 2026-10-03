@@ -15,9 +15,7 @@ import {
 } from '../utils/platformAccountId.js';
 import { ensureWalletNavigateSchema } from './wallet.service.js';
 import {
-  addColomboDays,
   formatDateTimeParts,
-  formatTimestampSl,
   nowSqlDateTime,
   parseDbDateTime,
   resolveFilterDateRange,
@@ -451,34 +449,42 @@ function validateTopupAccountId(method, accountId) {
 
 const GIFT_VOUCHER_PLATFORM_REUSE_DAYS = 30;
 export const GIFT_VOUCHER_PLATFORM_REUSE_CODE = 'GIFT_VOUCHER_PLATFORM_REUSE';
-const GIFT_VOUCHER_PLATFORM_REUSE_MESSAGE =
-  'This Platform ID was already used for a gift voucher deposit in the last 30 days. Please use a different Platform ID.';
 export const GIFT_VOUCHER_COOLDOWN_CODE = 'GIFT_VOUCHER_COOLDOWN';
 const GIFT_VOUCHER_OPTION_SQL = `LOWER(TRIM(po.payment_option_name)) IN ('gift voucher', 'giftvoucher')`;
 
-function giftVoucherCooldownMessage(remainingDays) {
-  const days = Math.max(1, Number(remainingDays) || GIFT_VOUCHER_PLATFORM_REUSE_DAYS);
-  const label = days === 1 ? '1 day' : `${days} days`;
-  return `You already claimed a gift voucher. Please wait ${label} before using this option.`;
+function voucherDayLabel(days) {
+  const count = Math.max(1, Number(days) || 1);
+  return count === 1 ? '1 day' : `${count} days`;
 }
 
-function remainingGiftVoucherCooldownDays(claimedAt) {
-  const claimed = parseDbDateTime(claimedAt);
-  if (!claimed) return GIFT_VOUCHER_PLATFORM_REUSE_DAYS;
+function accountVoucherRedeemMessage(remainingDays) {
+  return `You can redeem another voucher from this account in ${voucherDayLabel(remainingDays)}.`;
+}
+
+function platformVoucherRedeemMessage(remainingDays) {
+  return `You can redeem another voucher for this Platform ID in ${voucherDayLabel(remainingDays)}.`;
+}
+
+function voucherDaysSince(redeemedAt) {
+  const redeemed = parseDbDateTime(redeemedAt);
+  if (!redeemed) return null;
   const elapsedDays = Math.floor(
-    (startOfColomboDay().getTime() - startOfColomboDay(claimed).getTime()) / (24 * 60 * 60 * 1000),
+    (startOfColomboDay().getTime() - startOfColomboDay(redeemed).getTime()) / (24 * 60 * 60 * 1000),
   );
-  if (!Number.isFinite(elapsedDays) || elapsedDays < 0) return GIFT_VOUCHER_PLATFORM_REUSE_DAYS;
-  return GIFT_VOUCHER_PLATFORM_REUSE_DAYS - elapsedDays;
+  if (!Number.isFinite(elapsedDays) || elapsedDays < 0) return null;
+  return elapsedDays;
 }
 
-/** Colombo calendar start of the day that is still inside the 30-day window. */
-function giftVoucherWindowStartSql() {
-  return formatTimestampSl(addColomboDays(startOfColomboDay(), -GIFT_VOUCHER_PLATFORM_REUSE_DAYS));
-}
-
-function isInsideGiftVoucherCooldown(timestamp) {
-  return remainingGiftVoucherCooldownDays(timestamp) > 0;
+function voucherRedeemDecision(redeemedAt) {
+  const elapsedDays = voucherDaysSince(redeemedAt);
+  if (elapsedDays == null) {
+    return { blocked: false, remaining_days: 0, elapsed_days: null };
+  }
+  const remainingDays = GIFT_VOUCHER_PLATFORM_REUSE_DAYS - elapsedDays;
+  if (elapsedDays >= GIFT_VOUCHER_PLATFORM_REUSE_DAYS) {
+    return { blocked: false, remaining_days: 0, elapsed_days: elapsedDays };
+  }
+  return { blocked: true, remaining_days: remainingDays, elapsed_days: elapsedDays };
 }
 
 export function isGiftVoucherPaymentOption(name) {
@@ -500,111 +506,70 @@ async function getPaymentOptionById(paymentOptionId) {
   return rows[0] || null;
 }
 
-async function findRecentGiftVoucherDepositByPlatformId(platformId) {
+const LAST_SUCCESSFUL_VOUCHER_SQL = `
+  SELECT d.id, COALESCE(d.approved_date, d.created_at) AS redeemed_at
+  FROM deposits d
+  INNER JOIN payment_options po ON po.id = d.payment_option_id
+  WHERE ${GIFT_VOUCHER_OPTION_SQL}
+    AND d.transaction_status = 'Completed'
+`;
+
+async function findLastSuccessfulVoucherByUser(userId) {
+  const rows = await query(
+    `${LAST_SUCCESSFUL_VOUCHER_SQL}
+       AND d.user_id = ?
+     ORDER BY redeemed_at DESC
+     LIMIT 1`,
+    [userId],
+  );
+  return rows[0] || null;
+}
+
+async function findLastSuccessfulVoucherByPlatformId(platformId) {
   const accountId = String(platformId || '').trim();
   if (!accountId) return null;
   const rows = await query(
-    `SELECT d.id, d.created_at
-     FROM deposits d
-     INNER JOIN payment_options po ON po.id = d.payment_option_id
-     WHERE d.topup_account_id = ?
-       AND ${GIFT_VOUCHER_OPTION_SQL}
-       AND d.transaction_status != 'Rejected'
-       AND d.created_at >= ?
-     ORDER BY d.created_at DESC`,
-    [accountId, giftVoucherWindowStartSql()],
+    `${LAST_SUCCESSFUL_VOUCHER_SQL}
+       AND d.topup_account_id = ?
+     ORDER BY redeemed_at DESC
+     LIMIT 1`,
+    [accountId],
   );
-  return rows.find((row) => isInsideGiftVoucherCooldown(row.created_at)) || null;
+  return rows[0] || null;
 }
 
-async function collectUserPlatformIds(userId) {
-  const ids = new Set();
-  const xmRows = await query(
-    `SELECT xm_account_id
-     FROM user_xm_accounts
-     WHERE user_id = ?
-       AND (is_deleted = 0 OR is_deleted IS NULL OR is_deleted = FALSE)`,
-    [userId],
-  );
-  for (const row of xmRows) {
-    const id = String(row.xm_account_id || '').trim();
-    if (id) ids.add(id);
-  }
-  return [...ids];
-}
-
-async function findRecentClaimedVoucherForUser(userId, extraPlatformId = '') {
-  try {
-    const platformIds = await collectUserPlatformIds(userId);
-    const extra = String(extraPlatformId || '').trim();
-    if (extra) platformIds.push(extra);
-    const uniqueIds = [...new Set(platformIds)];
-    if (!uniqueIds.length) return null;
-    const placeholders = uniqueIds.map(() => '?').join(', ');
-    const voucherRows = await query(
-      `SELECT id, claimed_at
-       FROM loyalty_client_bonus_vouchers
-       WHERE (is_claimed = 1 OR is_claimed = TRUE)
-         AND claimed_at IS NOT NULL
-         AND (rejection_reason IS NULL OR TRIM(rejection_reason) = '')
-         AND platform_id IN (${placeholders})
-         AND claimed_at >= ?
-       ORDER BY claimed_at DESC
-       LIMIT 1`,
-      [...uniqueIds, giftVoucherWindowStartSql()],
-    );
-    return voucherRows.find((row) => isInsideGiftVoucherCooldown(row.claimed_at)) || null;
-  } catch (error) {
-    console.error('[gift-voucher-cooldown:vouchers]', error.message);
-    return null;
-  }
-}
-
-async function findRecentCompletedGiftVoucherDeposit(userId) {
-  const rows = await query(
-    `SELECT d.id, COALESCE(d.approved_date, d.updated_at, d.created_at) AS claimed_at
-     FROM deposits d
-     INNER JOIN payment_options po ON po.id = d.payment_option_id
-     WHERE d.user_id = ?
-       AND ${GIFT_VOUCHER_OPTION_SQL}
-       AND d.transaction_status IN ('Pending', 'Completed')
-       AND COALESCE(d.approved_date, d.updated_at, d.created_at) >= ?
-     ORDER BY COALESCE(d.approved_date, d.updated_at, d.created_at) DESC`,
-    [userId, giftVoucherWindowStartSql()],
-  );
-  return rows.find((row) => isInsideGiftVoucherCooldown(row.claimed_at)) || null;
-}
-
-async function getGiftVoucherCooldown(userId, extraPlatformId = '') {
-  const [claimedVoucher, completedDeposit] = await Promise.all([
-    findRecentClaimedVoucherForUser(userId, extraPlatformId),
-    findRecentCompletedGiftVoucherDeposit(userId),
-  ]);
-  const claimed = [claimedVoucher, completedDeposit]
-    .filter(Boolean)
-    .sort((a, b) => {
-      const aTime = parseDbDateTime(a.claimed_at)?.getTime() || 0;
-      const bTime = parseDbDateTime(b.claimed_at)?.getTime() || 0;
-      return bTime - aTime;
-    })[0];
-  if (!claimed) {
-    return { blocked: false, remaining_days: 0, days: GIFT_VOUCHER_PLATFORM_REUSE_DAYS };
-  }
-  const remainingDays = remainingGiftVoucherCooldownDays(claimed.claimed_at);
-  if (remainingDays <= 0) {
+async function getGiftVoucherCooldown(userId) {
+  const last = await findLastSuccessfulVoucherByUser(userId);
+  const decision = voucherRedeemDecision(last?.redeemed_at);
+  if (!decision.blocked) {
     return { blocked: false, remaining_days: 0, days: GIFT_VOUCHER_PLATFORM_REUSE_DAYS };
   }
   return {
     blocked: true,
-    remaining_days: remainingDays,
+    remaining_days: decision.remaining_days,
     days: GIFT_VOUCHER_PLATFORM_REUSE_DAYS,
     code: GIFT_VOUCHER_COOLDOWN_CODE,
-    message: giftVoucherCooldownMessage(remainingDays),
+    message: accountVoucherRedeemMessage(decision.remaining_days),
   };
 }
 
-async function assertGiftVoucherUserCooldown(userId, extraPlatformId = '') {
-  const cooldown = await getGiftVoucherCooldown(userId, extraPlatformId);
+async function getGiftVoucherPlatformCooldown(platformId) {
+  const last = await findLastSuccessfulVoucherByPlatformId(platformId);
+  const decision = voucherRedeemDecision(last?.redeemed_at);
+  if (!decision.blocked) {
+    return { blocked: false, remaining_days: 0, days: GIFT_VOUCHER_PLATFORM_REUSE_DAYS };
+  }
+  return {
+    blocked: true,
+    remaining_days: decision.remaining_days,
+    days: GIFT_VOUCHER_PLATFORM_REUSE_DAYS,
+    code: GIFT_VOUCHER_PLATFORM_REUSE_CODE,
+    message: platformVoucherRedeemMessage(decision.remaining_days),
+  };
+}
+
+async function assertGiftVoucherUserCooldown(userId) {
+  const cooldown = await getGiftVoucherCooldown(userId);
   if (!cooldown.blocked) return;
   const error = validationError(cooldown.message);
   error.code = GIFT_VOUCHER_COOLDOWN_CODE;
@@ -612,9 +577,9 @@ async function assertGiftVoucherUserCooldown(userId, extraPlatformId = '') {
 }
 
 async function assertGiftVoucherPlatformIdUnused(platformId) {
-  const used = await findRecentGiftVoucherDepositByPlatformId(platformId);
-  if (!used) return;
-  const error = validationError(GIFT_VOUCHER_PLATFORM_REUSE_MESSAGE);
+  const cooldown = await getGiftVoucherPlatformCooldown(platformId);
+  if (!cooldown.blocked) return;
+  const error = validationError(cooldown.message);
   error.code = GIFT_VOUCHER_PLATFORM_REUSE_CODE;
   throw error;
 }
@@ -625,24 +590,20 @@ export async function checkGiftVoucherPlatformReuse(userId, params = {}) {
   if (!isGiftVoucherPaymentOption(paymentOption?.payment_option_name)) {
     return { allowed: true };
   }
+  const accountCooldown = await getGiftVoucherCooldown(userId);
   const topupAccountId = String(params.topupAccountId ?? params.topup_account_id ?? '').trim();
-  const cooldown = await getGiftVoucherCooldown(userId, topupAccountId);
-  if (cooldown.blocked) {
-    return {
-      allowed: false,
-      code: cooldown.code,
-      message: cooldown.message,
-    };
+  const platformCooldown = topupAccountId
+    ? await getGiftVoucherPlatformCooldown(topupAccountId)
+    : { blocked: false, remaining_days: 0 };
+  if (!accountCooldown.blocked && !platformCooldown.blocked) {
+    return { allowed: true, account: accountCooldown, platform: platformCooldown };
   }
-  if (!topupAccountId) {
-    return { allowed: true };
-  }
-  const used = await findRecentGiftVoucherDepositByPlatformId(topupAccountId);
-  if (!used) return { allowed: true };
   return {
     allowed: false,
-    code: GIFT_VOUCHER_PLATFORM_REUSE_CODE,
-    message: GIFT_VOUCHER_PLATFORM_REUSE_MESSAGE,
+    code: platformCooldown.blocked ? GIFT_VOUCHER_PLATFORM_REUSE_CODE : GIFT_VOUCHER_COOLDOWN_CODE,
+    message: platformCooldown.blocked ? platformCooldown.message : accountCooldown.message,
+    account: accountCooldown,
+    platform: platformCooldown,
   };
 }
 
@@ -702,13 +663,13 @@ export async function createUserDeposit(userId, payload) {
     throw validationError('Selected payment option is not available.');
   }
   if (isGiftVoucherPaymentOption(paymentOption.payment_option_name)) {
-    await assertGiftVoucherUserCooldown(userId, topupAccountId);
+    await assertGiftVoucherUserCooldown(userId);
     await assertGiftVoucherPlatformIdUnused(topupAccountId);
   }
 
   if (depositAmount < topupMethod.minLimit || depositAmount > topupMethod.maxLimit) {
     throw validationError(
-      `Deposit amount must be between USD ${topupMethod.minLimit} and USD ${topupMethod.maxLimit}.`,
+      `Deposit amount must be between ${topupMethod.currency || "USD"} ${topupMethod.minLimit} and ${topupMethod.currency || "USD"} ${topupMethod.maxLimit}.`,
     );
   }
 
